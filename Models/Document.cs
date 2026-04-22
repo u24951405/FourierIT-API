@@ -32,5 +32,7 @@ namespace FourierIT_API.Models
         public CertificationDetails CertificationDetails { get; set; } = null!;
 
         public ICollection<DocumentStatusHistory> DocumentStatusHistories { get; set; } = new List<DocumentStatusHistory>();
+
+        public ICollection<AccessList> AccessLists { get; set; } = new List<AccessList>();
     }
 }

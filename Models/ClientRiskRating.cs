@@ -22,5 +22,7 @@ namespace FourierIT_API.Models
 
         public ICollection<RiskRatingVariable> RiskRatingVariables { get; set; } = new List<RiskRatingVariable>();
 
+        public ICollection<RiskHistory> RiskHistories { get; set; } = new List<RiskHistory>();
+
     }
 }

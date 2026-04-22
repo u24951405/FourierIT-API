@@ -3,16 +3,13 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace FourierIT_API.Models
 {
-    public class RiskRatingVariable
+    public class RiskHistory
     {
         [Key]
-        [ForeignKey("ClientRiskRating")]
-        public int RatingId { get; set; }
-        public ClientRiskRating ClientRiskRating { get; set; } = null!;
+        public int RiskHistoryId { get; set; }
 
-        [Key]
-        [ForeignKey("RiskVariable")]
-        public int RiskVariableId { get; set; }
-        public RiskVariable RiskVariable { get; set; } = null!;
+        [ForeignKey("ClientRiskRating")]
+        public int ClientRiskRatingId { get; set; }
+        public ClientRiskRating ClientRiskRating { get; set; } = null!;
     }
 }

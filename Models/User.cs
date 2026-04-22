@@ -46,6 +46,11 @@ namespace FourierIT_API.Models
         // One-to-many relationship with ClientEnlistment
         public ICollection<ClientEnlistment> ClientEnlistments { get; set; } = new List<ClientEnlistment>();
 
+        // One-to-one relationship with AccessToken (a user has one access token)
+        public AccessToken AccessToken { get; set; } = null!;
+
+        public EnquiryComment EnquiryComment { get; set; } = null!;
+
     }
 
 }

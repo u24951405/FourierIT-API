@@ -29,5 +29,7 @@ namespace FourierIT_API.Models
         public ICollection<Branch> Branches { get; set; } = new List<Branch>();
 
         public ICollection<ClientEnlistment> ClientEnlistments { get; set; } = new List<ClientEnlistment>();
+
+        public ICollection<InstitutionEnquiryRequest> institutionEnquiryRequests { get; set; } = new List<InstitutionEnquiryRequest>();
     }
 }
