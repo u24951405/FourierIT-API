@@ -8,8 +8,13 @@ namespace FourierIT_API.Models
         public int DocumentTypeId { get; set; }
 
         [Required]
+        [MaxLength(100)]
         public string TypeName { get; set; } = string.Empty;
-        
+
+        [Required]
+        [MaxLength(255)]
+        public string Description { get; set; } = string.Empty;
+
         public ICollection<Document> Documents { get; set; } = new List<Document>();
 
         public ICollection<DocumentFicaRule> DocumentFicaRules { get; set; } = new List<DocumentFicaRule>();

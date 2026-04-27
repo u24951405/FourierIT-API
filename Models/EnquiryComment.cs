@@ -18,9 +18,10 @@ namespace FourierIT_API.Models
         public User User { get; set; } = null!;
 
         [Required]
+        [StringLength(500)]
         public string MessageText { get; set; } = string.Empty;
 
         [Required]
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     }
 }

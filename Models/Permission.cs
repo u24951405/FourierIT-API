@@ -8,8 +8,8 @@ namespace FourierIT_API.Models
         public int PermissionId { get; set; }
 
         [Required]
-        [MaxLength(100)]
-        public int PermissionKey { get; set; } = 0;
+        [StringLength(100)]
+        public string PermissionKey { get; set; } = string.Empty;
 
         public ICollection<RolePermission> RolePermissions { get; set;} = new List<RolePermission>();
     }

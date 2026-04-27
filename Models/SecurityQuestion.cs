@@ -9,7 +9,8 @@ namespace FourierIT_API.Models
         public int SecurityQuestionId { get; set; }
 
         [Required]
-        public string Question { get; set; } = string.Empty;
+        [StringLength(500)]
+        public string QuestionText { get; set; } = string.Empty;
 
         public ICollection<UserSecurityQuestion> UserSecurityQuestions { get; set; } = new List<UserSecurityQuestion>();
     }

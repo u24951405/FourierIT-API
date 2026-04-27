@@ -10,12 +10,15 @@ namespace FourierIT_API.Models
         public int InstitutionId { get; set; }
 
         [Required]
+        [StringLength(150)]
         public string InstitutionName { get; set; } = string.Empty;
 
         [Required]
+        [StringLength(255)]
         public string VerifiedDomain { get; set; } = string.Empty;
 
         [Required]
+        [StringLength(50)]
         public int RegNumber { get; set; }
 
         [ForeignKey("InstitutionType")]

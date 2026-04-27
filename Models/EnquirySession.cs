@@ -13,7 +13,10 @@ namespace FourierIT_API.Models
 
         public AccessToken AccessToken { get; set; } = null!;
 
-        public TimeOnly SessionStartTime { get; set; } 
-        public TimeOnly SessionEndTime { get; set; }
+        //Start of the session, when the user starts the enquiry process
+        public TimeOnly SessionStartTime { get; set; } = TimeOnly.FromDateTime(DateTime.Now);
+
+        //End of the session, when the user finishes the enquiry process
+        public TimeOnly SessionEndTime { get; set; } = TimeOnly.FromDateTime(DateTime.Now);
     }
 }

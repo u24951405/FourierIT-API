@@ -13,6 +13,7 @@ namespace FourierIT_API.Models
         public Branch Branch { get; set; } = null!;
 
         [Required]
+        [StringLength(150)]
         public string DepartmentName { get; set; } = string.Empty;
     }
 }

@@ -11,5 +11,10 @@ namespace FourierIT_API.Models
         [ForeignKey("ClientRiskRating")]
         public int ClientRiskRatingId { get; set; }
         public ClientRiskRating ClientRiskRating { get; set; } = null!;
+
+        public TimeOnly ScoreAtTime { get; set; } = TimeOnly.FromDateTime(DateTime.Now);
+
+        public DateOnly RecordedDate { get; set; } = DateOnly.FromDateTime(DateTime.Now);
+
     }
 }

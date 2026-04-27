@@ -19,7 +19,7 @@ namespace FourierIT_API.Models
         public int MembersId { get; set; }
 
         [Required]
-        public DateOnly Date { get; set; } = new DateOnly();
+        public DateTimeOffset Date { get; set; } = DateTimeOffset.UtcNow;
 
     }
 }

@@ -12,14 +12,19 @@ namespace FourierIT_API.Models
         public int EnquiryRequestId { get; set; }
         public InstitutionEnquiryRequest institutionEnquiryRequest { get; set; } = null!;
 
+        [Required]
+        [MaxLength(255)]
         public string TokenString { get; set; } = string.Empty;
 
-        public DateTime ExpiryTimeStamp { get; set; } = new DateTime();
+        public DateTimeOffset ExpiryTimeStamp { get; set; } = DateTimeOffset.Now;
 
         public bool IsRevoked { get; set; } = false;
 
         public EnquirySession EnquirySession { get; set; } = null!;
 
+
+        [ForeignKey("User")]
+        public int UserId { get; set; }
         public User User { get; set; } = null!;
     }
 }

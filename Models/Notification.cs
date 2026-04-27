@@ -8,15 +8,15 @@ namespace FourierIT_API.Models
         public int NotificationId { get; set; }
 
         [Required]
-        public string subject { get; set; } = string.Empty;
+        [StringLength(200)]
+        public string Subject { get; set; } = string.Empty;
 
         [Required]
-        public string message { get; set; } = string.Empty;
-
-        public TimeOnly sentTime { get; set; } = new TimeOnly();
-
-        public bool isRead { get; set; } = false;
+        [StringLength(500)]
+        public string Message { get; set; } = string.Empty;
 
         public ICollection<UserNotification> UserNotifications { get; set; } = new List<UserNotification>();
+
+        public ICollection<NotificationHistory> NotificationHistories { get; set; } = new List<NotificationHistory>();
     }
 }

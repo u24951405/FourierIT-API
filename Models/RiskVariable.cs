@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.Runtime.CompilerServices;
 
 namespace FourierIT_API.Models
 {
@@ -7,11 +8,12 @@ namespace FourierIT_API.Models
         [Key]
         public int RiskVariableId { get; set; }
 
+        [Required]
+        [StringLength(100)]
         public string VarName { get; set; } = string.Empty;
 
-        public string VarDescription { get; set; } = string.Empty;
-
-        public decimal weightMultiplier { get; set; }
+        [Required]
+        public decimal WeightMultiplier { get; set; }
 
         public ICollection<RiskRatingVariable> RiskRatingVariables { get; set; } = new List<RiskRatingVariable>();
     }

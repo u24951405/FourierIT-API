@@ -8,10 +8,11 @@ namespace FourierIT_API.Models
         public int BackupId { get; set; }
 
         [Required]
+        [StringLength(255)]
         public string FileName { get; set; } = string.Empty;
 
         [Required]
-        public DateTime DateBackedUp { get; set; }
+        public DateTimeOffset DateBackedUp { get; set; } = DateTimeOffset.Now;
 
         [Required]
         public bool IsManualBackup { get; set; } = false;

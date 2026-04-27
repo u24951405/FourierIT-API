@@ -16,12 +16,13 @@ namespace FourierIT_API.Models
         public Institution Institution { get; set; } = null!;
 
         [Key]
-        public int EnlistmentId { get; set; }
+        public int ClientEnlistmentId { get; set; }
 
         [Required]
-        public DateOnly EnlistmentDate { get; set; } = new DateOnly();
+        public DateTimeOffset EnlistmentDate { get; set; } = DateTimeOffset.Now;
 
         [Required]
+        [StringLength(20)]
         public string EnlistmentStatus { get; set; } = string.Empty;
 
         public ClientRiskRating ClientRiskRating { get; set; } = null!;

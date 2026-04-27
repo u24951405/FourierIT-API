@@ -10,11 +10,17 @@ namespace FourierIT_API.Models
         public int DocumentId { get; set; }
 
         [Required]
-        public string fileName { get; set; } = string.Empty;
+        [StringLength(255)]
+        public string FileName { get; set; } = string.Empty;
 
         [Required]
-        public DateOnly ExpiryDate { get; set; } = new DateOnly();
+        public DateTimeOffset ExpiryDate { get; set; } = DateTimeOffset.Now;
+
+        [Required]
+        [StringLength(20)]
         public string CurrentStatus { get; set; } = string.Empty;
+
+        [Required]
         public bool IsCertified { get; set; } = false;
 
         [ForeignKey("User")]
@@ -25,11 +31,9 @@ namespace FourierIT_API.Models
         public int DocumentTypeId { get; set; }
         public DocumentType DocumentType { get; set; } = null!;
 
-        [ForeignKey("DocumentBlob")]
-        public int DocumentBlobId { get; set; }
         public DocumentBlob DocumentBlob { get; set; } = null!;
 
-        public CertificationDetails CertificationDetails { get; set; } = null!;
+        public ICollection<CertificationDetails> CertificationDetails { get; set; } = new List<CertificationDetails>();
 
         public ICollection<DocumentStatusHistory> DocumentStatusHistories { get; set; } = new List<DocumentStatusHistory>();
 

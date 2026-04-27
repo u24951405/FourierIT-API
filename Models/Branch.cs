@@ -14,8 +14,10 @@ namespace FourierIT_API.Models
         public Institution Institution { get; set; } = null!;
 
         [Required]
+        [StringLength(150)]
         public string BranchName { get; set; } = string.Empty;
 
+        [StringLength(150)]
         public string City { get; set; } = string.Empty;
 
         public ICollection<Department> Departments { get; set; } = new List<Department>();

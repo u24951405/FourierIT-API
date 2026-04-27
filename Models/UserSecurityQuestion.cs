@@ -16,6 +16,7 @@ namespace FourierIT_API.Models
         public SecurityQuestion SecurityQuestion { get; set; } = null!;
 
         [Required]
+        [StringLength(500)]
         public string EncryptedAnswer { get; set; } = string.Empty;
     }
 }

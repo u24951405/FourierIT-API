@@ -9,8 +9,10 @@ namespace FourierIT_API.Models
         public string CertificationID { get; set; } = string.Empty;
 
         [Required]
+        [StringLength(150)]
         public string CommissionerName { get; set; } = string.Empty;
-        public DateOnly CertificationDate { get; set; } = new DateOnly();
+
+        public DateTimeOffset CertificationDate { get; set; } = DateTimeOffset.Now;
 
         [ForeignKey("Document")]
         public int DocumentId { get; set; }

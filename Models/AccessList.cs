@@ -17,7 +17,7 @@ namespace FourierIT_API.Models
 
         [Key]
         [ForeignKey("EnquiryFlag")]
-        public int EnquiryFlagId { get; set; }
+        public int EnquiryId { get; set; }
         public EnquiryFlag EnquiryFlag { get; set; } = null!;
     }
 }

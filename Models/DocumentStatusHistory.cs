@@ -13,10 +13,10 @@ namespace FourierIT_API.Models
         public Document Document { get; set; } = null!;
 
         [Required]
+        [StringLength(20)]
         public string StatusName { get; set; } = string.Empty;
 
-        public TimeOnly TimeStamp { get; set; } = new TimeOnly();
-
-        public DateOnly Date { get; set; } = new DateOnly();
+        [Required]
+        public DateTimeOffset DateArchived { get; set; } = DateTimeOffset.UtcNow;
     }
 }

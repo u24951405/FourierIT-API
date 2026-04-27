@@ -8,6 +8,10 @@ namespace FourierIT_API.Models
         public int RuleId { get; set; }
 
         [Required]
+        [StringLength(500)]
+        public string Description { get; set; } = string.Empty;
+
+        [Required]
         public int ValidityMonths { get; set; } = 0;
 
         public ICollection<DocumentFicaRule> DocumentFicaRules { get; set; } = new List<DocumentFicaRule>();

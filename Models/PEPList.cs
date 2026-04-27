@@ -9,15 +9,19 @@ namespace FourierIT_API.Models
         public int UniqueId { get; set; }
 
         [Required]
+        [StringLength(100)]
         public string Category { get; set; } = string.Empty;
 
         [Required]
+        [StringLength(255)]
         public string Position { get; set; } = string.Empty;
 
         [Required]
+        [StringLength(500)]
         public string SourceLinks { get; set; } = string.Empty;
 
         [Required]
+        [StringLength(500)]
         public string Aliases { get; set; } = string.Empty;
     }
 }

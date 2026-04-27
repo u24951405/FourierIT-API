@@ -13,7 +13,10 @@ namespace FourierIT_API.Models
         public Institution Institution { get; set; } = null!;
 
         [Required]
+        [StringLength(500)]
         public string PurposeNote { get; set; } = string.Empty;
+
+        public DateTimeOffset RequestDate { get; set; } = DateTimeOffset.UtcNow;
 
         public AccessToken AccessToken { get; set; } = null!;
 

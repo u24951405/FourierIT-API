@@ -48,11 +48,11 @@ namespace FourierIT_API.Data
                 .WithOne(p => p.Address)
                 .HasForeignKey<Profile>(p => p.AddressId);
 
-            // Configure Province one-to-many relationship with Address
-            modelBuilder.Entity<Province>()
-                .HasMany( p=> p.Addresses)
-                .WithOne( a => a.Province)
-                .HasForeignKey(a => a.ProvinceId);
+            // Configure Suburb one-to-many relationship with Address
+            modelBuilder.Entity<Suburb>()
+                .HasMany( s=> s.Addresses)
+                .WithOne( a => a.Suburb)
+                .HasForeignKey(a => a.SuburbID);
 
             // Configure Province one-to-many relationship with City
             modelBuilder.Entity<Province>()
@@ -130,7 +130,7 @@ namespace FourierIT_API.Data
             modelBuilder.Entity<Document>()
                 .HasOne(d => d.DocumentBlob)
                 .WithOne(db => db.Document)
-                .HasForeignKey<Document>(d => d.DocumentId);
+                .HasForeignKey<DocumentBlob>(db => db.DocumentId);
 
             // Configure DocumentBlob one-to-many relationship with BlobHistory
             modelBuilder.Entity<DocumentBlob>()
@@ -138,11 +138,11 @@ namespace FourierIT_API.Data
                 .WithOne(bh => bh.DocumentBlob)
                 .HasForeignKey(bh => bh.DocumentBlobId);
 
-            // Configure Document one-to-one relationship with CertificationDetails
+            // Configure Document one-to-many relationship with CertificationDetails
             modelBuilder.Entity<Document>()
-                .HasOne(d => d.CertificationDetails)
+                .HasMany(d => d.CertificationDetails)
                 .WithOne(cd => cd.Document)
-                .HasForeignKey<CertificationDetails>(cd => cd.DocumentId);
+                .HasForeignKey(cd => cd.DocumentId);
 
             // Configure Document one-to-many relationship with DocumentStatusHistory
             modelBuilder.Entity<Document>()
@@ -158,7 +158,7 @@ namespace FourierIT_API.Data
 
             // Many-to-many relationship for InstitutionMembers
             modelBuilder.Entity<InstitutionMembers>()
-                .HasKey(im => new { im.UserId, im.InstitutionId });
+                .HasKey(im => new { im.MembersId, im.UserId, im.InstitutionId });
 
             modelBuilder.Entity<InstitutionMembers>()
                 .HasOne(im => im.Institution)
@@ -184,7 +184,7 @@ namespace FourierIT_API.Data
 
             // Configure ClientEnlistment relationships
             modelBuilder.Entity<ClientEnlistment>()
-                .HasKey(ce => new { ce.UserId, ce.InstitutionId });
+                .HasKey(ce => new { ce.ClientEnlistmentId, ce.UserId, ce.InstitutionId });
 
             modelBuilder.Entity<ClientEnlistment>()
                 .HasOne(ce => ce.User)
@@ -244,7 +244,7 @@ namespace FourierIT_API.Data
             modelBuilder.Entity<AccessToken>()
                 .HasOne(at => at.User)
                 .WithOne(u => u.AccessToken)
-                .HasForeignKey<AccessToken>(at => at.TokenId);
+                .HasForeignKey<AccessToken>(at => at.UserId);
 
             // Configure User one-to-one relationship with EnquiryComment
             modelBuilder.Entity<User>()
@@ -260,12 +260,12 @@ namespace FourierIT_API.Data
 
             //Configure AccessList relationships
             modelBuilder.Entity<AccessList>()
-                .HasKey(al => new { al.EnquiryRequestId, al.DocumentId, al.EnquiryFlagId });
+                .HasKey(al => new { al.EnquiryRequestId, al.DocumentId, al.EnquiryId });
 
             modelBuilder.Entity<AccessList>()
                 .HasOne(al => al.EnquiryFlag)
                 .WithOne(ef => ef.AccessList)
-                .HasForeignKey<AccessList>(al => al.EnquiryFlagId);
+                .HasForeignKey<AccessList>(al => al.EnquiryId);
 
             modelBuilder.Entity<AccessList>()
                 .HasOne(al => al.InstitutionEnquiryRequest)
@@ -276,6 +276,12 @@ namespace FourierIT_API.Data
                 .HasOne(al => al.Document)
                 .WithMany(d => d.AccessLists)
                 .HasForeignKey(al => al.DocumentId);
+
+            // Configure Notification one-to-many relationship with NotificationHistory
+            modelBuilder.Entity<Notification>()
+                .HasMany(n => n.NotificationHistories)
+                .WithOne(nh => nh.Notification)
+                .HasForeignKey(nh => nh.NotificationId);
         }
     }
 }

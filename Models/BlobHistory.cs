@@ -10,11 +10,11 @@ namespace FourierIT_API.Models
         [Key]
         public int BlobHistoryId { get; set; }
 
-        public DateOnly ArchivedDate { get; set; } = new DateOnly();
+        public DateTimeOffset ArchivedDate { get; set; } = DateTimeOffset.Now;
 
-        public byte[] BlobData { get; set; } = Array.Empty<byte>();
-
-        public string FileHash { get; set; } = string.Empty;
+        [Required]
+        [StringLength(50)]
+        public string ActionTaken { get; set; } = string.Empty;
 
         [ForeignKey("DocumentBlob")]
         public int DocumentBlobId { get; set; }

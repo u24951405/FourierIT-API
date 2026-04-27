@@ -12,14 +12,16 @@ namespace FourierIT_API.Models
         public int DocumentId { get; set; }
 
         [ForeignKey("EnquiryComment")]
-        public int EnquiryCommentId { get; set; }
+        public int EnquiryId { get; set; }
         public ICollection<EnquiryComment> EnquiryComments { get; set; } = new List<EnquiryComment>();
 
         [Required]
+        [StringLength(500)]
         public string FlagReason { get; set; } = null!;
 
         public bool IsResolved { get; set; } = false;
+
         // Navigation property for AccessList
-        public AccessList AccessList { get; set; } = null!;
+        public ICollection<AccessList> AccessLists { get; set; } = new List<AccessList>();
     }
 }

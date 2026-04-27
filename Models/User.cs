@@ -15,12 +15,21 @@ namespace FourierIT_API.Models
         [MaxLength(100)]
         public string Email { get; set; } = string.Empty;
 
+        [Required]
+        [MaxLength(100)]
+        public string Role { get; set; } = string.Empty;
+
+        [Required]
+        [MaxLength(500)]
         public string? PasswordHash { get; set; }
+
+        public bool MfaEnabled { get; set; } = false;
 
         public int FailedLoginAttempts { get; set; } = 0;
 
         public bool IsPEPStatus { get; set; } = false;
 
+        [MaxLength(20)]
         public string AccountStatus { get; set; } = "Active"; // Deactivated, Suspended, etc.
 
         public bool HasAccessToken { get; set; } = false;

@@ -10,6 +10,7 @@ namespace FourierIT_API.Models
         public int SuburbId { get; set; }
 
         [Required]
+        [MaxLength(100)]
         public string SuburbName { get; set; } = string.Empty;
 
         [Required]
@@ -19,5 +20,7 @@ namespace FourierIT_API.Models
         public int CityId { get; set; }
 
         public City City { get; set; } = null!;
+
+        public ICollection<Address> Addresses { get; set; } = new List<Address>();
     }
 }

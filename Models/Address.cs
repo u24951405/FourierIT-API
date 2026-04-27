@@ -7,17 +7,18 @@ namespace FourierIT_API.Models
     {
         [Key]
         public int AddressId { get; set; }
+
+        [Required]
+        [StringLength(255)]
         public string AddressLine { get; set; } = string.Empty;
-        public string PostalCode { get; set; } = string.Empty;
+        public int PostalCode { get; set; }
 
         // Foreign key for Province
         [ForeignKey("Province")]
-        public int ProvinceId { get; set; }
-        public Province Province { get; set; } = null!;
+        public int SuburbID { get; set; }
+        public Suburb Suburb { get; set; } = null!;
 
-        // Navigation property for the one-to-one relationship with Profile, so that we can easily access the profile information from the address entity.
-        [ForeignKey("Profile")]
-        public int ProfileId { get; set; }       
+        // Navigation property for the one-to-one relationship with Profile, so that we can easily access the profile information from the address entity.     
         public Profile Profile { get; set; } = null!;
     }
 }

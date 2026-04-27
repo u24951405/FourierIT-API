@@ -9,7 +9,7 @@ namespace FourierIT_API.Models
         public int RuleHistoryId { get; set; }
 
         [Required]
-        public DateOnly DateChanged { get; set; } = new DateOnly();
+        public DateTimeOffset DateChanged { get; set; } = DateTimeOffset.UtcNow;
 
         [ForeignKey("FICARule")]
         public int RuleId { get; set; }

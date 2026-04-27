@@ -14,5 +14,8 @@ namespace FourierIT_API.Models
         [ForeignKey("User")]
         public int UserId { get; set; }
         public User User { get; set; } = null!;
+
+        [Required]
+        public bool IsRead { get; set; }
     }
 }

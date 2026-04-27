@@ -13,12 +13,13 @@ namespace FourierIT_API.Models
         public ClientEnlistment ClientEnlistment { get; set; } = null!;
 
         [Required]
-        public int TotalScore { get; set; }
+        public decimal TotalScore { get; set; }
 
         [Required]
-        public int RiskLevel { get; set; }
+        [StringLength(10)]
+        public string RiskLevel { get; set; } = string.Empty;
 
-        public DateOnly LastUpdated { get; set; } = new DateOnly();
+        public DateTimeOffset LastUpdated { get; set; } = DateTimeOffset.Now;
 
         public ICollection<RiskRatingVariable> RiskRatingVariables { get; set; } = new List<RiskRatingVariable>();
 

@@ -10,17 +10,22 @@ namespace FourierIT_API.Models
         public int ProfileId { get; set; }
 
         [Required]
-        [StringLength(50)]
+        [StringLength(100)]
         public string FirstName { get; set; } = string.Empty;
 
         [Required]
-        [StringLength(50)]
+        [StringLength(100)]
         public string LastName { get; set; } = string.Empty;
 
+        [Required]
         public DateOnly DateOfBirth { get; set; } = new DateOnly();
 
+        [Required]
+        [StringLength(15)]
         public string PhoneNumber { get; set; } = string.Empty;
 
+        [Required]
+        [StringLength(100)]
         public string JobTitle { get; set; } = string.Empty;
 
         // Navigation properties for one-to-one relationships with user and address entities, so that we can easily access the user and address information from the profile entity.    
@@ -30,7 +35,7 @@ namespace FourierIT_API.Models
         public User User { get; set; } = null!;
 
         [ForeignKey("Address")]
-        public string AddressId { get; set; } = string.Empty;
+        public int AddressId { get; set; }
 
         public Address Address { get; set; } = null!;
     }
