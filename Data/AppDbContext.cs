@@ -264,8 +264,8 @@ namespace FourierIT_API.Data
 
             modelBuilder.Entity<AccessList>()
                 .HasOne(al => al.EnquiryFlag)
-                .WithOne(ef => ef.AccessList)
-                .HasForeignKey<AccessList>(al => al.EnquiryId);
+                .WithMany(ef => ef.AccessLists)
+                .HasForeignKey(al => al.EnquiryId);
 
             modelBuilder.Entity<AccessList>()
                 .HasOne(al => al.InstitutionEnquiryRequest)
