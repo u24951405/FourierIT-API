@@ -1,9 +1,11 @@
 ﻿using FourierIT_API.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 namespace FourierIT_API.Data
 {
-    public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
+    public class AppDbContext : DbContext
     {
+        public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
