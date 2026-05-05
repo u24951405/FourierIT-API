@@ -1,4 +1,6 @@
 using FourierIT_API.Data;
+using FourierIT_API.Interfaces;
+using FourierIT_API.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.SqlServer;
 
@@ -15,6 +17,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
