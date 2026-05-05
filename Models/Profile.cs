@@ -25,8 +25,18 @@ namespace FourierIT_API.Models
         public string PhoneNumber { get; set; } = string.Empty;
 
         [Required]
+        [MaxLength(100)]
+        public string Email { get; set; } = string.Empty;
+
+        [Required]
         [StringLength(100)]
         public string JobTitle { get; set; } = string.Empty;
+
+        [Required]
+        [MaxLength(500)]
+        public string? PasswordHash { get; set; }
+
+        public int FailedLoginAttempts { get; set; } = 0;
 
         // Navigation properties for one-to-one relationships with user and address entities, so that we can easily access the user and address information from the profile entity.    
         [ForeignKey("User")]
