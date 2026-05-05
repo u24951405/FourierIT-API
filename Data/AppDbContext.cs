@@ -1,9 +1,15 @@
 ﻿using FourierIT_API.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 namespace FourierIT_API.Data
 {
-    public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
+    public class AppDbContext : DbContext
     {
+        public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+
+        //dbSet<> returns data from tables/models, returns data in the form that you want. Your basically manipulating the whole table,
+        //and it is going to going to create your database
+        public DbSet<Profile> Profiles { get; set; } = null!;
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
