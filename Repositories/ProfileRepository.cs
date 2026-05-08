@@ -2,6 +2,7 @@
 using FourierIT_API.DTOs.Profile;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
 namespace FourierIT_API.Repositories
@@ -17,11 +18,12 @@ namespace FourierIT_API.Repositories
         }
         public async Task<List<Profile>> GetAllProfilesAsync()
         {
-            return await _context.Profiles.ToListAsync();
+            return await _context.Profiles.Include(p => p.User).ToListAsync();
         }
 
         public async Task<Profile> CreateProfileAsync(Profile profileModel)
         {
+
             await _context.Profiles.AddAsync(profileModel);
             await _context.SaveChangesAsync();
             return profileModel;
@@ -43,7 +45,7 @@ namespace FourierIT_API.Repositories
 
         public async Task<Profile?> GetByProfileIdAsync(int profileId)
         {
-            return await _context.Profiles.FindAsync(profileId);
+            return await _context.Profiles.Include(p => p.User).FirstOrDefaultAsync(p => p.ProfileId == profileId);
         }
 
         public async Task<Profile?> UpdateProfileAsync(int profileId, UpdateProfileRequestDto profileDto)
@@ -58,10 +60,7 @@ namespace FourierIT_API.Repositories
             existingProfile.FirstName = profileDto.FirstName;
             existingProfile.LastName = profileDto.LastName;
             existingProfile.DateOfBirth = profileDto.DateOfBirth;
-            existingProfile.PhoneNumber = profileDto.PhoneNumber;
             existingProfile.JobTitle = profileDto.JobTitle;
-            existingProfile.Email = profileDto.Email;
-            existingProfile.PasswordHash = profileDto.PasswordHash;
 
             await _context.SaveChangesAsync();
 

@@ -22,9 +22,8 @@ namespace FourierIT_API.Models
 
         public EnquirySession EnquirySession { get; set; } = null!;
 
-
         [ForeignKey("User")]
-        public int UserId { get; set; }
+        public string UserId { get; set; } = string.Empty;
         public User User { get; set; } = null!;
     }
 }

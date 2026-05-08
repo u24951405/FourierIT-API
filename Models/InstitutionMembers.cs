@@ -7,7 +7,7 @@ namespace FourierIT_API.Models
     {
         [Key]
         [ForeignKey("User")]
-        public int UserId { get; set; }
+        public string UserId { get; set; } = string.Empty;
         public User User { get; set; } = null!;
 
         [Key]
@@ -20,6 +20,5 @@ namespace FourierIT_API.Models
 
         [Required]
         public DateTimeOffset Date { get; set; } = DateTimeOffset.UtcNow;
-
     }
 }

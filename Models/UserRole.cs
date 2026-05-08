@@ -4,7 +4,7 @@ namespace FourierIT_API.Models
 {
     public class UserRole
     {
-        public int UserId { get; set; }
+        public string UserId { get; set; } = string.Empty;
         public User User { get; set; } = null!;
 
         public int RoleId { get; set; }

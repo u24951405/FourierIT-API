@@ -7,7 +7,5 @@
         public DateOnly DateOfBirth { get; set; } = new DateOnly();
         public string PhoneNumber { get; set; } = string.Empty;
         public string JobTitle { get; set; } = string.Empty;
-        public string Email { get; set; } = string.Empty;
-        public string? PasswordHash { get; set; }
     }
 }
