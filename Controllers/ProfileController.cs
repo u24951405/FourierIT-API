@@ -3,9 +3,12 @@ using FourierIT_API.DTOs.Profile;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Mappers;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Identity.Client;
+using FourierIT_API.Models;
+using System.Transactions;
 
 namespace FourierIT_API.Controllers
 {
@@ -15,10 +18,12 @@ namespace FourierIT_API.Controllers
     {
         private readonly AppDbContext _context; // Declares a private readonly field of type AppDbContext, which is used to interact with the database.
         private readonly IProfileRepository _profileRepo;
-        public ProfileController(AppDbContext context, IProfileRepository profileRepo) // constructor for the ProfileController class, which takes an AppDbContext instance as a parameter. This allows for dependency injection of the database context when the controller is instantiated.
+        private readonly UserManager<User> _userManager;
+        public ProfileController(AppDbContext context, IProfileRepository profileRepo, UserManager<User> userManager) // constructor for the ProfileController class, which takes an AppDbContext instance as a parameter. This allows for dependency injection of the database context when the controller is instantiated.
         {
             _profileRepo = profileRepo;
             _context = context; // Initializes the _context field with the provided AppDbContext instance.
+            _userManager = userManager;
         }
 
         [HttpGet] // same as read
@@ -30,10 +35,10 @@ namespace FourierIT_API.Controllers
             
             var profileDto = profiles.Select(p => p.ToProfileDto()); // return an immutable array of the dto
 
-            return Ok(profiles); // Returns an HTTP 200 OK response with the list of profiles as the response body.
+            return Ok(profileDto); // Returns an HTTP 200 OK response with the list of profiles as the response body.
         }
 
-        [HttpGet("{ProfileId}")] // takes in variable id, so we get one record at a time
+        [HttpGet("{profileId}")] // takes in variable id, so we get one record at a time
         public async Task<IActionResult> GetByProfileId([FromRoute] int profileId) // IActionResult is a common return method for API controllers, allowing for flexibility in the type of response returned (e.g., Ok, NotFound, BadRequest, etc.). The GetProfile method takes an integer id as a parameter, which is used to identify the specific profile to retrieve from the database.
         {
             var profile = await _profileRepo.GetByProfileIdAsync(profileId); // Uses the Find method of the _context to search for a profile with the specified id. This method is efficient for retrieving entities by their primary key.
@@ -47,18 +52,10 @@ namespace FourierIT_API.Controllers
             return Ok(profile.ToProfileDto());
         }
 
-        [HttpPost]
-        public async Task<IActionResult> Create([FromBody] CreateProfileRequestDto profileDto) //we need the [frombody] because the data is sent in the form of json, we will be passing it through the body of the http and not the url
-        {
-            var profileModel = profileDto.ToProfileFromCreateDto(); // Converts the incoming CreateProfileRequest DTO to a Profile entity using the ToProfileFromCreateDto extension method defined in the ProfileMappers class.
-            await _profileRepo.CreateProfileAsync(profileModel);
-            await _context.SaveChangesAsync(); // Saves the changes to the database, which will insert the new profile record.
-            return CreatedAtAction(nameof(GetByProfileId), new { ProfileId = profileModel.ProfileId }, profileModel.ToProfileDto()); // Returns an HTTP 201 Created response with the location of the newly created profile and the profile data in the response body. The CreatedAtAction method is used to generate a URL for the GetById action, which can be used to retrieve the newly created profile.
-        }
 
         [HttpPut]
-        [Route("{ProfileId}")]
-        public async Task<IActionResult> Update([FromRoute] int profileId, [FromBody] UpdateProfileRequestDto updateDto)
+        [Route("{profileId}")]
+        public async Task<IActionResult> UpdateProfile([FromRoute] int profileId, [FromBody] UpdateProfileRequestDto updateDto)
         {
             // use a searching algorithm to find profile, this retrieves the data
             var profileModel = await _profileRepo.UpdateProfileAsync(profileId, updateDto);
@@ -73,17 +70,40 @@ namespace FourierIT_API.Controllers
 
         // entity framework does the deleting we just need to find the id
         [HttpDelete]
-        [Route("{ProfileId}")]
-        public async Task<IActionResult> Delete([FromRoute] int profileId)
+        [Route("{profileId}")]
+        public async Task<IActionResult> DeleteProfile([FromRoute] int profileId)
         {
-            var profileModel = await _profileRepo.DeleteProfileAsync(profileId);
+            var profileModel = await _profileRepo.GetByProfileIdAsync(profileId);
 
-            if(profileModel == null)
+            if (profileModel == null)
             {
                 return NotFound();
             }
 
-            return NoContent();
+            // Ensure both profile and related user are deleted in a single transaction
+            await using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                // Attempt to find the related user
+                var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == profileModel.UserId);
+
+                if (user != null)
+                {
+                    _context.Users.Remove(user);
+                }
+
+                _context.Profiles.Remove(profileModel);
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return NoContent();
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                return Problem(detail: ex.Message, title: "Deletion failed", statusCode: StatusCodes.Status500InternalServerError);
+            }
         }
     }
 }

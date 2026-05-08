@@ -15,9 +15,8 @@ namespace FourierIT_API.Mappers
                 FirstName = profileModel.FirstName,
                 LastName = profileModel.LastName,
                 DateOfBirth = profileModel.DateOfBirth,
-                Email = profileModel.Email,
                 PhoneNumber = profileModel.PhoneNumber,
-                PasswordHash = profileModel.PasswordHash
+                Email = profileModel.User.Email
             };
         }
 
@@ -29,9 +28,7 @@ namespace FourierIT_API.Mappers
                 FirstName = profileDto.FirstName,
                 LastName = profileDto.LastName,
                 DateOfBirth = profileDto.DateOfBirth,
-                Email = profileDto.Email,
-                PhoneNumber = profileDto.PhoneNumber,
-                PasswordHash = profileDto.PasswordHash
+                PhoneNumber = profileDto.PhoneNumber
             };
         }
     }

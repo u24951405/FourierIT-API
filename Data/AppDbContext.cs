@@ -1,15 +1,17 @@
 ﻿using FourierIT_API.Models;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 namespace FourierIT_API.Data
 {
-    public class AppDbContext : DbContext
+    public class AppDbContext : IdentityDbContext<User>
     {
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
         //dbSet<> returns data from tables/models, returns data in the form that you want. Your basically manipulating the whole table,
         //and it is going to going to create your database
-        public DbSet<Profile> Profiles { get; set; } = null!;
+        public DbSet<Profile> Profiles { get; set; }
 
 
         public DbSet<Department> Departments { get; set; } = null!; // tells us that we have a table called Departments in our database and it is represented by the Department model and we grabbing and entering data to and from the database 
@@ -18,6 +20,33 @@ namespace FourierIT_API.Data
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
+            base.OnModelCreating(modelBuilder);
+
+            List<IdentityRole> Roles = new List<IdentityRole>
+            {
+                new IdentityRole
+                {
+                Name = "Department Admin",
+                NormalizedName = "DEPARTMENT ADMIN"
+                },
+                new IdentityRole
+                {
+                Name = "Document Owner",
+                NormalizedName = "DOCUMENT OWNER"
+                },
+                new IdentityRole
+                {
+                Name = "Stakeholder",
+                NormalizedName = "STAKEHOLDER"
+                },
+                new IdentityRole
+                {
+                Name = "Compliance Officer",
+                NormalizedName = "COMPLIANCE OFFICER"
+                },
+            };
+            modelBuilder.Entity<IdentityRole>().HasData(Roles);
+
             base.OnModelCreating(modelBuilder);
 
             // Configure UserRole many-to-many relationship
@@ -49,10 +78,10 @@ namespace FourierIT_API.Data
                 .HasForeignKey(rp => rp.PermissionId);
 
             // Configure User-Profile one-to-one relationship with a shared primary key
-            modelBuilder.Entity<User>()
-                .HasOne(u => u.Profile)
-                .WithOne(p => p.User)
-                .HasForeignKey<Profile>(p => p.UserId);
+            // inside OnModelCreating after base.OnModelCreating(modelBuilder);
+            modelBuilder.Entity<Profile>()
+                .HasIndex(p => p.UserId)
+                .IsUnique();
 
             // Configure Address-Profile one-to-one relationship
             modelBuilder.Entity<Address>()
@@ -64,7 +93,7 @@ namespace FourierIT_API.Data
             modelBuilder.Entity<Suburb>()
                 .HasMany( s=> s.Addresses)
                 .WithOne( a => a.Suburb)
-                .HasForeignKey(a => a.SuburbID);
+                .HasForeignKey(a => a.SuburbId);
 
             // Configure Province one-to-many relationship with City
             modelBuilder.Entity<Province>()
