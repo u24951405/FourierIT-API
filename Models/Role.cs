@@ -14,6 +14,8 @@ namespace FourierIT_API.Models
         [StringLength(500)]
         public string Description { get; set; } = string.Empty;
 
+        // Keep the explicit join entity collection (authoritative)
+        public ICollection<UserRole> UserRoles { get; set; } = new List<UserRole>();
 
         public ICollection<RolePermission> RolePermissions { get; set; } = new List<RolePermission>();
     }

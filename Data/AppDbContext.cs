@@ -44,6 +44,20 @@ namespace FourierIT_API.Data
 
             base.OnModelCreating(modelBuilder);
 
+            // Configure UserRole many-to-many relationship
+            modelBuilder.Entity<UserRole>()
+                .HasKey(ur => new { ur.UserId, ur.RoleId });
+
+            modelBuilder.Entity<UserRole>()
+                .HasOne(ur => ur.User)
+                .WithMany(u => u.UserRoles)
+                .HasForeignKey(ur => ur.UserId);
+
+            modelBuilder.Entity<UserRole>()
+                .HasOne(ur => ur.Role)
+                .WithMany(r => r.UserRoles)
+                .HasForeignKey(ur => ur.RoleId);
+
             // Configure RolePermission many-to-many relationship
             modelBuilder.Entity<RolePermission>()
                 .HasKey(rp => new { rp.RoleId, rp.PermissionId });
@@ -59,6 +73,7 @@ namespace FourierIT_API.Data
                 .HasForeignKey(rp => rp.PermissionId);
 
             // Configure User-Profile one-to-one relationship with a shared primary key
+            // inside OnModelCreating after base.OnModelCreating(modelBuilder);
             modelBuilder.Entity<Profile>()
                 .HasIndex(p => p.UserId)
                 .IsUnique();
