@@ -18,7 +18,7 @@ namespace FourierIT_API.Repositories
         }
         public async Task<List<Profile>> GetAllProfilesAsync()
         {
-            return await _context.Profiles.Include(p => p.User).ToListAsync();
+            return await _context.Profiles.Include(p => p.User).ThenInclude(u => u.UserRoles).ThenInclude(ur => ur.Role).ToListAsync();
         }
 
         public async Task<Profile> CreateProfileAsync(Profile profileModel)
@@ -45,7 +45,7 @@ namespace FourierIT_API.Repositories
 
         public async Task<Profile?> GetByProfileIdAsync(int profileId)
         {
-            return await _context.Profiles.Include(p => p.User).FirstOrDefaultAsync(p => p.ProfileId == profileId);
+            return await _context.Profiles.Include(p => p.User).ThenInclude(u => u.UserRoles).ThenInclude(ur => ur.Role).FirstOrDefaultAsync(p => p.ProfileId == profileId);
         }
 
         public async Task<Profile?> UpdateProfileAsync(int profileId, UpdateProfileRequestDto profileDto)

@@ -73,17 +73,17 @@ namespace FourierIT_API.Controllers
 
                 if (createdUser.Succeeded)
                 {
-                    //Ensure the "Document Owner" role exists
-                    const string defaultRole = "Document Owner";
-                    if (!await _roleManager.RoleExistsAsync(defaultRole))
+                    // User role from DTO, it will default to owner if null/empty
+                    var roleName = string.IsNullOrEmpty(userDto.Role) ? "Document Owner" : userDto.Role.Trim();
+
+                    // Validate role against the seeded roles
+                    if (!await _roleManager.RoleExistsAsync(roleName))
                     {
-                        var createRoleResult = await _roleManager.CreateAsync(new IdentityRole(defaultRole));
-                        if (!createRoleResult.Succeeded)
-                        {
-                            return StatusCode(StatusCodes.Status500InternalServerError, createRoleResult.Errors);
-                        }
+                      //Return a helpful error listing the available roles instead of creating arbitrary roles
+                      var allowedRoles = await _context.Roles.Select(r => r.Name).ToListAsync();
+                        return BadRequest(new { error = "Invalid role", allowedRoles });
                     }
-                    var roleResult = await _userManager.AddToRoleAsync(User, defaultRole);
+                    var roleResult = await _userManager.AddToRoleAsync(User, roleName);
 
                     if (!roleResult.Succeeded)
                     {
@@ -123,10 +123,10 @@ namespace FourierIT_API.Controllers
             }
         }
 
-        [HttpPost("{userId}/Roles")]
-        public async Task<IActionResult> AssignRoleToUser([FromRoute] string userId, [FromBody] string roleName)
+        [HttpPost("{userName}/Roles")]
+        public async Task<IActionResult> AssignRoleToUser([FromRoute] string userName, [FromBody] string roleName)
         {
-            var user = await _userManager.FindByIdAsync(userId);
+            var user = await _userManager.FindByNameAsync(userName);
             if (user == null) return NotFound();
 
             if (!await _roleManager.RoleExistsAsync(roleName))
@@ -139,6 +139,69 @@ namespace FourierIT_API.Controllers
             if (!result.Succeeded) return BadRequest(result.Errors);
 
             return Ok();
+        }
+
+        [HttpPut("{userName}/Roles/replace")]
+        public async  Task<IActionResult> ReplaceUserRole([FromRoute] string userName, [FromBody] ReplaceRoleDto dto)
+        {
+            if (dto == null!) return BadRequest("Request body required");
+            if (string.IsNullOrEmpty(dto.OldRole) || string.IsNullOrEmpty(dto.NewRole))
+            return BadRequest("Both the old and new role names must be provided");
+
+             var user = await _userManager.FindByNameAsync(userName);
+
+            if (user == null) return NotFound();
+
+            //validate that the roles exist
+            if (!await _roleManager.RoleExistsAsync(dto.OldRole))
+                return BadRequest(new { error = "Old role does not exist", role = dto.OldRole });
+
+            if (!await _roleManager.RoleExistsAsync(dto.NewRole))
+                return BadRequest(new { error = "New role does not exist", role = dto.NewRole });
+
+            // Ensure user currently has the old role
+            if (!await _userManager.IsInRoleAsync(user, dto.OldRole))
+                return BadRequest(new { error = "User is not in the old role", role = dto.OldRole });
+
+            //Remove old role
+            var removedResult = await _userManager.RemoveFromRoleAsync(user, dto.OldRole);
+            if (!removedResult.Succeeded)
+                return StatusCode(StatusCodes.Status500InternalServerError, removedResult.Errors);
+
+            //Add new role
+            var addedResult = await _userManager.AddToRoleAsync(user, dto.NewRole);
+            if (!addedResult.Succeeded)
+            {
+                // Attempt to rollback to old role if adding new role fails
+                await _userManager.AddToRoleAsync(user, dto.OldRole);
+                return StatusCode(StatusCodes.Status500InternalServerError, addedResult.Errors);
+            }
+
+            var updatedRoles = await _userManager.GetRolesAsync(user);
+            return Ok(new { userName = user.UserName, roles = updatedRoles });
+        }
+
+        //Remove specific role from a user
+        [HttpDelete("{userName}/roles/remove")]
+        public async Task<IActionResult> RemoveUserRole([FromRoute] string userName, [FromBody] string roleName)
+        {
+            var user = await _userManager.FindByNameAsync(userName);
+            if (user == null) return NotFound();
+
+            var existingRole = await _roleManager.RoleExistsAsync(roleName);
+
+            if (!existingRole)
+            {
+                return BadRequest(new { error = "Role does not exist", roleName });
+            }
+
+            var isInRole = await _userManager.IsInRoleAsync(user, roleName);
+            if (!isInRole) return BadRequest(new { error = "User is not in the specified role", roleName });
+
+            var result = await _userManager.RemoveFromRoleAsync(user, roleName);
+            if(!result.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, result.Errors);
+
+            return Ok(new {userName = user.UserName, roles = await _userManager.GetRolesAsync(user)});
         }
     }
 }

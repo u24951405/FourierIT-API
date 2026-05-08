@@ -8,6 +8,12 @@ namespace FourierIT_API.Mappers
     {
         public static ProfileDto ToProfileDto(this Profile profileModel)
         {
+            // Pick the first role assigned to the user (if any)
+            var roleNames = profileModel?.User?.UserRoles?
+                .Select(ur => ur?.Role?.RoleName)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .ToList() ?? new List<string>();
+
             return new ProfileDto
             {
                 ProfileId = profileModel.ProfileId,
@@ -16,7 +22,8 @@ namespace FourierIT_API.Mappers
                 LastName = profileModel.LastName,
                 DateOfBirth = profileModel.DateOfBirth,
                 PhoneNumber = profileModel.PhoneNumber,
-                Email = profileModel.User.Email
+                Email = profileModel.User.Email,
+                Role = roleNames
             };
         }
 

@@ -19,5 +19,7 @@ namespace FourierIT_API.DTOs.Profile
 
         public string Email { get; set; } = string.Empty;
 
+        public List<string> Role {get; set; } = new List<string>();
+
     }
 }

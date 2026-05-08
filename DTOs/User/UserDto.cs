@@ -24,5 +24,10 @@ namespace FourierIT_API.DTOs.User
         public string EmailAddress { get; set; } = string.Empty;
         [Required]
         public string? Password { get; set; } = null;
+
+        // Role selected by the user during registration
+        // Must match one of the seeded roles
+        [Required]
+        public string Role { get; set; } = string.Empty;
     }
 }
