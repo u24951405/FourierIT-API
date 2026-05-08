@@ -1,22 +1,19 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using FourierIT_API.Models;
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace FourierIT_API.Models
+namespace FourierIT_API.DTOs.Department
 {
-    public class Department
+    public class DepartmentDto
     {
-        [Key]
+ 
         public int DepartmentId { get; set; }
 
-        [ForeignKey("Branch")]
         public int BranchId { get; set; }
         public Branch Branch { get; set; } = null!;
 
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
-        [Required]
-        [StringLength(150)]
         public string DepartmentName { get; set; } = string.Empty;
     }
-
 }

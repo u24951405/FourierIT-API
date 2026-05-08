@@ -10,8 +10,13 @@ namespace FourierIT_API.Data
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
         //dbSet<> returns data from tables/models, returns data in the form that you want. Your basically manipulating the whole table,
-        //and it is going to going to create your database.
+        //and it is going to going to create your database
         public DbSet<Profile> Profiles { get; set; }
+
+
+        public DbSet<Department> Departments { get; set; } = null!; // tells us that we have a table called Departments in our database and it is represented by the Department model and we grabbing and entering data to and from the database 
+
+        public DbSet<Institution> Institutions { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -220,7 +225,7 @@ namespace FourierIT_API.Data
 
             // Configure ClientEnlistment relationships
             modelBuilder.Entity<ClientEnlistment>()
-                .HasKey(ce => new { ce.ClientEnlistmentId});
+                .HasKey(ce => new { ce.ClientEnlistmentId });
 
             modelBuilder.Entity<ClientEnlistment>()
                 .HasOne(ce => ce.User)
