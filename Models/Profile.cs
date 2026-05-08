@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using Microsoft.AspNetCore.Identity;
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Globalization;
 
@@ -11,11 +12,11 @@ namespace FourierIT_API.Models
 
         [Required]
         [StringLength(100)]
-        public string FirstName { get; set; } = string.Empty;
+        public string? FirstName { get; set; } 
 
         [Required]
         [StringLength(100)]
-        public string LastName { get; set; } = string.Empty;
+        public string? LastName { get; set; } 
 
         [Required]
         public DateOnly DateOfBirth { get; set; } = new DateOnly();
@@ -25,28 +26,17 @@ namespace FourierIT_API.Models
         public string PhoneNumber { get; set; } = string.Empty;
 
         [Required]
-        [MaxLength(100)]
-        public string Email { get; set; } = string.Empty;
-
-        [Required]
         [StringLength(100)]
         public string JobTitle { get; set; } = string.Empty;
 
-        [Required]
-        [MaxLength(500)]
-        public string? PasswordHash { get; set; }
-
-        public int FailedLoginAttempts { get; set; } = 0;
-
         // Navigation properties for one-to-one relationships with user and address entities, so that we can easily access the user and address information from the profile entity.    
         [ForeignKey("User")]
-        public int UserId { get; set; }
-
+        public string UserId { get; set; } = string.Empty;
         public User User { get; set; } = null!;
 
-        [ForeignKey("Address")]
-        public int AddressId { get; set; }
+        [ForeignKey("Profile")]
+        public int? AddressId {  get; set; }
 
-        public Address Address { get; set; } = null!;
+        public Address? Address { get; set; }
     }
 }

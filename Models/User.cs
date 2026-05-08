@@ -1,21 +1,17 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Identity;
 
 namespace FourierIT_API.Models
 {
-    public class User
+    public class User : IdentityUser
     {
-        [Key]
-        public int UserId { get; set; }
-
         [Required]
         [MaxLength(100)]
-        public string FullName { get; set; } = string.Empty;
-
-        [Required]
-        [MaxLength(100)]
-        public string Role { get; set; } = string.Empty;
-
         public bool MfaEnabled { get; set; } = false;
+
+        [Required]
+        [MaxLength(500)]
+        public int FailedLoginAttempts { get; set; } = 0;
 
         public bool IsPEPStatus { get; set; } = false;
 
@@ -49,7 +45,5 @@ namespace FourierIT_API.Models
         public AccessToken AccessToken { get; set; } = null!;
 
         public EnquiryComment EnquiryComment { get; set; } = null!;
-
     }
-
 }

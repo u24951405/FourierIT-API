@@ -5,12 +5,10 @@ namespace FourierIT_API.Models
 {
     public class ClientEnlistment
     {
-        [Key]
         [ForeignKey("User")]
-        public int UserId { get; set; }
+        public string UserId { get; set; } = string.Empty;
         public User User { get; set; } = null!;
 
-        [Key]
         [ForeignKey("Institution")]
         public int InstitutionId { get; set; }
         public Institution Institution { get; set; } = null!;
