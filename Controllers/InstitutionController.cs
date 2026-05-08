@@ -1,6 +1,7 @@
 ﻿using FourierIT_API.Data;
 using FourierIT_API.DTOs.Department;
 using FourierIT_API.DTOs.Institution;
+using FourierIT_API.Interfaces;
 using FourierIT_API.Mappers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -13,9 +14,11 @@ namespace FourierIT_API.Controllers
     public class InstitutionController : ControllerBase
     {
         private readonly AppDbContext _context;
-        public InstitutionController(AppDbContext context)
+        private readonly IInstitutionRepository _institutionRepo;
+        public InstitutionController(AppDbContext context,IInstitutionRepository institutionRepo)
         {
-            _context=context;
+            _institutionRepo= institutionRepo;
+            _context =context;
 
         }
 
@@ -24,7 +27,7 @@ namespace FourierIT_API.Controllers
         public async Task<IActionResult> GetAll() 
         { 
 
-            var instituions =await _context.Institutions.ToListAsync();
+            var instituions =await _institutionRepo.GetAllAsync();
 
             var institutionDto= instituions.Select(i => i.ToInstitutionDto());
             return Ok(instituions);
@@ -37,12 +40,10 @@ namespace FourierIT_API.Controllers
 
         public async Task<IActionResult> GetById(int InstitutionId) 
         {
-            var institution =await _context.Institutions.FindAsync(InstitutionId);
+            var institution =await _institutionRepo.GetByIdAsync(InstitutionId);
             if (institution == null)
             { 
-            
-              return NotFound();
-            
+                return NotFound();
             }
             return Ok(institution);
         
@@ -53,41 +54,34 @@ namespace FourierIT_API.Controllers
         [HttpPost]
         public async Task<IActionResult> create([FromBody] CreateInstitutionRequestDto InstitutionDto)
         {
-            var InstitutionModel = InstitutionDto.ToInstitutionFromCreatDTO();
-            await _context.Institutions.AddAsync(InstitutionModel);
-            await _context.SaveChangesAsync();
-            return CreatedAtAction(nameof(GetById), new { id = InstitutionModel.InstitutionId }, InstitutionModel.ToInstitutionDto());
+            var institutionModel = InstitutionDto.ToInstitutionFromCreatDTO();
+            await _institutionRepo.CreateAsync(institutionModel);
+            return CreatedAtAction(nameof(GetById), new { id = institutionModel.InstitutionId }, institutionModel.ToInstitutionDto());
         }
 
         [HttpPut]
         [Route("{InstitutionId}")]
         public async Task<IActionResult> Update([FromRoute] int InstitutionId, [FromBody] UpdateInstitutionRequestDto UpdateDto)
         {
-            var InstitutionModel = await _context.Institutions.FirstOrDefaultAsync(x => x.InstitutionId == InstitutionId);
-            if (InstitutionModel == null)
+            var institutionModel = await _institutionRepo.UpdateAsync(InstitutionId, UpdateDto);
+            if (institutionModel == null)
             {
                 return NotFound();
             }
-            InstitutionModel.InstitutionName = UpdateDto.InstitutionName;
-            InstitutionModel.VerifiedDomain = UpdateDto.VerifiedDomain;
-            InstitutionModel.RegNumber = UpdateDto.RegNumber;
-            InstitutionModel.TypeId = UpdateDto.TypeId;
-            InstitutionModel.InstitutionType = UpdateDto.InstitutionType;
-            await _context.SaveChangesAsync();
-            return Ok(InstitutionModel.ToInstitutionDto());
+            
+            return Ok(institutionModel.ToInstitutionDto());
         }
 
         [HttpDelete]
         [Route("{InstitutionId}")]
         public async Task<IActionResult> Delete([FromRoute] int InstitutionId)
         {
-            var InstitutionModel =await _context.Institutions.FirstOrDefaultAsync(x => x.InstitutionId == InstitutionId);
-            if (InstitutionModel == null)
+            var institutionModel =await _institutionRepo.DeleteAsync(InstitutionId);
+            if (institutionModel == null)
             {
                 return NotFound();
             }
-            _context.Institutions.Remove(InstitutionModel);
-            await _context.SaveChangesAsync();
+            
             return NoContent();
         }
     }
