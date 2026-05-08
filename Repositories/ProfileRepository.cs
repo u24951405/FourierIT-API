@@ -60,6 +60,7 @@ namespace FourierIT_API.Repositories
             existingProfile.FirstName = profileDto.FirstName;
             existingProfile.LastName = profileDto.LastName;
             existingProfile.DateOfBirth = profileDto.DateOfBirth;
+            existingProfile .PhoneNumber = profileDto.PhoneNumber;
             existingProfile.JobTitle = profileDto.JobTitle;
 
             await _context.SaveChangesAsync();

@@ -20,9 +20,6 @@ namespace FourierIT_API.Models
 
         public bool HasAccessToken { get; set; } = false;
 
-        // Keep the explicit join entity collection (authoritative for the many-to-many)
-        public ICollection<UserRole> UserRoles { get; set; } = new List<UserRole>();
-
         // One-to-one Profile navigation (shared PK configured in DbContext)
         public Profile Profile { get; set; } = null!;
 
