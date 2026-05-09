@@ -3,6 +3,7 @@ using FourierIT_API.DTOs.Department;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Mappers;
 using FourierIT_API.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -11,6 +12,7 @@ namespace FourierIT_API.Controllers
 {
     [Route("api/Department")]
     [ApiController]
+    [Authorize(Roles = "Department Admin")]
     public class DepartmentController : ControllerBase
     {
         private readonly AppDbContext _context; // create a private variable to hold our database context and prevents it from being mutable

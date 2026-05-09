@@ -10,11 +10,13 @@ using Microsoft.Identity.Client;
 using FourierIT_API.Models;
 using System.Linq;
 using System.Collections.Generic;
+using Microsoft.AspNetCore.Authorization;
 
 namespace FourierIT_API.Controllers
 {
     [Route("api/Profile")]
     [ApiController]
+    [Authorize(Roles = "Department Admin")]
     public class ProfileController : ControllerBase 
     {
         private readonly AppDbContext _context; 
@@ -40,6 +42,7 @@ namespace FourierIT_API.Controllers
                 var user = profile.User ?? await _userManager.FindByIdAsync(profile.UserId);
                 if (user != null)
                 {
+                    dto.UserName = user.UserName ?? string.Empty; // ensure username is set
                     var roles = await _userManager.GetRolesAsync(user);
                     dto.Role = (roles != null && roles.Any()) ? roles.ToList() : new List<string>();
                 }
@@ -65,9 +68,11 @@ namespace FourierIT_API.Controllers
             var user = profile.User ?? await _userManager.FindByIdAsync(profile.UserId);
             if (user != null)
             {
+                dto.UserName = user.UserName ?? string.Empty; // ensure username is set
                 var roles = await _userManager.GetRolesAsync(user);
                 dto.Role = (roles != null && roles.Any()) ? roles.ToList() : new List<string>();
             }
+
 
             return Ok(dto);
         }
