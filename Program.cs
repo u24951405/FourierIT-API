@@ -54,7 +54,7 @@ builder.Services.AddSwaggerGen(option =>
 
 builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
 
-builder.Services.AddIdentity<User, IdentityRole>(options =>
+builder.Services.AddIdentity<User, Role>(options =>
 {
     options.Password.RequireDigit = true;
     options.Password.RequireLowercase = true;

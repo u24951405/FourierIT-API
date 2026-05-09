@@ -10,7 +10,7 @@ namespace FourierIT_API.Mappers
         {
             // Pick the first role assigned to the user (if any)
             var roleNames = profileModel?.User?.UserRoles?
-                .Select(ur => ur?.Role?.RoleName)
+                .Select(ur => ur?.Role?.Name)
                 .Where(n => !string.IsNullOrWhiteSpace(n))
                 .ToList() ?? new List<string>();
 
@@ -20,10 +20,13 @@ namespace FourierIT_API.Mappers
                 JobTitle = profileModel.JobTitle,
                 FirstName = profileModel.FirstName,
                 LastName = profileModel.LastName,
+                // Try to populate username from the loaded navigation; controller will override if necessary
+                UserName = profileModel.User?.UserName ?? string.Empty,
                 DateOfBirth = profileModel.DateOfBirth,
                 PhoneNumber = profileModel.PhoneNumber,
                 Email = profileModel.User.Email,
-                Role = roleNames
+                Role = roleNames,
+
             };
         }
 

@@ -2,6 +2,7 @@
 using FourierIT_API.DTOs.Department;
 using FourierIT_API.DTOs.Institution;
 using FourierIT_API.Mappers;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -10,6 +11,7 @@ namespace FourierIT_API.Controllers
 {
     [Route("api/Institution")]
     [ApiController]
+    [Authorize(Roles = "Department Admin")]
     public class InstitutionController : ControllerBase
     {
         private readonly AppDbContext _context;

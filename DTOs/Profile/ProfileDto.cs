@@ -1,6 +1,7 @@
 ﻿using FourierIT_API.Models;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Globalization;
 
 namespace FourierIT_API.DTOs.Profile
 {
@@ -12,6 +13,7 @@ namespace FourierIT_API.DTOs.Profile
         public string FirstName { get; set; } = string.Empty;
 
         public string LastName { get; set; } = string.Empty;
+        public string UserName { get; set; } = string.Empty;
 
         public DateOnly DateOfBirth { get; set; } = new DateOnly();
 
@@ -20,6 +22,5 @@ namespace FourierIT_API.DTOs.Profile
         public string Email { get; set; } = string.Empty;
 
         public List<string> Role {get; set; } = new List<string>();
-
     }
 }

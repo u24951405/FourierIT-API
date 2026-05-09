@@ -4,6 +4,6 @@ namespace FourierIT_API.Interfaces
 {
     public interface ITokenService
     {
-        string CreateToken(User user);
+        Task<string> CreateTokenAsync(User user);
     }
 }

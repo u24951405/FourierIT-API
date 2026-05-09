@@ -1,5 +1,6 @@
 ﻿using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
@@ -12,18 +13,28 @@ namespace FourierIT_API.Service
     {
         private readonly IConfiguration _config;
         private readonly SymmetricSecurityKey _key;
-        public TokenService(IConfiguration config)
+        private readonly UserManager<User> _userManager;
+        public TokenService(IConfiguration config, UserManager<User> userManager)
         {
             _config = config;
             _key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["JWT:SigningKey"]));
+            _userManager = userManager;
         }
-        public string CreateToken(User user)
+        public async Task<string> CreateTokenAsync(User user)
         {
             var claims = new List<Claim>
             {
                 new Claim(JwtRegisteredClaimNames.Email, user.Email),
                 new Claim(JwtRegisteredClaimNames.GivenName, user.UserName)
             };
+
+            // Add roles as claims so the authorization of a specific role works
+            var roles = await _userManager.GetRolesAsync(user);
+            foreach (var role in roles)
+            {
+                // add ClaimTypes.Role (the default RoleClaimType in ASP.NET Core) to the claims collection
+                claims.Add(new Claim(ClaimTypes.Role, role));
+            }
 
             var creds = new SigningCredentials(_key, SecurityAlgorithms.HmacSha512Signature);
 
