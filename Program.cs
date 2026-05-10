@@ -62,6 +62,8 @@ builder.Services.AddSwaggerGen(option =>
 });
 
 builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
+builder.Services.AddScoped<IDepartmentRepository, DepartmentRepository>();
+builder.Services.AddScoped<IInstitutionRepository, InstitutionRepository>();
 
 builder.Services.AddIdentity<User, Role>(options =>
 {
