@@ -2,12 +2,15 @@
 using FourierIT_API.DTOs.User;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
+using FourierIT_API.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using System.Linq.Expressions;
+using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
 
 namespace FourierIT_API.Controllers
 {
@@ -30,6 +33,7 @@ namespace FourierIT_API.Controllers
             _roleManager = roleManager;
         }
 
+        [AllowAnonymous]
         [HttpPost("login")]
         public async Task<IActionResult> Login(LoginDto loginDto)
         {
@@ -54,6 +58,62 @@ namespace FourierIT_API.Controllers
                 });
         }
 
+        [Authorize]
+        [HttpGet("me")]
+        public async Task<IActionResult> GetCurrentAccount()
+        {
+            // JWT short names (e.g. "email", "sub") are often not mapped to ClaimTypes.* unless MapInboundClaims is configured.
+            var user = await ResolveCurrentUserAsync();
+            if (user == null)
+                return Unauthorized(new { error = "Invalid token." });
+
+            var roles = (await _userManager.GetRolesAsync(user)).ToList();
+            var profile = await _context.Profiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == user.Id);
+
+            var dto = new CurrentAccountDto
+            {
+                UserId = user.Id,
+                UserName = user.UserName ?? string.Empty,
+                Email = user.Email ?? string.Empty,
+                AccountStatus = user.AccountStatus,
+                PhoneNumber = user.PhoneNumber,
+                Roles = roles,
+                ProfileId = profile?.ProfileId,
+                FirstName = profile?.FirstName,
+                LastName = profile?.LastName,
+                ProfilePhoneNumber = profile?.PhoneNumber,
+                JobTitle = profile?.JobTitle,
+                DateOfBirth = profile?.DateOfBirth
+            };
+
+            return Ok(dto);
+        }
+
+        private async Task<User?> ResolveCurrentUserAsync()
+        {
+            var email =
+                User.FindFirstValue(ClaimTypes.Email)
+                ?? User.FindFirstValue(JwtRegisteredClaimNames.Email)
+                ?? User.Claims.FirstOrDefault(c => c.Type.Equals("email", StringComparison.OrdinalIgnoreCase))?.Value;
+
+            if (!string.IsNullOrWhiteSpace(email))
+            {
+                var byEmail = await _userManager.FindByEmailAsync(email);
+                if (byEmail != null) return byEmail;
+            }
+
+            var userId =
+                User.FindFirstValue(ClaimTypes.NameIdentifier)
+                ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+                ?? User.Claims.FirstOrDefault(c => c.Type.Equals("sub", StringComparison.OrdinalIgnoreCase))?.Value;
+
+            if (!string.IsNullOrWhiteSpace(userId))
+                return await _userManager.FindByIdAsync(userId);
+
+            return null;
+        }
+
+        [AllowAnonymous]
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] UserDto userDto)
         {
@@ -73,15 +133,51 @@ namespace FourierIT_API.Controllers
 
                 if (createdUser.Succeeded)
                 {
-                    var roleName = string.IsNullOrEmpty(userDto.Role) ? "Document Owner" : userDto.Role.Trim();
+                    var requestedRoles = (userDto.Roles ?? new List<string>())
+                        .Where(r => !string.IsNullOrWhiteSpace(r))
+                        .Select(r => r.Trim())
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
 
-                    if (!await _roleManager.RoleExistsAsync(roleName))
+                    // Backward compatibility for older clients sending a single role.
+                    if (requestedRoles.Count == 0 && !string.IsNullOrWhiteSpace(userDto.Role))
                     {
-                        var allowedRoles = await _context.Roles.Select(r => r.Name).ToListAsync();
-                        return BadRequest(new { error = "Invalid role", allowedRoles });
+                        requestedRoles.Add(userDto.Role.Trim());
                     }
 
-                    var roleResult = await _userManager.AddToRoleAsync(newUser, roleName);
+                    if (requestedRoles.Count == 0)
+                    {
+                        requestedRoles.Add("Document Owner");
+                    }
+
+                    if (requestedRoles.Count > 2)
+                    {
+                        return BadRequest(new { error = "A user can be assigned a maximum of 2 roles during registration." });
+                    }
+
+                    var allowedRoleNames = await _context.Roles
+                        .Select(r => r.Name ?? string.Empty)
+                        .Where(n => !string.IsNullOrWhiteSpace(n))
+                        .ToListAsync();
+
+                    var invalidRoles = requestedRoles
+                        .Where(r => !allowedRoleNames.Any(ar => ar.Equals(r, StringComparison.OrdinalIgnoreCase)))
+                        .ToList();
+
+                    if (invalidRoles.Any())
+                    {
+                        return BadRequest(new { error = "Invalid role(s)", invalidRoles, allowedRoles = allowedRoleNames });
+                    }
+
+                    if (StakeholderRolePolicy.ViolatesStakeholderExclusivity(requestedRoles))
+                    {
+                        return BadRequest(new
+                        {
+                            error = "Stakeholder cannot be combined with other roles. Choose only Stakeholder, or remove Stakeholder and pick other role(s)."
+                        });
+                    }
+
+                    var roleResult = await _userManager.AddToRolesAsync(newUser, requestedRoles);
                     if (!roleResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, roleResult.Errors);
 
                     var profile = new Profile
@@ -117,6 +213,67 @@ namespace FourierIT_API.Controllers
             {
                 return Problem(detail: ex.Message, title: "Registration failed", statusCode: StatusCodes.Status500InternalServerError);
             }
+        }
+
+        [Authorize(Roles = "Department Admin")]
+        [HttpPut("profile/{profileId}")]
+        public async Task<IActionResult> UpdateManagedUser([FromRoute] int profileId, [FromBody] UpdateUserManagementRequestDto dto)
+        {
+            if (!ModelState.IsValid) return BadRequest(ModelState);
+
+            var profile = await _context.Profiles.Include(p => p.User).FirstOrDefaultAsync(p => p.ProfileId == profileId);
+            if (profile == null) return NotFound(new { error = "Profile not found." });
+
+            var user = profile.User ?? await _userManager.FindByIdAsync(profile.UserId);
+            if (user == null) return NotFound(new { error = "User not found for the profile." });
+
+            var roleName = dto.Role.Trim();
+            if (!await _roleManager.RoleExistsAsync(roleName))
+            {
+                var allowedRoles = await _context.Roles.Select(r => r.Name).ToListAsync();
+                return BadRequest(new { error = "Invalid role", allowedRoles });
+            }
+
+            profile.FirstName = dto.FirstName.Trim();
+            profile.LastName = dto.LastName.Trim();
+            profile.DateOfBirth = dto.DateOfBirth;
+            profile.PhoneNumber = dto.PhoneNumber.Trim();
+            profile.JobTitle = dto.JobTitle.Trim();
+
+            user.Email = dto.EmailAddress.Trim();
+            user.NormalizedEmail = dto.EmailAddress.Trim().ToUpperInvariant();
+            user.AccountStatus = string.IsNullOrWhiteSpace(dto.AccountStatus) ? "Active" : dto.AccountStatus.Trim();
+            var userUpdateResult = await _userManager.UpdateAsync(user);
+            if (!userUpdateResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, userUpdateResult.Errors);
+
+            var existingRoles = await _userManager.GetRolesAsync(user);
+            var removeRolesResult = await _userManager.RemoveFromRolesAsync(user, existingRoles);
+            if (!removeRolesResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, removeRolesResult.Errors);
+
+            var addRoleResult = await _userManager.AddToRoleAsync(user, roleName);
+            if (!addRoleResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, addRoleResult.Errors);
+
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "User and profile updated." });
+        }
+
+        [Authorize(Roles = "Department Admin")]
+        [HttpDelete("profile/{profileId}")]
+        public async Task<IActionResult> DeleteManagedUser([FromRoute] int profileId)
+        {
+            var profile = await _context.Profiles.Include(p => p.User).FirstOrDefaultAsync(p => p.ProfileId == profileId);
+            if (profile == null) return NotFound(new { error = "Profile not found." });
+
+            var user = profile.User ?? await _userManager.FindByIdAsync(profile.UserId);
+            if (user == null) return NotFound(new { error = "User not found for the profile." });
+
+            _context.Profiles.Remove(profile);
+            await _context.SaveChangesAsync();
+
+            var deleteUserResult = await _userManager.DeleteAsync(user);
+            if (!deleteUserResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, deleteUserResult.Errors);
+
+            return NoContent();
         }
     }
 }

@@ -12,7 +12,6 @@ namespace FourierIT_API.Controllers
 {
     [Route("api/Department")]
     [ApiController]
-    [Authorize(Roles = "Department Admin")]
     public class DepartmentController : ControllerBase
     {
         private readonly AppDbContext _context; // create a private variable to hold our database context and prevents it from being mutable
@@ -23,9 +22,9 @@ namespace FourierIT_API.Controllers
             _context = context;
         }
 
+        [Authorize]
         [HttpGet]
-
-        public async Task< IActionResult> GetAll()
+        public async Task<IActionResult> GetAll()
         {
             var departments = await _departmentRepo.GetAllAsync();//  deffered excecution to get all the departments from the database and convert it to a list
 
@@ -34,6 +33,7 @@ namespace FourierIT_API.Controllers
         }
 
 
+        [Authorize]
         [HttpGet("{DepartmentId}")]
         public async  Task<IActionResult> GetById([FromRoute] int DepartmentId)//  get a specific department by its id, the id is passed as a parameter in the route and is marked with [FromRoute] to indicate that it should be bound from the route data
         {
@@ -45,15 +45,24 @@ namespace FourierIT_API.Controllers
             return Ok(department.ToDepartmentDto());
         }
 
+        [Authorize(Roles = "Department Admin")]
         [HttpPost]
         public async Task<IActionResult> create([FromBody] CreateDepartmentRequestDto DepartmentDto)
         {
+            if (!ModelState.IsValid) return BadRequest(ModelState);
+            if (string.IsNullOrWhiteSpace(DepartmentDto.DepartmentName))
+                return BadRequest(new { error = "Department name is required." });
+            if (!await _context.Branches.AnyAsync(b => b.BranchId == DepartmentDto.BranchId))
+                return BadRequest(new { error = "Invalid branch. Select an existing branch." });
+
             var departmentModel = DepartmentDto.ToDepartmentFromCreatDTO();
             await _departmentRepo.CreateAsync(departmentModel);
+            await _context.SaveChangesAsync();
             return CreatedAtAction(nameof(GetById),new {id=departmentModel.DepartmentId} ,departmentModel.ToDepartmentDto());
         }
 
 
+        [Authorize(Roles = "Department Admin")]
         [HttpPut]
         [Route("{DepartmentId}")]
         public async Task<IActionResult> Update([FromRoute] int DepartmentId, [FromBody] UpdateDepartmentRequestDto UpdateDto)
@@ -63,11 +72,21 @@ namespace FourierIT_API.Controllers
             {
                 return NotFound();
             }
+            if (string.IsNullOrWhiteSpace(UpdateDto.DepartmentName))
+                return BadRequest(new { error = "Department name is required." });
+            if (!await _context.Branches.AnyAsync(b => b.BranchId == UpdateDto.BranchId))
+                return BadRequest(new { error = "Invalid branch." });
+
+            departmentModel.DepartmentName = UpdateDto.DepartmentName.Trim();
+            departmentModel.BranchId = UpdateDto.BranchId;
+
+            await _context.SaveChangesAsync();
           
             return Ok(departmentModel.ToDepartmentDto());
 
         }
 
+        [Authorize(Roles = "Department Admin")]
         [HttpDelete]
         [Route("{DepartmentId}")]
         public async Task<IActionResult> Delete([FromRoute] int DepartmentId)

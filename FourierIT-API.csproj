@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="FluentAssertions" Version="8.9.0" />
     <PackageReference Include="Microsoft.AspNet.Identity.EntityFramework" Version="2.2.4" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="8.0.0" />
@@ -23,6 +24,13 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="FourierIT.API.Tests/**/*.cs" />
+    <Content Remove="FourierIT.API.Tests/**/*" />
+    <EmbeddedResource Remove="FourierIT.API.Tests/**/*.resx" />
+    <None Remove="FourierIT.API.Tests/**/*" />
   </ItemGroup>
 
 </Project>

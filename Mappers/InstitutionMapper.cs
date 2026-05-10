@@ -1,5 +1,4 @@
-﻿using FourierIT_API.DTOs.Department;
-using FourierIT_API.DTOs.Institution;
+﻿using FourierIT_API.DTOs.Institution;
 using FourierIT_API.Models;
 
 namespace FourierIT_API.Mappers
@@ -8,35 +7,26 @@ namespace FourierIT_API.Mappers
     {
         public static InstitutionDto ToInstitutionDto(this Institution institutionModel)
         {
+            return new InstitutionDto
             {
-                return new InstitutionDto
-                {
-                    InstitutionId = institutionModel.InstitutionId,
-                    InstitutionName = institutionModel.InstitutionName,
-                    VerifiedDomain = institutionModel.VerifiedDomain,
-                    RegNumber = institutionModel.RegNumber,
-                    TypeId = institutionModel.TypeId,
-                    InstitutionType= institutionModel.InstitutionType,
-
-                };
-
-            }
+                InstitutionId = institutionModel.InstitutionId,
+                InstitutionName = institutionModel.InstitutionName,
+                VerifiedDomain = institutionModel.VerifiedDomain,
+                RegNumber = institutionModel.RegNumber,
+                TypeId = institutionModel.TypeId,
+                InstitutionTypeName = institutionModel.InstitutionType?.InstitutionTypeName ?? string.Empty,
+            };
         }
 
-        public static Institution ToInstitutionFromCreatDTO(this CreateInstitutionRequestDto InstitutionDto)
+        public static Institution ToInstitutionFromCreatDTO(this CreateInstitutionRequestDto dto)
         {
             return new Institution
             {
-                InstitutionName = InstitutionDto.InstitutionName,
-                VerifiedDomain= InstitutionDto.VerifiedDomain,
-                 RegNumber=InstitutionDto.RegNumber,
-                 TypeId= InstitutionDto.TypeId,
-                 InstitutionType=InstitutionDto.InstitutionType,
-                
-
-
+                InstitutionName = dto.InstitutionName.Trim(),
+                VerifiedDomain = dto.VerifiedDomain.Trim(),
+                RegNumber = dto.RegNumber,
+                TypeId = dto.TypeId,
             };
         }
     }
 }
-
