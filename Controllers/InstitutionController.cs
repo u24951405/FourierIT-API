@@ -1,6 +1,5 @@
 ﻿using FourierIT_API.Data;
 using FourierIT_API.DTOs.Institution;
-using FourierIT_API.Interfaces;
 using FourierIT_API.Mappers;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -17,12 +16,6 @@ namespace FourierIT_API.Controllers
         public InstitutionController(AppDbContext context)
         {
             _context = context;
-        private readonly IInstitutionRepository _institutionRepo;
-        public InstitutionController(AppDbContext context,IInstitutionRepository institutionRepo)
-        {
-            _institutionRepo= institutionRepo;
-            _context =context;
-
         }
 
         [Authorize]
@@ -52,7 +45,6 @@ namespace FourierIT_API.Controllers
                     InstitutionTypeName = t.InstitutionTypeName
                 })
                 .ToListAsync();
-            var instituions =await _institutionRepo.GetAllAsync();
 
             return Ok(types);
         }
@@ -68,15 +60,6 @@ namespace FourierIT_API.Controllers
 
             if (institution == null)
                 return NotFound();
-            var institution =await _institutionRepo.GetByIdAsync(InstitutionId);
-            if (institution == null)
-            { 
-                return NotFound();
-            }
-            return Ok(institution);
-        
-        
-        }
 
             return Ok(institution.ToInstitutionDto());
         }
@@ -98,9 +81,6 @@ namespace FourierIT_API.Controllers
             await _context.Entry(entity).Reference(i => i.InstitutionType).LoadAsync();
 
             return CreatedAtAction(nameof(GetById), new { institutionId = entity.InstitutionId }, entity.ToInstitutionDto());
-            var institutionModel = InstitutionDto.ToInstitutionFromCreatDTO();
-            await _institutionRepo.CreateAsync(institutionModel);
-            return CreatedAtAction(nameof(GetById), new { id = institutionModel.InstitutionId }, institutionModel.ToInstitutionDto());
         }
 
         [Authorize(Roles = "Department Admin")]
@@ -127,13 +107,6 @@ namespace FourierIT_API.Controllers
             await _context.Entry(institution).Reference(i => i.InstitutionType).LoadAsync();
 
             return Ok(institution.ToInstitutionDto());
-            var institutionModel = await _institutionRepo.UpdateAsync(InstitutionId, UpdateDto);
-            if (institutionModel == null)
-            {
-                return NotFound();
-            }
-            
-            return Ok(institutionModel.ToInstitutionDto());
         }
 
         [Authorize(Roles = "Department Admin")]
@@ -147,12 +120,6 @@ namespace FourierIT_API.Controllers
             _context.Institutions.Remove(institution);
             await _context.SaveChangesAsync();
 
-            var institutionModel =await _institutionRepo.DeleteAsync(InstitutionId);
-            if (institutionModel == null)
-            {
-                return NotFound();
-            }
-            
             return NoContent();
         }
     }
