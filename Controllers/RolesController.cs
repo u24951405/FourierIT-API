@@ -12,8 +12,6 @@ namespace FourierIT_API.Controllers
 {
     [Route("api/roles")]
     [ApiController]
-    //Protect this controller with an admin role as appropriate
-    [Authorize(Roles = "Department Admin")]
     public class RolesController : ControllerBase
     {
         private readonly RoleManager<Role> _roleManager;
@@ -28,6 +26,7 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpGet]
+        [AllowAnonymous]
         public async Task<IActionResult> GetAllRoles()
         {
             var roles = await _roleManager.Roles.Select(r => new RoleDto { RoleId = r.Id, RoleName = r.Name ?? string.Empty })
@@ -36,6 +35,7 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpGet("{RoleId}")]
+        [AllowAnonymous]
         public async Task<IActionResult> GetByRoleId([FromRoute] string RoleId)
         {
             var role = await _roleManager.FindByIdAsync(RoleId);
@@ -45,6 +45,7 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpPost]
+        [Authorize(Roles = "Department Admin")]
         public async Task<IActionResult> CreateRole([FromBody] CreateRoleRequestDto model)
         {
             if (model == null || string.IsNullOrWhiteSpace(model.RoleName))
@@ -99,6 +100,7 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpPut("{RoleId}")]
+        [Authorize(Roles = "Department Admin")]
         public async Task<IActionResult> UpdateRole([FromRoute] string RoleId, [FromBody] UpdateRoleRequestDto  model)
         {
             if (model == null || string.IsNullOrWhiteSpace(model.RoleName)) return BadRequest(new { error = "Role name is required." });
@@ -198,6 +200,7 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpDelete("{RoleId}")]
+        [Authorize(Roles = "Department Admin")]
         public async Task<IActionResult> DeleteRole([FromRoute] string RoleId)
         {
             var role = await _roleManager.FindByIdAsync(RoleId);

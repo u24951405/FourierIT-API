@@ -13,6 +13,8 @@ namespace FourierIT_API.Data
         //and it is going to going to create your database
         public DbSet<Profile> Profiles { get; set; }
         public DbSet<Department> Departments { get; set; } = null!; // tells us that we have a table called Departments in our database and it is represented by the Department model and we grabbing and entering data to and from the database 
+        public DbSet<Branch> Branches { get; set; } = null!;
+        public DbSet<InstitutionType> InstitutionTypes { get; set; } = null!;
         public DbSet<Institution> Institutions { get; set; }
         public DbSet<RolePermission> RolePermissions { get; set; }
 
@@ -189,6 +191,7 @@ namespace FourierIT_API.Data
 
             // Configure InstitutionType one-to-many with Institution
             modelBuilder.Entity<InstitutionType>()
+                .ToTable("InstitutionType")
                 .HasMany(it => it.Institutions)
                 .WithOne(i => i.InstitutionType)
                 .HasForeignKey(i => i.TypeId);
@@ -209,12 +212,14 @@ namespace FourierIT_API.Data
 
             // Configure Institution One-to-many relationship with Branch
             modelBuilder.Entity<Institution>()
+                .ToTable("Institutions")
                 .HasMany(i => i.Branches)
                 .WithOne(b => b.Institution)
                 .HasForeignKey(b => b.InstitutionId);
 
             // Configure Branch one-to-many relationship with Department
             modelBuilder.Entity<Branch>()
+                .ToTable("Branch")
                 .HasMany(b => b.Departments)
                 .WithOne(d => d.Branch)
                 .HasForeignKey(d => d.BranchId);

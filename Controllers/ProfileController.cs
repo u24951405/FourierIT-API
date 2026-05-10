@@ -16,7 +16,6 @@ namespace FourierIT_API.Controllers
 {
     [Route("api/Profile")]
     [ApiController]
-    [Authorize(Roles = "Department Admin")]
     public class ProfileController : ControllerBase 
     {
         private readonly AppDbContext _context; 
@@ -29,6 +28,7 @@ namespace FourierIT_API.Controllers
             _userManager = userManager;
         }
 
+        [Authorize]
         [HttpGet] 
         public async Task<IActionResult> GetAllProfiles()
         {
@@ -53,6 +53,7 @@ namespace FourierIT_API.Controllers
             return Ok(profileDtos);
         }
 
+        [Authorize]
         [HttpGet("{profileId}")]
         public async Task<IActionResult> GetByProfileId([FromRoute] int profileId)
         {
@@ -77,6 +78,7 @@ namespace FourierIT_API.Controllers
             return Ok(dto);
         }
         
+        [Authorize(Roles = "Department Admin")]
         [HttpPut]
         [Route("{profileId}")]
         public async Task<IActionResult> UpdateProfile([FromRoute] int profileId, [FromBody] UpdateProfileRequestDto updateDto)
@@ -91,6 +93,7 @@ namespace FourierIT_API.Controllers
             return Ok(profileModel.ToProfileDto());           
         }
 
+        [Authorize(Roles = "Department Admin")]
         [HttpDelete]
         [Route("{profileId}")]
         public async Task<IActionResult> DeleteProfile([FromRoute] int profileId)

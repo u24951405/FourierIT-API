@@ -1,6 +1,7 @@
 ﻿using FourierIT_API.Data;
 using FourierIT_API.DTOs.User;
 using FourierIT_API.Models;
+using FourierIT_API.Security;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -51,6 +52,11 @@ namespace FourierIT_API.Controllers
                 return BadRequest(new { error = "Role does not exist.", allowedRoles });
             }
 
+            var currentRoles = await _userManager.GetRolesAsync(user);
+            var addError = StakeholderRolePolicy.ValidateAddRole(currentRoles, roleName);
+            if (addError != null)
+                return BadRequest(new { error = addError });
+
             var result = await _userManager.AddToRoleAsync(user, roleName);
             if (!result.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, result.Errors);
 
@@ -74,6 +80,11 @@ namespace FourierIT_API.Controllers
             if (!await _roleManager.RoleExistsAsync(newRole)) return BadRequest(new { error = "New role does not exist", role = newRole });
 
             if (!await _userManager.IsInRoleAsync(user, oldRole)) return BadRequest(new { error = "User is not in the old role", role = oldRole });
+
+            var rolesBeforeReplace = await _userManager.GetRolesAsync(user);
+            var replaceError = StakeholderRolePolicy.ValidateReplaceRole(rolesBeforeReplace, oldRole, newRole);
+            if (replaceError != null)
+                return BadRequest(new { error = replaceError });
 
             // Attempt replace, with rollback if add fails
             var removedResult = await _userManager.RemoveFromRoleAsync(user, oldRole);

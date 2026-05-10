@@ -22,16 +22,13 @@ namespace FourierIT_API.Mappers
             };
         }
 
-        public static  Department ToDepartmentFromCreatDTO( this CreateDepartmentRequestDto DepartmentDto)
+        public static Department ToDepartmentFromCreatDTO(this CreateDepartmentRequestDto DepartmentDto)
         {
             return new Department
             {
-                DepartmentName=DepartmentDto.DepartmentName,
-                BranchId=DepartmentDto.BranchId,
-                Branch=DepartmentDto.Branch,
-                CreatedAt=DepartmentDto.CreatedAt,
-
-
+                DepartmentName = DepartmentDto.DepartmentName.Trim(),
+                BranchId = DepartmentDto.BranchId,
+                CreatedAt = DateTimeOffset.UtcNow
             };
         }
     }

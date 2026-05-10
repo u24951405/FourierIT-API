@@ -1,33 +1,31 @@
-﻿using FourierIT_API.Models;
 using System.ComponentModel.DataAnnotations;
-using System.ComponentModel.DataAnnotations.Schema;
-using System.Globalization;
-using System.Collections.Generic;
 
-namespace FourierIT_API.DTOs.User  
+namespace FourierIT_API.DTOs.User
 {
-    public class UserDto
+    public class UpdateUserManagementRequestDto
     {
         [Required]
         public string FirstName { get; set; } = string.Empty;
+
         [Required]
         public string LastName { get; set; } = string.Empty;
+
         [Required]
         public DateOnly DateOfBirth { get; set; } = new DateOnly();
+
+        [Required]
         public string PhoneNumber { get; set; } = string.Empty;
+
         [Required]
         public string JobTitle { get; set; } = string.Empty;
-        [Required] 
-        public string Username { get; set; } = string.Empty;
+
         [Required]
         [EmailAddress]
         public string EmailAddress { get; set; } = string.Empty;
-        [Required]
-        public string? Password { get; set; } = null;
 
-        // Up to two roles can be selected during registration.
-        // Role is kept for backward compatibility with older clients.
+        [Required]
         public string Role { get; set; } = string.Empty;
-        public List<string> Roles { get; set; } = new List<string>();
+
+        public string AccountStatus { get; set; } = "Active";
     }
 }

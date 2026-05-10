@@ -1,95 +1,125 @@
 ﻿using FourierIT_API.Data;
-using FourierIT_API.DTOs.Department;
 using FourierIT_API.DTOs.Institution;
 using FourierIT_API.Mappers;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace FourierIT_API.Controllers
 {
-    [Route("api/Institution")]
+    [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "Department Admin")]
     public class InstitutionController : ControllerBase
     {
         private readonly AppDbContext _context;
+
         public InstitutionController(AppDbContext context)
         {
-            _context=context;
-
+            _context = context;
         }
 
+        [Authorize]
         [HttpGet]
+        public async Task<IActionResult> GetAll()
+        {
+            var institutions = await _context.Institutions
+                .AsNoTracking()
+                .Include(i => i.InstitutionType)
+                .OrderBy(i => i.InstitutionName)
+                .ToListAsync();
 
-        public async Task<IActionResult> GetAll() 
-        { 
-
-            var instituions =await _context.Institutions.ToListAsync();
-
-            var institutionDto= instituions.Select(i => i.ToInstitutionDto());
-            return Ok(instituions);
-        
-        
-        
+            return Ok(institutions.Select(i => i.ToInstitutionDto()));
         }
 
-        [HttpGet("{InstitutionId}")]
-
-        public async Task<IActionResult> GetById(int InstitutionId) 
+        /// <summary>Lookup rows for institution type dropdowns.</summary>
+        [Authorize]
+        [HttpGet("types")]
+        public async Task<IActionResult> GetInstitutionTypes()
         {
-            var institution =await _context.Institutions.FindAsync(InstitutionId);
+            var types = await _context.InstitutionTypes
+                .AsNoTracking()
+                .OrderBy(t => t.InstitutionTypeName)
+                .Select(t => new InstitutionTypeOptionDto
+                {
+                    InstitutionTypeId = t.InstitutionTypeId,
+                    InstitutionTypeName = t.InstitutionTypeName
+                })
+                .ToListAsync();
+
+            return Ok(types);
+        }
+
+        [Authorize]
+        [HttpGet("{institutionId:int}")]
+        public async Task<IActionResult> GetById([FromRoute] int institutionId)
+        {
+            var institution = await _context.Institutions
+                .AsNoTracking()
+                .Include(i => i.InstitutionType)
+                .FirstOrDefaultAsync(i => i.InstitutionId == institutionId);
+
             if (institution == null)
-            { 
-            
-              return NotFound();
-            
-            }
-            return Ok(institution);
-        
-        
+                return NotFound();
+
+            return Ok(institution.ToInstitutionDto());
         }
 
-
+        [Authorize(Roles = "Department Admin")]
         [HttpPost]
-        public async Task<IActionResult> create([FromBody] CreateInstitutionRequestDto InstitutionDto)
+        public async Task<IActionResult> Create([FromBody] CreateInstitutionRequestDto dto)
         {
-            var InstitutionModel = InstitutionDto.ToInstitutionFromCreatDTO();
-            await _context.Institutions.AddAsync(InstitutionModel);
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            if (!await _context.InstitutionTypes.AnyAsync(t => t.InstitutionTypeId == dto.TypeId))
+                return BadRequest(new { error = "Invalid institution type." });
+
+            var entity = dto.ToInstitutionFromCreatDTO();
+            _context.Institutions.Add(entity);
             await _context.SaveChangesAsync();
-            return CreatedAtAction(nameof(GetById), new { id = InstitutionModel.InstitutionId }, InstitutionModel.ToInstitutionDto());
+
+            await _context.Entry(entity).Reference(i => i.InstitutionType).LoadAsync();
+
+            return CreatedAtAction(nameof(GetById), new { institutionId = entity.InstitutionId }, entity.ToInstitutionDto());
         }
 
-        [HttpPut]
-        [Route("{InstitutionId}")]
-        public async Task<IActionResult> Update([FromRoute] int InstitutionId, [FromBody] UpdateInstitutionRequestDto UpdateDto)
+        [Authorize(Roles = "Department Admin")]
+        [HttpPut("{institutionId:int}")]
+        public async Task<IActionResult> Update([FromRoute] int institutionId, [FromBody] UpdateInstitutionRequestDto dto)
         {
-            var InstitutionModel = await _context.Institutions.FirstOrDefaultAsync(x => x.InstitutionId == InstitutionId);
-            if (InstitutionModel == null)
-            {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var institution = await _context.Institutions.FirstOrDefaultAsync(i => i.InstitutionId == institutionId);
+            if (institution == null)
                 return NotFound();
-            }
-            InstitutionModel.InstitutionName = UpdateDto.InstitutionName;
-            InstitutionModel.VerifiedDomain = UpdateDto.VerifiedDomain;
-            InstitutionModel.RegNumber = UpdateDto.RegNumber;
-            InstitutionModel.TypeId = UpdateDto.TypeId;
-            InstitutionModel.InstitutionType = UpdateDto.InstitutionType;
+
+            if (!await _context.InstitutionTypes.AnyAsync(t => t.InstitutionTypeId == dto.TypeId))
+                return BadRequest(new { error = "Invalid institution type." });
+
+            institution.InstitutionName = dto.InstitutionName.Trim();
+            institution.VerifiedDomain = dto.VerifiedDomain.Trim();
+            institution.RegNumber = dto.RegNumber;
+            institution.TypeId = dto.TypeId;
+
             await _context.SaveChangesAsync();
-            return Ok(InstitutionModel.ToInstitutionDto());
+
+            await _context.Entry(institution).Reference(i => i.InstitutionType).LoadAsync();
+
+            return Ok(institution.ToInstitutionDto());
         }
 
-        [HttpDelete]
-        [Route("{InstitutionId}")]
-        public async Task<IActionResult> Delete([FromRoute] int InstitutionId)
+        [Authorize(Roles = "Department Admin")]
+        [HttpDelete("{institutionId:int}")]
+        public async Task<IActionResult> Delete([FromRoute] int institutionId)
         {
-            var InstitutionModel =await _context.Institutions.FirstOrDefaultAsync(x => x.InstitutionId == InstitutionId);
-            if (InstitutionModel == null)
-            {
+            var institution = await _context.Institutions.FirstOrDefaultAsync(i => i.InstitutionId == institutionId);
+            if (institution == null)
                 return NotFound();
-            }
-            _context.Institutions.Remove(InstitutionModel);
+
+            _context.Institutions.Remove(institution);
             await _context.SaveChangesAsync();
+
             return NoContent();
         }
     }

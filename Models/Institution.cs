@@ -1,5 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc.ModelBinding;
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace FourierIT_API.Models
@@ -18,7 +17,6 @@ namespace FourierIT_API.Models
         public string VerifiedDomain { get; set; } = string.Empty;
 
         [Required]
-        [StringLength(50)]
         public int RegNumber { get; set; }
 
         [ForeignKey("InstitutionType")]
