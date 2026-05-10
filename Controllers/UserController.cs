@@ -35,7 +35,7 @@ namespace FourierIT_API.Controllers
 
         [AllowAnonymous]
         [HttpPost("login")]
-        public async Task<IActionResult> Login(LoginDto loginDto)
+        public async Task<IActionResult> Login(LoginDto loginDto)//This login method first checks if the user’s input is valid, then looks for the user in the database, verifies that the password is correct, creates a login token if everything matches, and finally returns the user’s details and token so they can access the system
         {
             if (!ModelState.IsValid) return BadRequest(ModelState);
 
