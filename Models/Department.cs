@@ -11,7 +11,7 @@ namespace FourierIT_API.Models
         [ForeignKey("Branch")]
         public int BranchId { get; set; }
         public Branch Branch { get; set; } = null!;
-
+        //this is the date of creation of the department 
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
         [Required]
