@@ -19,6 +19,7 @@ namespace FourierIT_API.Controllers
         private readonly RoleManager<Role> _roleManager;
         public AssignRoleController(AppDbContext context, UserManager<User> userManager, RoleManager<Role> roleManager)
         {
+            //this is assigning the variables 
             _context = context;
             _userManager = userManager;
             _roleManager = roleManager;

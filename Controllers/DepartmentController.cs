@@ -85,11 +85,14 @@ namespace FourierIT_API.Controllers
         [Route("{DepartmentId}")]
         public async Task<IActionResult> Delete([FromRoute] int DepartmentId)
         {
+            
             var departmentModel =await _context.Departments.FirstOrDefaultAsync(x => x.DepartmentId == DepartmentId);
             if (departmentModel == null)
             {
                 return NotFound();
             }
+
+            //this removes the department which was deleted
             _context.Departments.Remove(departmentModel);
             await _context.SaveChangesAsync();
             return NoContent();
