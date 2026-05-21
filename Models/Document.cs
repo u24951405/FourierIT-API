@@ -23,6 +23,26 @@ namespace FourierIT_API.Models
         [Required]
         public bool IsCertified { get; set; } = false;
 
+        [Required]
+        public byte[] EncryptedFileData { get; set; } = null;
+
+        [Required]
+        public long FileSizeBytes { get; set; }
+
+        [Required]
+        [StringLength(50)]
+        public string EncryptionAlgorithm { get; set; } = "AES-256";
+
+        [Required]
+        public bool IsEncrypted { get; set; } = true;
+
+        [Required]
+        public DateTime UploadedDate { get; set; } = DateTime.UtcNow;
+
+        public DateTime? LastModified { get; set; }
+
+        public DateTime? LastAccessedDate { get; set; }
+
         [ForeignKey("User")]
         public string UserId { get; set; } = string.Empty;
         public User User { get; set; } = null!;
@@ -38,5 +58,9 @@ namespace FourierIT_API.Models
         public ICollection<DocumentStatusHistory> DocumentStatusHistories { get; set; } = new List<DocumentStatusHistory>();
 
         public ICollection<AccessList> AccessLists { get; set; } = new List<AccessList>();
+
+        public ICollection<DocumentAccess> SharedWith { get; set; } = new List<DocumentAcess>();
+
+        public ICollection<DocumentAccessLog> AccessLogs { get; set; } = new List<DocumentAcessLog>();
     }
 }
