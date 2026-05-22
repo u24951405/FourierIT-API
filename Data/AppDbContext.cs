@@ -1,4 +1,4 @@
-﻿using FourierIT_API.Models;
+using FourierIT_API.Models;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
@@ -12,11 +12,13 @@ namespace FourierIT_API.Data
         //dbSet<> returns data from tables/models, returns data in the form that you want. Your basically manipulating the whole table,
         //and it is going to going to create your database
         public DbSet<Profile> Profiles { get; set; }
-        public DbSet<Department> Departments { get; set; } = null!; // tells us that we have a table called Departments in our database and it is represented by the Department model and we grabbing and entering data to and from the database 
+        public DbSet<Department> Departments { get; set; } = null!; // tells us that we have a table called Departments in our database and it is represented by the Department model and we grabbin[...]
         public DbSet<Branch> Branches { get; set; } = null!;
         public DbSet<InstitutionType> InstitutionTypes { get; set; } = null!;
         public DbSet<Institution> Institutions { get; set; }
         public DbSet<RolePermission> RolePermissions { get; set; }
+        
+        // Secure vault DbSets
         public DbSet<DocumentAccess> DocumentAccesses { get; set; }
         public DbSet<DocumentAccessLog> DocumentAccessLogs { get; set; }
 
@@ -327,6 +329,32 @@ namespace FourierIT_API.Data
                 .HasMany(n => n.NotificationHistories)
                 .WithOne(nh => nh.Notification)
                 .HasForeignKey(nh => nh.NotificationId);
+
+            // Configure DocumentAccess relationships (Secure Vault)
+            modelBuilder.Entity<DocumentAccess>()
+                .HasOne(da => da.Document)
+                .WithMany(d => d.SharedWith)
+                .HasForeignKey(da => da.DocumentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<DocumentAccess>()
+                .HasOne(da => da.GrantedToUser)
+                .WithMany()
+                .HasForeignKey(da => da.GrantedToUserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Configure DocumentAccessLog relationships (Audit Trail)
+            modelBuilder.Entity<DocumentAccessLog>()
+                .HasOne(dal => dal.Document)
+                .WithMany(d => d.AccessLogs)
+                .HasForeignKey(dal => dal.DocumentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<DocumentAccessLog>()
+                .HasOne(dal => dal.AccessedByUser)
+                .WithMany()
+                .HasForeignKey(dal => dal.AccessedByUserId)
+                .OnDelete(DeleteBehavior.SetNull);
         }
     }
 }
