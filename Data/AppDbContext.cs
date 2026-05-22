@@ -17,6 +17,9 @@ namespace FourierIT_API.Data
         public DbSet<InstitutionType> InstitutionTypes { get; set; } = null!;
         public DbSet<Institution> Institutions { get; set; }
         public DbSet<RolePermission> RolePermissions { get; set; }
+        public DbSet<DocumentAccess> DocumentAccesses { get; set; }
+        public DbSet<DocumentAccessLog> DocumentAccessLogs { get; set; }
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
