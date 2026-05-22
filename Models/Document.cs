@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Globalization;
 
@@ -24,7 +24,7 @@ namespace FourierIT_API.Models
         public bool IsCertified { get; set; } = false;
 
         [Required]
-        public byte[] EncryptedFileData { get; set; } = null;
+        public byte[] EncryptedFileData { get; set; } = null!;
 
         [Required]
         public long FileSizeBytes { get; set; }
@@ -59,8 +59,9 @@ namespace FourierIT_API.Models
 
         public ICollection<AccessList> AccessLists { get; set; } = new List<AccessList>();
 
-        public ICollection<DocumentAccess> SharedWith { get; set; } = new List<DocumentAcess>();
+        // Secure vault relationships
+        public ICollection<DocumentAccess> SharedWith { get; set; } = new List<DocumentAccess>();
 
-        public ICollection<DocumentAccessLog> AccessLogs { get; set; } = new List<DocumentAcessLog>();
+        public ICollection<DocumentAccessLog> AccessLogs { get; set; } = new List<DocumentAccessLog>();
     }
 }
