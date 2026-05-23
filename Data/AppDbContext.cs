@@ -330,30 +330,25 @@ namespace FourierIT_API.Data
                 .WithOne(nh => nh.Notification)
                 .HasForeignKey(nh => nh.NotificationId);
 
-            // Configure DocumentAccess relationships (Secure Vault)
+            //Configure DocumentAccess relationships 
             modelBuilder.Entity<DocumentAccess>()
                 .HasOne(da => da.Document)
                 .WithMany(d => d.SharedWith)
-                .HasForeignKey(da => da.DocumentId)
-                .OnDelete(DeleteBehavior.Cascade);
-
-            modelBuilder.Entity<DocumentAccess>()
-                .HasOne(da => da.GrantedToUser)
-                .WithMany()
-                .HasForeignKey(da => da.GrantedToUserId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .HasForeignKey(da => da.DocumentId);
 
             // Configure DocumentAccessLog relationships (Audit Trail)
             modelBuilder.Entity<DocumentAccessLog>()
                 .HasOne(dal => dal.Document)
                 .WithMany(d => d.AccessLogs)
                 .HasForeignKey(dal => dal.DocumentId)
+                .OnDelete(DeleteBehavior.NoAction);
                 .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<DocumentAccessLog>()
                 .HasOne(dal => dal.AccessedByUser)
                 .WithMany()
                 .HasForeignKey(dal => dal.AccessedByUserId)
+                .OnDelete(DeleteBehavior.NoAction);
                 .OnDelete(DeleteBehavior.SetNull);
         }
     }
