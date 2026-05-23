@@ -22,7 +22,6 @@ namespace FourierIT_API.Data
         public DbSet<DocumentAccess> DocumentAccesses { get; set; }
         public DbSet<DocumentAccessLog> DocumentAccessLogs { get; set; }
 
-
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -330,13 +329,22 @@ namespace FourierIT_API.Data
                 .WithOne(nh => nh.Notification)
                 .HasForeignKey(nh => nh.NotificationId);
 
-            //Configure DocumentAccess relationships 
+            // Configure DocumentAccess relationships (Secure Vault)
+            // Use NO_ACTION to avoid multiple cascade paths
             modelBuilder.Entity<DocumentAccess>()
                 .HasOne(da => da.Document)
                 .WithMany(d => d.SharedWith)
-                .HasForeignKey(da => da.DocumentId);
+                .HasForeignKey(da => da.DocumentId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            modelBuilder.Entity<DocumentAccess>()
+                .HasOne(da => da.GrantedToUser)
+                .WithMany()
+                .HasForeignKey(da => da.GrantedToUserId)
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure DocumentAccessLog relationships (Audit Trail)
+            // Use NO_ACTION to avoid multiple cascade paths
             modelBuilder.Entity<DocumentAccessLog>()
                 .HasOne(dal => dal.Document)
                 .WithMany(d => d.AccessLogs)
