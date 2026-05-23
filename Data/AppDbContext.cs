@@ -342,14 +342,12 @@ namespace FourierIT_API.Data
                 .WithMany(d => d.AccessLogs)
                 .HasForeignKey(dal => dal.DocumentId)
                 .OnDelete(DeleteBehavior.NoAction);
-                .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<DocumentAccessLog>()
                 .HasOne(dal => dal.AccessedByUser)
                 .WithMany()
                 .HasForeignKey(dal => dal.AccessedByUserId)
                 .OnDelete(DeleteBehavior.NoAction);
-                .OnDelete(DeleteBehavior.SetNull);
         }
     }
 }
