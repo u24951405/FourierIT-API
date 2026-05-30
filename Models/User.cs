@@ -45,5 +45,8 @@ namespace FourierIT_API.Models
         public AccessToken AccessToken { get; set; } = null!;
 
         public EnquiryComment EnquiryComment { get; set; } = null!;
+
+        public int? EntityTypeId { get; set; }
+        public EntityType? EntityType { get; set; }
     }
 }

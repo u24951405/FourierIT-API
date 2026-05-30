@@ -19,8 +19,27 @@ namespace FourierIT_API.Data
         public DbSet<RolePermission> RolePermissions { get; set; }
         
         // Secure vault DbSets
+        public DbSet<Document> Documents { get; set; }
         public DbSet<DocumentAccess> DocumentAccesses { get; set; }
         public DbSet<DocumentAccessLog> DocumentAccessLogs { get; set; }
+
+        public DbSet<DocumentType> DocumentTypes { get; set; }
+        public DbSet<DocumentBlob> DocumentBlobs { get; set; }
+        public DbSet<BlobHistory> BlobHistories { get; set; }
+        public DbSet<FICARule> FICARules { get; set; }
+        public DbSet<DocumentFicaRule> DocumentFicaRules { get; set; }
+        public DbSet<CertificationDetails> CertificationDetails { get; set; }
+        public DbSet<DocumentStatusHistory> DocumentStatusHistories { get; set; }
+        public DbSet<AccessToken> AccessTokens { get; set; }
+        public DbSet<AccessList> AccessLists { get; set; }
+        public DbSet<InstitutionEnquiryRequest> InstitutionEnquiryRequests { get; set; }
+        public DbSet<InstitutionRequestedDocumentType> InstitutionRequestedDocumentTypes { get; set; }
+        public DbSet<DocumentAccessApproval> DocumentAccessApprovals { get; set; }
+        public DbSet<EnquirySession> EnquirySessions { get; set; }
+        public DbSet<EnquiryFlag> EnquiryFlags { get; set; }
+        public DbSet<EnquiryComment> EnquiryComments { get; set; }
+        public DbSet<EntityType> EntityTypes { get; set; }
+        public DbSet<RequiredDocument> RequiredDocuments { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -49,11 +68,96 @@ namespace FourierIT_API.Data
             };
             modelBuilder.Entity<Role>().HasData(Roles);
 
-            base.OnModelCreating(modelBuilder);
+            // Seed DocumentTypes - FICA Compliant South African Requirements
+            List<DocumentType> documentTypes = new List<DocumentType>
+            {
+                 // Individual - SA Citizen
+                 new DocumentType { DocumentTypeId = 1, TypeName = "South African ID Book", Description = "Green bar-coded identity document (certified copy)" },
+                 new DocumentType { DocumentTypeId = 2, TypeName = "Smart ID Card", Description = "South African Smart ID card (certified copy)" },
+                 new DocumentType { DocumentTypeId = 3, TypeName = "South African Passport", Description = "Valid South African passport (certified copy)" },
+    
+                 // Individual - Foreign National
+                 new DocumentType { DocumentTypeId = 4, TypeName = "Foreign Passport", Description = "Valid foreign passport (certified copy)" },
+                 new DocumentType { DocumentTypeId = 5, TypeName = "Work Permit", Description = "Valid South African work permit or visa" },
+                 new DocumentType { DocumentTypeId = 6, TypeName = "Asylum/Refugee Permit", Description = "Valid asylum seeker or refugee permit" },
+    
+                 // Proof of Address - All Individuals
+                 new DocumentType { DocumentTypeId = 7, TypeName = "Utility Bill", Description = "Water/electricity bill (not older than 3 months)" },
+                 new DocumentType { DocumentTypeId = 8, TypeName = "Telkom/Internet Account", Description = "Telecommunications or ISP account (not older than 3 months)" },
+                 new DocumentType { DocumentTypeId = 9, TypeName = "Lease Agreement", Description = "Current residential lease agreement" },
+                 new DocumentType { DocumentTypeId = 10, TypeName = "Bank Statement", Description = "Official bank statement showing address (not older than 3 months)" },
+    
+                 // Business/Corporate Documents
+                new DocumentType { DocumentTypeId = 11, TypeName = "Certificate of Incorporation", Description = "COR14.3 or company registration certificate" },
+                new DocumentType { DocumentTypeId = 12, TypeName = "Memorandum of Incorporation", Description = "MOI (Memorandum of Incorporation)" },
+                new DocumentType { DocumentTypeId = 13, TypeName = "Company Resolution", Description = "Board resolution authorizing account/instruction" },
+                new DocumentType { DocumentTypeId = 14, TypeName = "Shareholder Register", Description = "Current register of shareholders/members" },
+    
+                // Trust Documents
+                new DocumentType { DocumentTypeId = 15, TypeName = "Trust Deed", Description = "Registered trust deed and letters of authority" },
+                new DocumentType { DocumentTypeId = 16, TypeName = "Trust Resolution", Description = "Resolution from trustees authorizing the transaction" },
+    
+                // Partnership
+                new DocumentType { DocumentTypeId = 17, TypeName = "Partnership Agreement", Description = "Registered partnership agreement" },
+    
+                // Authorized Person Documents (for entities)
+                new DocumentType { DocumentTypeId = 18, TypeName = "Director/Trustee ID", Description = "ID of authorized representative (certified copy)" },
+                new DocumentType { DocumentTypeId = 19, TypeName = "Proof of Address - Representative", Description = "Proof of residential address for authorized person" }
+            };
+            modelBuilder.Entity<DocumentType>().HasData(documentTypes);
+
+            // Seed EntityTypes
+            List<EntityType> entityTypes = new List<EntityType>
+            {
+                new EntityType { EntityTypeId = 1, Name = "South African Individual" },
+                new EntityType { EntityTypeId = 2, Name = "Foreign National Individual" },
+                new EntityType { EntityTypeId = 3, Name = "Company (Pty) Ltd" },
+                new EntityType { EntityTypeId = 4, Name = "Trust" },
+                new EntityType { EntityTypeId = 5, Name = "Partnership" },
+                new EntityType { EntityTypeId = 6, Name = "Legal Entity - Other" }
+            };
+            modelBuilder.Entity<EntityType>().HasData(entityTypes);
+
+            // Seed RequiredDocuments - FICA compliant requirements per entity type
+            List<RequiredDocument> requiredDocuments = new List<RequiredDocument>
+            {
+                // SA Individual - must have ID + Address proof
+                new RequiredDocument { RequiredDocumentId = 1, EntityTypeId = 1, DocumentTypeId = 1, IsMandatory = true, Description = "One form of SA ID required" },
+                new RequiredDocument { RequiredDocumentId = 2, EntityTypeId = 1, DocumentTypeId = 2, IsMandatory = false, Description = "Alternative to ID book" },
+                new RequiredDocument { RequiredDocumentId = 3, EntityTypeId = 1, DocumentTypeId = 3, IsMandatory = false, Description = "Alternative to ID book" },
+                new RequiredDocument { RequiredDocumentId = 4, EntityTypeId = 1, DocumentTypeId = 7, IsMandatory = true, Description = "One address proof required (not older than 3 months)" },
+                new RequiredDocument { RequiredDocumentId = 5, EntityTypeId = 1, DocumentTypeId = 8, IsMandatory = false, Description = "Alternative address proof" },
+                new RequiredDocument { RequiredDocumentId = 6, EntityTypeId = 1, DocumentTypeId = 9, IsMandatory = false, Description = "Alternative address proof" },
+    
+                // Foreign National - Passport + Permit + Address
+                new RequiredDocument { RequiredDocumentId = 7, EntityTypeId = 2, DocumentTypeId = 4, IsMandatory = true, Description = "Valid foreign passport required" },
+                new RequiredDocument { RequiredDocumentId = 8, EntityTypeId = 2, DocumentTypeId = 5, IsMandatory = true, Description = "Valid SA work permit/visa required" },
+                new RequiredDocument { RequiredDocumentId = 9, EntityTypeId = 2, DocumentTypeId = 6, IsMandatory = false, Description = "Alternative to work permit" },
+                new RequiredDocument { RequiredDocumentId = 10, EntityTypeId = 2, DocumentTypeId = 10, IsMandatory = true, Description = "Proof of address required" },
+    
+                // Company - Registration + MOI + Resolution + Representative
+                new RequiredDocument { RequiredDocumentId = 11, EntityTypeId = 3, DocumentTypeId = 11, IsMandatory = true, Description = "Certificate of incorporation required" },
+                new RequiredDocument { RequiredDocumentId = 12, EntityTypeId = 3, DocumentTypeId = 12, IsMandatory = true, Description = "MOI required" },
+                new RequiredDocument { RequiredDocumentId = 13, EntityTypeId = 3, DocumentTypeId = 13, IsMandatory = true, Description = "Board resolution authorizing required" },
+                new RequiredDocument { RequiredDocumentId = 14, EntityTypeId = 3, DocumentTypeId = 14, IsMandatory = true, Description = "Current shareholder register required" },
+                new RequiredDocument { RequiredDocumentId = 15, EntityTypeId = 3, DocumentTypeId = 18, IsMandatory = true, Description = "ID of authorized director required" },
+                new RequiredDocument { RequiredDocumentId = 16, EntityTypeId = 3, DocumentTypeId = 19, IsMandatory = true, Description = "Address proof for director required" },
+    
+                // Trust - Trust Deed + Resolution + Representative
+                new RequiredDocument { RequiredDocumentId = 17, EntityTypeId = 4, DocumentTypeId = 15, IsMandatory = true, Description = "Trust deed and letters of authority required" },
+                new RequiredDocument { RequiredDocumentId = 18, EntityTypeId = 4, DocumentTypeId = 16, IsMandatory = true, Description = "Trustee resolution required" },
+                new RequiredDocument { RequiredDocumentId = 19, EntityTypeId = 4, DocumentTypeId = 18, IsMandatory = true, Description = "ID of authorized trustee required" },
+                new RequiredDocument { RequiredDocumentId = 20, EntityTypeId = 4, DocumentTypeId = 19, IsMandatory = true, Description = "Address proof for trustee required" },
+    
+                // Partnership - Agreement + Resolution + Representative
+                new RequiredDocument { RequiredDocumentId = 21, EntityTypeId = 5, DocumentTypeId = 17, IsMandatory = true, Description = "Partnership agreement required" },
+                new RequiredDocument { RequiredDocumentId = 22, EntityTypeId = 5, DocumentTypeId = 13, IsMandatory = true, Description = "Partnership resolution required" },
+                new RequiredDocument { RequiredDocumentId = 23, EntityTypeId = 5, DocumentTypeId = 18, IsMandatory = true, Description = "ID of authorized partner required" },
+                new RequiredDocument { RequiredDocumentId = 24, EntityTypeId = 5, DocumentTypeId = 19, IsMandatory = true, Description = "Address proof for partner required" }
+            };
+            modelBuilder.Entity<RequiredDocument>().HasData(requiredDocuments);
 
             // Configure UserRole many-to-many relationship
-            modelBuilder.Entity<UserRole>()
-                .HasKey(ur => new { ur.UserId, ur.RoleId });
 
             modelBuilder.Entity<UserRole>()
                 .HasOne(ur => ur.User)
@@ -274,11 +378,59 @@ namespace FourierIT_API.Data
                 .WithOne(ier => ier.Institution)
                 .HasForeignKey(ier => ier.InstitutionId);
 
+            modelBuilder.Entity<InstitutionEnquiryRequest>()
+                .HasOne(ier => ier.TargetUser)
+                .WithMany()
+                .HasForeignKey(ier => ier.TargetUserId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            // Configure InstitutionRequestedDocumentType relationships
+            modelBuilder.Entity<InstitutionRequestedDocumentType>()
+                .HasKey(irdt => new { irdt.EnquiryRequestId, irdt.DocumentTypeId });
+
+            modelBuilder.Entity<InstitutionRequestedDocumentType>()
+                .HasOne(irdt => irdt.InstitutionEnquiryRequest)
+                .WithMany(ier => ier.RequestedDocumentTypes)
+                .HasForeignKey(ier => ier.EnquiryRequestId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<InstitutionRequestedDocumentType>()
+                .HasOne(irdt => irdt.DocumentType)
+                .WithMany()
+                .HasForeignKey(irdt => irdt.DocumentTypeId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            modelBuilder.Entity<InstitutionRequestedDocumentType>()
+                .HasOne(irdt => irdt.FICARule)
+                .WithMany()
+                .HasForeignKey(irdt => irdt.FICARuleId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            // Configure DocumentAccessApproval relationships
+            modelBuilder.Entity<DocumentAccessApproval>()
+                .HasOne(daa => daa.InstitutionEnquiryRequest)
+                .WithMany()
+                .HasForeignKey(daa => daa.EnquiryRequestId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<DocumentAccessApproval>()
+                .HasOne(daa => daa.Document)
+                .WithMany()
+                .HasForeignKey(daa => daa.DocumentId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            modelBuilder.Entity<DocumentAccessApproval>()
+                .HasOne(daa => daa.ApprovedByUser)
+                .WithMany()
+                .HasForeignKey(daa => daa.ApprovedByUserId)
+                .OnDelete(DeleteBehavior.NoAction);
+
             // Configure InstitutionEnquiryRequest one-to-one relationship with AccessToken
             modelBuilder.Entity<InstitutionEnquiryRequest>()
                 .HasOne(ier => ier.AccessToken)
                 .WithOne(at => at.institutionEnquiryRequest)
                 .HasForeignKey<AccessToken>(at => at.EnquiryRequestId);
+
 
             // Configure AccessToken one-to-one relationship with EnquirySession
             modelBuilder.Entity<AccessToken>()

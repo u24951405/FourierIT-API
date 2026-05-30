@@ -2,16 +2,22 @@ using FourierIT_API.Data;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
 using FourierIT_API.Repositories;
+using FourierIT_API.Security;
 using FourierIT_API.Service;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.EntityFrameworkCore.SqlServer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
-using Microsoft.EntityFrameworkCore.Design;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddHttpsRedirection(options =>
+{
+    options.HttpsPort = 5001;
+});
 
 // Add services to the container.
 
@@ -62,6 +68,9 @@ builder.Services.AddSwaggerGen(option =>
 });
 
 builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
+builder.Services.AddScoped<IEncryptionService, AesEncryptionService>();
+builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
+builder.Services.AddScoped<IDocumentService, DocumentService>();
 
 builder.Services.AddIdentity<User, Role>(options =>
 {

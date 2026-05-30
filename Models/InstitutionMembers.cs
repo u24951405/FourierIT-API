@@ -5,12 +5,10 @@ namespace FourierIT_API.Models
 {
     public class InstitutionMembers
     {
-        [Key]
         [ForeignKey("User")]
         public string UserId { get; set; } = string.Empty;
         public User User { get; set; } = null!;
 
-        [Key]
         [ForeignKey("Institution")]
         public int InstitutionId { get; set; }
         public Institution Institution { get; set; } = null!;
