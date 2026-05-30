@@ -23,8 +23,6 @@ namespace FourierIT_API.Models
         [Required]
         public bool IsCertified { get; set; } = false;
 
-        [Required]
-        public byte[] EncryptedFileData { get; set; } = null!;
 
         [Required]
         public long FileSizeBytes { get; set; }
@@ -39,7 +37,7 @@ namespace FourierIT_API.Models
         [Required]
         public DateTime UploadedDate { get; set; } = DateTime.UtcNow;
 
-        public DateTime? LastModified { get; set; }
+        public DateTime? LastModifiedDate { get; set; }
 
         public DateTime? LastAccessedDate { get; set; }
 

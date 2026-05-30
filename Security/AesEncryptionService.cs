@@ -2,7 +2,7 @@
 
 namespace FourierIT_API.Security
 {
-    public interface AesEncryptionService : IEncryptionService
+    public class AesEncryptionService : IEncryptionService
     {
         public byte[] EncryptData(byte[] data, string key)
         {
