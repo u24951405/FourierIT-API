@@ -36,17 +36,22 @@ namespace FourierIT_API.Security
 
                 using (var ms = new MemoryStream(encryptedData))
                 {
-                    byte[] iv = new byte[aes.IV.Length];
-                    ms.Read(iv, 0, iv.Length);
+                    byte[] iv = new byte[aes.BlockSize / 8];
+
+                    var read = ms.Read(iv, 0, iv.Length);
+                    if (read != iv.Length)
+                        throw new InvalidDataException("Encrypted data does not contain a full IV.");
+
                     aes.IV = iv;
 
-                    using (var decryptor =  aes.CreateDecryptor(aes.Key,aes.IV))
-                        using (var cs = new CryptoStream(ms, decryptor, CryptoStreamMode.Write))
-                        using (var resultMs = new MemoryStream())
-                    {
-                        cs.CopyTo(resultMs);
-                        return resultMs.ToArray();
-                    }
+                    // Read decrypted bytes from the crypto stream (use read mode)
+                    using (var decryptor = aes.CreateDecryptor(aes.Key, aes.IV))
+                        using (var cs = new CryptoStream(ms, decryptor, CryptoStreamMode.Read))
+                        using (var resultStream = new MemoryStream())
+                        {
+                            cs.CopyTo(resultStream);
+                            return resultStream.ToArray();
+                        }
                 }
             }
         }

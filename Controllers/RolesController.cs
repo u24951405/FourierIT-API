@@ -12,6 +12,7 @@ namespace FourierIT_API.Controllers
 {
     [Route("api/roles")]
     [ApiController]
+    [Authorize]
     public class RolesController : ControllerBase
     {
         private readonly RoleManager<Role> _roleManager;

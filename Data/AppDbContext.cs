@@ -40,6 +40,7 @@ namespace FourierIT_API.Data
         public DbSet<EnquiryComment> EnquiryComments { get; set; }
         public DbSet<EntityType> EntityTypes { get; set; }
         public DbSet<RequiredDocument> RequiredDocuments { get; set; }
+        public DbSet<ClientEnlistment> ClientEnlistments { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

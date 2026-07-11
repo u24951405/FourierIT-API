@@ -7,5 +7,8 @@
         public bool IsCertified { get; set; } = false;
         public string? CommissionerName { get; set; }
         public DateTime? CertificationDate { get; set; }
+
+        // required for users who registered with both roles
+        public int? EntityTypeId { get; set; }
     }
 }

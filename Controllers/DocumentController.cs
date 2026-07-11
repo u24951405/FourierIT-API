@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration.UserSecrets;
+using Microsoft.AspNetCore.Mvc.Filters;
 
 namespace FourierIT_API.Controllers
 {
@@ -37,31 +38,58 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpGet("api/users/me/documents/required")]
-        public async Task<IActionResult> GetRequiredDocumentsStatus()
+        public async Task<IActionResult> GetRequiredDocumentsStatus([FromQuery] int? entityTypeId) //? makes the parameter optional
         {
             var user = await _userManager.GetUserAsync(User);
             if (user == null) return Unauthorized();
 
-            //Get user's entity type
+            // 1. Get user's default entity type
             var userWithEntity = await _context.Users
                 .Include(u => u.EntityType)
-                .ThenInclude(et => et.RequiredDocuments)
-                .ThenInclude(rd => rd.DocumentType)
                 .FirstOrDefaultAsync(u => u.Id == user.Id);
 
-            if (userWithEntity?.EntityType == null)
-                return BadRequest(new { error = "User has not selected an entity type." });
+            // 2. Determine which EntityTypeId to use
+            int targetEntityTypeId;
 
-            var entityType = userWithEntity.EntityType;
+            if (entityTypeId.HasValue)
+            {
+                // The user explicitly provided an entity type (e.g., they have both roles)
+                targetEntityTypeId = entityTypeId.Value;
+            }
+            else if (userWithEntity?.EntityTypeId != null)
+            {
+                // Fallback to the one saved on their profile (single role registration)
+                targetEntityTypeId = userWithEntity.EntityTypeId.Value;
+            }
+            else
+            {
+                // They have no profile entity type and didn't pass one through the endpoint
+                return BadRequest(new { error = "User has not selected an entity type. Please specify an entity type" });
+            }
+
+            // 3. Get required documents for the determined entity type
+            var entityType = await _context.EntityTypes
+                .Include(et => et.RequiredDocuments)
+                .ThenInclude(rd => rd.DocumentType)
+                .FirstOrDefaultAsync(et => et.EntityTypeId == targetEntityTypeId);
+
+            if (entityType == null)
+                return NotFound(new { error = "Invalid entity type. " });
+
             var requiredDocs = entityType.RequiredDocuments;
 
-            //Get user's uploaded documents grouped by type
+            // 4. Get user's uploaded documents grouped by type
             var userDocs = await _context.Documents
                 .Where(d => d.UserId == user.Id && d.CurrentStatus != "Deleted")
                 .GroupBy(d => d.DocumentTypeId)
-                .Select(g => new { DocumentTypeId = g.Key, count = g.Count() })
+                .Select(g => new
+                {
+                    DocumentTypeId = g.Key,
+                    count = g.Count()
+                })
                 .ToDictionaryAsync(x => x.DocumentTypeId, x => x.count);
 
+            //5. Map the results
             var result = requiredDocs.Select(rd => new
             {
                 rd.DocumentTypeId,
@@ -89,18 +117,50 @@ namespace FourierIT_API.Controllers
             var user = await _userManager.GetUserAsync(User);
             if (user == null) return Unauthorized();
 
-            if (dto.File == null || dto.File.Length == 0)
-                return BadRequest("No file provided");
+            // Determine effective entity: DTO override (user explicitly selected at upload) or user's saved EntityTypeId
+            int? effectiveEntityTypeId = dto.EntityTypeId ?? user.EntityTypeId;
+
+            if (effectiveEntityTypeId == null)
+            {
+                return BadRequest(new { error = "Please select an entity type first." });
+            }
+
+            // Validate entity exists and load its required documents
+            var entityType = await _context.EntityTypes
+                .Include(et => et.RequiredDocuments)
+                .FirstOrDefaultAsync(et => et.EntityTypeId == effectiveEntityTypeId.Value);
+
+            if (entityType == null)
+                return BadRequest(new { error = "Invalid entity type selected." });
+
+            // Ensure the uploaded document type is allowed/required for the selected entity
+            var allowedForEntity = entityType.RequiredDocuments.Any(rd => rd.DocumentTypeId == dto.DocumentTypeId);
+            if (!allowedForEntity)
+            {
+                return BadRequest(new { error = "The specified document type is not required/allowed for the selected entity type." });
+            }
+
+            // If user had no saved entity (registered with both roles) and supplied one now, persist it to their account
+            if (user.EntityTypeId == null && dto.EntityTypeId.HasValue)
+            {
+                user.EntityTypeId = dto.EntityTypeId.Value;
+                var updateResult = await _userManager.UpdateAsync(user);
+                if (!updateResult.Succeeded)
+                {
+                    return StatusCode(StatusCodes.Status500InternalServerError, updateResult.Errors);
+                }
+            }
 
             using var ms = new MemoryStream();
             await dto.File.CopyToAsync(ms);
             var fileBytes = ms.ToArray();
 
-            var document = await _documentService.UploadDocumentAsync(user.Id, dto.File.FileName, fileBytes);
+            // Upload (DocumentService expects documentTypeId, not entityTypeId)
+            var document = await _documentService.UploadDocumentAsync(user.Id, dto.File.FileName, fileBytes, dto.DocumentTypeId);
 
             document.DocumentTypeId = dto.DocumentTypeId;
             document.IsCertified = dto.IsCertified;
-            document.CurrentStatus = "Active";
+            document.CurrentStatus = "Uploaded";
 
             if (dto.IsCertified && !string.IsNullOrEmpty(dto.CommissionerName) && dto.CertificationDate.HasValue)
             {
@@ -112,7 +172,6 @@ namespace FourierIT_API.Controllers
                     DocumentId = document.DocumentId
                 });
             }
-
             await _documentRepository.UpdateDocumentAsync(document);
 
             return CreatedAtAction(nameof(GetById), new { id = document.DocumentId }, ToResponseDto(document));
@@ -202,7 +261,8 @@ namespace FourierIT_API.Controllers
                 await dto.File.CopyToAsync(ms);
                 var fileBytes = ms.ToArray();
 
-                var updated = await _documentService.UploadDocumentAsync(user.Id, dto.File.FileName, fileBytes);
+                // Pass dto.DocumentTypeId here to fix the CS7036 error
+                var updated = await _documentService.UploadDocumentAsync(user.Id, dto.File.FileName, fileBytes, dto.DocumentTypeId);
                 doc.DocumentBlob = updated.DocumentBlob;
                 doc.FileName = dto.File.FileName;
                 doc.FileSizeBytes = fileBytes.Length;
@@ -237,9 +297,12 @@ namespace FourierIT_API.Controllers
             if (user == null) return Unauthorized();
 
             var success = await _documentService.ShareDocumentAsync(id, dto.GrantToUserId, dto.AccessLevel, user.Id);
-            if (!success) return Forbid();
+            if (!success)
+                // Provide clearer error details instead of a generic Forbid response
+                // Most likely reasons: target user not found, or current user not document owner, or doc not found
+                return BadRequest(new { error = "Share failed. Ensure document exists, you are the owner, and the target user identifier (id, username or email) is valid."});
 
-            return Ok(new { message = "Document shared successfully." });
+            return Ok(new { message = "Document shared successfully."});
         }
 
         //Admin/compliance/stakeholder endpoint to view all users and their documents

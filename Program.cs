@@ -14,10 +14,6 @@ using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddHttpsRedirection(options =>
-{
-    options.HttpsPort = 5001;
-});
 
 // Add services to the container.
 

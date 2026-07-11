@@ -121,93 +121,132 @@ namespace FourierIT_API.Controllers
             {
                 if (!ModelState.IsValid) return BadRequest(ModelState);
 
+                // Build requested roles early so we can decide entity assignment and validate roles before creating the user
+                var requestedRoles = (userDto.Roles ?? new List<string>())
+                    .Where(r => !string.IsNullOrWhiteSpace(r))
+                    .Select(r => r.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                // Backward compatibility for older clients sending a single role.
+                if (requestedRoles.Count == 0 && !string.IsNullOrWhiteSpace(userDto.Role))
+                {
+                    requestedRoles.Add(userDto.Role.Trim());
+                }
+
+                if (requestedRoles.Count == 0)
+                {
+                    requestedRoles.Add("Document Owner");
+                }
+
+                if (requestedRoles.Count > 2)
+                {
+                    return BadRequest(new { error = "A user can be assigned a maximum of 2 roles during registration." });
+                }
+
+                // Validate roles exist in DB and stakeholder exclusivity BEFORE creating the user
+                var allowedRoleNames = await _context.Roles
+                    .Select(r => r.Name ?? string.Empty)
+                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .ToListAsync();
+
+                var invalidRoles = requestedRoles
+                    .Where(r => !allowedRoleNames.Any(ar => ar.Equals(r, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+
+                if (invalidRoles.Any())
+                {
+                    return BadRequest(new { error = "Invalid role(s)", invalidRoles, allowedRoles = allowedRoleNames });
+                }
+
+                if (StakeholderRolePolicy.ViolatesStakeholderExclusivity(requestedRoles))
+                {
+                    return BadRequest(new
+                    {
+                        error = "Stakeholder cannot be combined with other roles. Choose only Stakeholder, or remove Stakeholder and pick other role(s)."
+                    });
+                }
+
+                // Determine entity assignment based on requested roles
+                int? entityTypeIdToAssign = null;
+                var isDocumentOwner = requestedRoles.Any(r => r.Equals("Document Owner", StringComparison.OrdinalIgnoreCase));
+                var isDepartmentAdmin = requestedRoles.Any(r => r.Equals("Department Admin", StringComparison.OrdinalIgnoreCase));
+
+                if (isDocumentOwner && !isDepartmentAdmin)
+                {
+                    var individualEntity = await _context.EntityTypes
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(et => et.Name != null && et.Name.ToLower().Contains("individual"));
+                    if (individualEntity != null) entityTypeIdToAssign = individualEntity.EntityTypeId;
+                }
+                else if (isDepartmentAdmin && !isDocumentOwner)
+                {
+                    var departmentEntity = await _context.EntityTypes
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(et => et.Name != null && et.Name.ToLower().Contains("department"));
+
+                    if (departmentEntity == null)
+                    {
+                        departmentEntity = await _context.EntityTypes
+                            .AsNoTracking()
+                            .FirstOrDefaultAsync(et => et.Name != null && (
+                                et.Name.ToLower().Contains("institution")
+                                || et.Name.ToLower().Contains("company")
+                                || et.Name.ToLower().Contains("organisation")
+                                || et.Name.ToLower().Contains("organization")));
+                    }
+
+                    if (departmentEntity != null) entityTypeIdToAssign = departmentEntity.EntityTypeId;
+                }
+                // If both roles are present, leave EntityTypeId null and force selection at upload time.
+
                 var newUser = new User
                 {
                     UserName = userDto.Username?.ToLower(),
                     Email = userDto.EmailAddress,
                     PhoneNumber = userDto.PhoneNumber,
-                    AccountStatus = "Active"
+                    AccountStatus = "Active",
+                    EntityTypeId = entityTypeIdToAssign
                 };
 
                 var createdUser = await _userManager.CreateAsync(newUser, userDto.Password);
-
-                if (createdUser.Succeeded)
-                {
-                    var requestedRoles = (userDto.Roles ?? new List<string>())
-                        .Where(r => !string.IsNullOrWhiteSpace(r))
-                        .Select(r => r.Trim())
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .ToList();
-
-                    // Backward compatibility for older clients sending a single role.
-                    if (requestedRoles.Count == 0 && !string.IsNullOrWhiteSpace(userDto.Role))
-                    {
-                        requestedRoles.Add(userDto.Role.Trim());
-                    }
-
-                    if (requestedRoles.Count == 0)
-                    {
-                        requestedRoles.Add("Document Owner");
-                    }
-
-                    if (requestedRoles.Count > 2)
-                    {
-                        return BadRequest(new { error = "A user can be assigned a maximum of 2 roles during registration." });
-                    }
-
-                    var allowedRoleNames = await _context.Roles
-                        .Select(r => r.Name ?? string.Empty)
-                        .Where(n => !string.IsNullOrWhiteSpace(n))
-                        .ToListAsync();
-
-                    var invalidRoles = requestedRoles
-                        .Where(r => !allowedRoleNames.Any(ar => ar.Equals(r, StringComparison.OrdinalIgnoreCase)))
-                        .ToList();
-
-                    if (invalidRoles.Any())
-                    {
-                        return BadRequest(new { error = "Invalid role(s)", invalidRoles, allowedRoles = allowedRoleNames });
-                    }
-
-                    if (StakeholderRolePolicy.ViolatesStakeholderExclusivity(requestedRoles))
-                    {
-                        return BadRequest(new
-                        {
-                            error = "Stakeholder cannot be combined with other roles. Choose only Stakeholder, or remove Stakeholder and pick other role(s)."
-                        });
-                    }
-
-                    var roleResult = await _userManager.AddToRolesAsync(newUser, requestedRoles);
-                    if (!roleResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, roleResult.Errors);
-
-                    var profile = new Profile
-                    {
-                        FirstName = userDto.FirstName ?? string.Empty,
-                        LastName = userDto.LastName ?? string.Empty,
-                        DateOfBirth = userDto.DateOfBirth,
-                        PhoneNumber = userDto.PhoneNumber ?? string.Empty,
-                        JobTitle = userDto.JobTitle ?? string.Empty,
-                        UserId = newUser.Id
-                    };
-
-                    _context.Profiles.Add(profile);
-                    await _context.SaveChangesAsync();
-
-                    var token = await _tokenService.CreateTokenAsync(newUser);
-
-                    return Ok(
-                        new NewUserDto
-                        {
-                            UserName = newUser.UserName ?? string.Empty,
-                            Email = newUser.Email ?? string.Empty,
-                            Token = token
-                        }
-                    );
-                }
-                else
+                if (!createdUser.Succeeded)
                 {
                     return BadRequest(createdUser.Errors);
                 }
+
+                // Add roles (roles already validated)
+                var roleResult = await _userManager.AddToRolesAsync(newUser, requestedRoles);
+                if (!roleResult.Succeeded)
+                {
+                    // Attempt cleanup: delete partially created user
+                    await _userManager.DeleteAsync(newUser);
+                    return StatusCode(StatusCodes.Status500InternalServerError, roleResult.Errors);
+                }
+
+                var profile = new Profile
+                {
+                    FirstName = userDto.FirstName ?? string.Empty,
+                    LastName = userDto.LastName ?? string.Empty,
+                    DateOfBirth = userDto.DateOfBirth,
+                    PhoneNumber = userDto.PhoneNumber ?? string.Empty,
+                    JobTitle = userDto.JobTitle ?? string.Empty,
+                    UserId = newUser.Id
+                };
+
+                _context.Profiles.Add(profile);
+                await _context.SaveChangesAsync();
+
+                var token = await _tokenService.CreateTokenAsync(newUser);
+
+                return Ok(
+                    new NewUserDto
+                    {
+                        UserName = newUser.UserName ?? string.Empty,
+                        Email = newUser.Email ?? string.Empty,
+                        Token = token
+                    }
+                );
             }
             catch (Exception ex)
             {
@@ -277,3 +316,4 @@ namespace FourierIT_API.Controllers
         }
     }
 }
+

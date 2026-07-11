@@ -35,6 +35,9 @@ namespace FourierIT_API.Repositories
         {
             return await _context.Documents
             .Include(d => d.SharedWith)
+            .Include(d => d.DocumentBlob)
+            .Include(d => d.DocumentType)
+            .Include(d => d.CertificationDetails)
             .FirstOrDefaultAsync(d => d.DocumentId == id);
         }
 
@@ -43,6 +46,8 @@ namespace FourierIT_API.Repositories
             return await _context.Documents
                 .Where(d => d.UserId == UserId)
                 .Include(d => d.SharedWith)
+                .Include(d => d.DocumentBlob)
+                .Include(d => d.DocumentType)
                 .ToListAsync();
         }
 
