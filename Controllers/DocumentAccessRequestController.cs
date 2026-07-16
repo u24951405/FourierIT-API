@@ -41,8 +41,11 @@ namespace FourierIT_API.Controllers
             if (dto == null || string.IsNullOrWhiteSpace(dto.TargetUserId))
                 return BadRequest(new { error = "Target user is required." });
 
-            var isMember = await _context.InstitutionMembers
-                .AnyAsync(im => im.InstitutionId == institutionId && im.UserId == actor.Id);
+            var isMember = await _context.Institutions
+                .Include(i => i.InstitutionMembers)
+                .Where(i => i.InstitutionId == institutionId)
+                .SelectMany(i => i.InstitutionMembers)
+                .AnyAsync(im => im.UserId == actor.Id);
 
             if (!isMember)
                 return Forbid();

@@ -46,6 +46,12 @@ namespace FourierIT_API.Data
         {
             base.OnModelCreating(modelBuilder);
 
+            // Ensure Email is unique (in addition to UserName)
+            modelBuilder.Entity<User>()
+                .HasIndex(u => u.Email)
+                .IsUnique()
+                .HasFilter("[Email] IS NOT NULL");  // NULL emails are allowed
+
             List<Role> Roles = new List<Role>
             {
                 new Role
