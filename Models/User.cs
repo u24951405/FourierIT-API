@@ -56,5 +56,8 @@ namespace FourierIT_API.Models
 
         [ForeignKey(nameof(DepartmentId))]
         public Department? Department { get; set; }
+
+        // One-to-one relationship with ComplianceStatus (FICA Compliance)
+        public ComplianceStatus? ComplianceStatus { get; set; }
     }
 }
