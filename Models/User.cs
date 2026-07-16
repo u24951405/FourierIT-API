@@ -1,4 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.AspNetCore.Identity;
 
 namespace FourierIT_API.Models
@@ -48,5 +50,11 @@ namespace FourierIT_API.Models
 
         public int? EntityTypeId { get; set; }
         public EntityType? EntityType { get; set; }
+
+        // Many-to-one relationship with Department (a user belongs to a department)
+        public int? DepartmentId { get; set; }
+
+        [ForeignKey(nameof(DepartmentId))]
+        public Department? Department { get; set; }
     }
 }
