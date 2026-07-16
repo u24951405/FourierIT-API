@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace FourierIT_API.Models
@@ -17,6 +18,9 @@ namespace FourierIT_API.Models
         [Required]
         [StringLength(150)]
         public string DepartmentName { get; set; } = string.Empty;
+
+        // One-to-many relationship with Users (a department has multiple users)
+        public ICollection<User> DepartmentUsers { get; set; } = new List<User>();
     }
 
 }
