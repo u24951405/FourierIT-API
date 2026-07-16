@@ -1,4 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
 namespace FourierIT_API.Models
@@ -12,13 +13,24 @@ namespace FourierIT_API.Models
         public int InstitutionId { get; set; }
         public Institution Institution { get; set; } = null!;
 
-        [ForeignKey("TargetUser")]
-        public string TargetUserId { get; set; } = string.Empty;
-        public User TargetUser { get; set; } = null!;
+        // Optional: Target a specific department first
+        [ForeignKey("TargetDepartment")]
+        public int? TargetDepartmentId { get; set; }
+        public Department? TargetDepartment { get; set; }
 
+        // Optional: Target a specific user (Document Owner)
+        [ForeignKey("TargetUser")]
+        public string? TargetUserId { get; set; }
+        public User? TargetUser { get; set; }
+
+        // Indicates whether this request is targeted at a department or individual
         [Required]
         [StringLength(20)]
-        public string Status { get; set; }  = "Pending";
+        public string RequestType { get; set; } = "Individual"; // "Department" or "Individual"
+
+        [Required]
+        [StringLength(30)]
+        public string Status { get; set; } = "Pending"; // Pending, Approved, Denied, Routed_To_Owner, Department_Pending, etc.
 
         [Required]
         [StringLength(500)]
@@ -32,6 +44,11 @@ namespace FourierIT_API.Models
 
         [StringLength(500)]
         public string? UserResponseNote { get; set; }
+
+        // Track who approved this request (Department Admin or Document Owner)
+        [ForeignKey("ApprovedByUser")]
+        public string? ApprovedByUserId { get; set; }
+        public User? ApprovedByUser { get; set; }
 
         public ICollection<AccessList> AccessLists { get; set; } = new List<AccessList>();
         public ICollection<InstitutionRequestedDocumentType> RequestedDocumentTypes { get; set; } = new List<InstitutionRequestedDocumentType>();
