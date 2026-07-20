@@ -23,16 +23,14 @@ namespace FourierIT_API.Controllers
         private readonly SignInManager<User> _signInManager;
         private readonly AppDbContext _context;
         private readonly RoleManager<Role> _roleManager;
-        private readonly IConfiguration _config;
 
-        public UserController(UserManager<User> userManager, ITokenService tokenService, SignInManager<User> signInManager, AppDbContext context, RoleManager<Role> roleManager, IConfiguration config)
+        public UserController(UserManager<User> userManager, ITokenService tokenService, SignInManager<User> signInManager, AppDbContext context, RoleManager<Role> roleManager)
         {
             _userManager = userManager;
             _tokenService = tokenService;
             _signInManager = signInManager;
             _context = context;
             _roleManager = roleManager;
-            _config = config;
         }
 
         [AllowAnonymous]
@@ -296,69 +294,6 @@ namespace FourierIT_API.Controllers
 
             await _context.SaveChangesAsync();
             return Ok(new { message = "User and profile updated." });
-        }
-
-        /// <summary>
-        /// Diagnostic endpoint to check system state for registration issues
-        /// </summary>
-        [AllowAnonymous]
-        [HttpGet("diagnostic")]
-        public async Task<IActionResult> Diagnostic()
-        {
-            var diagnostics = new Dictionary<string, object>();
-
-            try
-            {
-                // Check roles
-                var rolesCount = await _context.Roles.CountAsync();
-                var roles = await _context.Roles.Select(r => r.Name).ToListAsync();
-                diagnostics["roles_count"] = rolesCount;
-                diagnostics["roles_list"] = roles;
-
-                // Check entity types
-                var entityTypesCount = await _context.EntityTypes.CountAsync();
-                var entityTypes = await _context.EntityTypes.Select(e => e.Name).ToListAsync();
-                diagnostics["entity_types_count"] = entityTypesCount;
-                diagnostics["entity_types_list"] = entityTypes;
-
-                // Check users
-                var usersCount = await _userManager.Users.CountAsync();
-                diagnostics["users_count"] = usersCount;
-
-                // Check profiles
-                var profilesCount = await _context.Profiles.CountAsync();
-                diagnostics["profiles_count"] = profilesCount;
-
-                // Check JWT config
-                var jwtSigningKey = _config["JWT:SigningKey"];
-                var jwtIssuer = _config["JWT:Issuer"];
-                var jwtAudience = _config["JWT:Audience"];
-
-                diagnostics["jwt_signing_key_length"] = jwtSigningKey?.Length ?? 0;
-                diagnostics["jwt_issuer"] = jwtIssuer ?? "NOT SET";
-                diagnostics["jwt_audience"] = jwtAudience ?? "NOT SET";
-
-                // Database connection test
-                var canConnect = await _context.Database.CanConnectAsync();
-                diagnostics["database_connected"] = canConnect;
-
-                return Ok(new
-                {
-                    success = true,
-                    timestamp = DateTime.UtcNow,
-                    diagnostics
-                });
-            }
-            catch (Exception ex)
-            {
-                diagnostics["error"] = ex.Message;
-                return Ok(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    diagnostics
-                });
-            }
         }
 
         [Authorize(Roles = "Department Admin")]
