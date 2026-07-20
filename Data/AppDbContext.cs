@@ -42,6 +42,13 @@ namespace FourierIT_API.Data
         public DbSet<RequiredDocument> RequiredDocuments { get; set; }
         public DbSet<ClientEnlistment> ClientEnlistments { get; set; }
 
+        // FICA Compliance System DbSets
+        public DbSet<ComplianceStatus> ComplianceStatuses { get; set; }
+        public DbSet<DocumentComplianceCheck> DocumentComplianceChecks { get; set; }
+        public DbSet<ComplianceHistory> ComplianceHistories { get; set; }
+        public DbSet<ComplianceAlert> ComplianceAlerts { get; set; }
+        public DbSet<ComplianceAuditLog> ComplianceAuditLogs { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -515,6 +522,172 @@ namespace FourierIT_API.Data
                 .WithMany()
                 .HasForeignKey(dal => dal.AccessedByUserId)
                 .OnDelete(DeleteBehavior.NoAction);
+
+            // ===== COMPLIANCE SYSTEM CONFIGURATIONS =====
+
+            // Configure ComplianceStatus one-to-many with DocumentComplianceCheck
+            modelBuilder.Entity<ComplianceStatus>()
+                .HasMany(cs => cs.DocumentChecks)
+                .WithOne(dc => dc.ComplianceStatus)
+                .HasForeignKey(dc => dc.ComplianceStatusId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Configure ComplianceStatus one-to-many with ComplianceHistory
+            modelBuilder.Entity<ComplianceStatus>()
+                .HasMany(cs => cs.ComplianceHistories)
+                .WithOne(ch => ch.ComplianceStatus)
+                .HasForeignKey(ch => ch.ComplianceStatusId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Configure ComplianceStatus one-to-many with ComplianceAlert
+            modelBuilder.Entity<ComplianceStatus>()
+                .HasMany(cs => cs.ComplianceAlerts)
+                .WithOne(ca => ca.ComplianceStatus)
+                .HasForeignKey(ca => ca.ComplianceStatusId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Configure ComplianceStatus one-to-many with ComplianceAuditLog
+            modelBuilder.Entity<ComplianceStatus>()
+                .HasMany(cs => cs.AuditLogs)
+                .WithOne(al => al.ComplianceStatus)
+                .HasForeignKey(al => al.ComplianceStatusId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Configure User one-to-one with ComplianceStatus (optional)
+            modelBuilder.Entity<User>()
+                .HasOne(u => u.ComplianceStatus)
+                .WithOne(cs => cs.User)
+                .HasForeignKey<ComplianceStatus>(cs => cs.UserId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            // Configure Department one-to-many with ComplianceStatus
+            modelBuilder.Entity<Department>()
+                .HasMany(d => d.ComplianceStatuses)
+                .WithOne(cs => cs.Department)
+                .HasForeignKey(cs => cs.DepartmentId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // Configure DocumentComplianceCheck relationships
+            modelBuilder.Entity<DocumentComplianceCheck>()
+                .HasOne(dc => dc.Document)
+                .WithMany()
+                .HasForeignKey(dc => dc.DocumentId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            modelBuilder.Entity<DocumentComplianceCheck>()
+                .HasOne(dc => dc.CheckedByUser)
+                .WithMany()
+                .HasForeignKey(dc => dc.CheckedBy)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<DocumentComplianceCheck>()
+                .HasOne(dc => dc.ManualReviewedByUser)
+                .WithMany()
+                .HasForeignKey(dc => dc.ManuallyReviewedBy)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<DocumentComplianceCheck>()
+                .HasOne(dc => dc.AppliedRule)
+                .WithMany()
+                .HasForeignKey(dc => dc.AppliedRuleId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // Configure ComplianceHistory relationships
+            modelBuilder.Entity<ComplianceHistory>()
+                .HasOne(ch => ch.ChangedByUser)
+                .WithMany()
+                .HasForeignKey(ch => ch.ChangedBy)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<ComplianceHistory>()
+                .HasOne(ch => ch.ApprovedByUser)
+                .WithMany()
+                .HasForeignKey(ch => ch.ApprovedBy)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // Configure ComplianceAlert relationships
+            modelBuilder.Entity<ComplianceAlert>()
+                .HasOne(ca => ca.Document)
+                .WithMany()
+                .HasForeignKey(ca => ca.DocumentId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<ComplianceAlert>()
+                .HasOne(ca => ca.User)
+                .WithMany()
+                .HasForeignKey(ca => ca.UserId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            modelBuilder.Entity<ComplianceAlert>()
+                .HasOne(ca => ca.AcknowledgedByUser)
+                .WithMany()
+                .HasForeignKey(ca => ca.AcknowledgedBy)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<ComplianceAlert>()
+                .HasOne(ca => ca.ResolvedByUser)
+                .WithMany()
+                .HasForeignKey(ca => ca.ResolvedBy)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<ComplianceAlert>()
+                .HasOne(ca => ca.EscalatedToUser)
+                .WithMany()
+                .HasForeignKey(ca => ca.EscalatedTo)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // Configure ComplianceAuditLog relationships
+            modelBuilder.Entity<ComplianceAuditLog>()
+                .HasOne(al => al.PerformedByUser)
+                .WithMany()
+                .HasForeignKey(al => al.PerformedBy)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            modelBuilder.Entity<ComplianceAuditLog>()
+                .HasOne(al => al.Document)
+                .WithMany()
+                .HasForeignKey(al => al.DocumentId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<ComplianceAuditLog>()
+                .HasOne(al => al.CheckRecord)
+                .WithMany()
+                .HasForeignKey(al => al.DocumentCheckId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // Add indexes for performance
+            modelBuilder.Entity<ComplianceStatus>()
+                .HasIndex(cs => cs.UserId);
+
+            modelBuilder.Entity<ComplianceStatus>()
+                .HasIndex(cs => cs.DepartmentId);
+
+            modelBuilder.Entity<ComplianceStatus>()
+                .HasIndex(cs => cs.OverallStatus);
+
+            modelBuilder.Entity<ComplianceStatus>()
+                .HasIndex(cs => cs.RiskLevel);
+
+            modelBuilder.Entity<DocumentComplianceCheck>()
+                .HasIndex(dc => dc.DocumentId);
+
+            modelBuilder.Entity<DocumentComplianceCheck>()
+                .HasIndex(dc => dc.ComplianceStatusId);
+
+            modelBuilder.Entity<ComplianceAlert>()
+                .HasIndex(ca => ca.UserId);
+
+            modelBuilder.Entity<ComplianceAlert>()
+                .HasIndex(ca => ca.IsResolved);
+
+            modelBuilder.Entity<ComplianceAlert>()
+                .HasIndex(ca => ca.Severity);
+
+            modelBuilder.Entity<ComplianceAuditLog>()
+                .HasIndex(al => al.ComplianceStatusId);
+
+            modelBuilder.Entity<ComplianceAuditLog>()
+                .HasIndex(al => al.PerformedAt);
         }
     }
 }
