@@ -21,6 +21,9 @@ namespace FourierIT_API.Models
 
         // One-to-many relationship with Users (a department has multiple users)
         public ICollection<User> DepartmentUsers { get; set; } = new List<User>();
+
+        // One-to-many relationship with ComplianceStatus (FICA Compliance)
+        public ICollection<ComplianceStatus> ComplianceStatuses { get; set; } = new List<ComplianceStatus>();
     }
 
 }
