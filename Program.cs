@@ -4,6 +4,7 @@ using FourierIT_API.Models;
 using FourierIT_API.Repositories;
 using FourierIT_API.Security;
 using FourierIT_API.Service;
+using FourierIT_API.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -73,6 +74,7 @@ builder.Services.AddScoped<IProfileRepository, ProfileRepository>();
 builder.Services.AddScoped<IEncryptionService, AesEncryptionService>();
 builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
+builder.Services.AddScoped<IComplianceService, ComplianceService>();
 
 builder.Services.AddIdentity<User, Role>(options =>
 {
@@ -125,11 +127,14 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await db.Database.MigrateAsync();
-    await DevLookupSeed.EnsureBranchesExistAsync(db);
-}
+// Note: Automatic migration disabled - run "dotnet ef database update" manually
+// to apply migrations if you have a fresh database
+// Uncomment the code below only for fresh database setup:
+// using (var scope = app.Services.CreateScope())
+// {
+//     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+//     await db.Database.MigrateAsync();
+//     await DevLookupSeed.EnsureBranchesExistAsync(db);
+// }
 
 app.Run();

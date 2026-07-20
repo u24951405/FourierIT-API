@@ -314,6 +314,44 @@ namespace FourierIT_API.Controllers
 
             return NoContent();
         }
+
+        [Authorize(Roles = "Department Admin")]
+        [HttpGet("all")]
+        public async Task<IActionResult> GetAllUsers()
+        {
+            var users = await _userManager.Users
+                .AsNoTracking()
+                .ToListAsync();
+
+            var userDtos = new List<object>();
+
+            foreach (var user in users)
+            {
+                var roles = await _userManager.GetRolesAsync(user);
+                var profile = await _context.Profiles
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(p => p.UserId == user.Id);
+
+                userDtos.Add(new
+                {
+                    user.Id,
+                    user.UserName,
+                    user.Email,
+                    user.PhoneNumber,
+                    user.AccountStatus,
+                    Roles = roles,
+                    Profile = new
+                    {
+                        profile?.FirstName,
+                        profile?.LastName,
+                        profile?.JobTitle,
+                        profile?.DateOfBirth
+                    }
+                });
+            }
+
+            return Ok(userDtos);
+        }
     }
 }
 
