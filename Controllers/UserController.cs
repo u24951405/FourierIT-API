@@ -98,7 +98,9 @@ namespace FourierIT_API.Controllers
 
             if (!string.IsNullOrWhiteSpace(email))
             {
-                var byEmail = await _userManager.FindByEmailAsync(email);
+                // Trim email to handle cases where email has leading/trailing whitespace
+                var trimmedEmail = email.Trim();
+                var byEmail = await _userManager.FindByEmailAsync(trimmedEmail);
                 if (byEmail != null) return byEmail;
             }
 
@@ -203,7 +205,7 @@ namespace FourierIT_API.Controllers
                 var newUser = new User
                 {
                     UserName = userDto.Username?.ToLower(),
-                    Email = userDto.EmailAddress,
+                    Email = userDto.EmailAddress?.Trim(),
                     PhoneNumber = userDto.PhoneNumber,
                     AccountStatus = "Active",
                     EntityTypeId = entityTypeIdToAssign
