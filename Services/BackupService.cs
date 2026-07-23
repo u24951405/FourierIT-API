@@ -28,13 +28,16 @@ namespace FourierIT_API.Services
             ILogger<BackupService> logger,
             BlobServiceClient blobServiceClient)
         {
-            _context = context;
-            _env = env;
-            _configuration = configuration;
-            _logger = logger;
-            _blobServiceClient = blobServiceClient;
+            _context = context ?? throw new ArgumentNullException(nameof(context));
+            _env = env ?? throw new ArgumentNullException(nameof(env));
+            _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _blobServiceClient = blobServiceClient ?? throw new ArgumentNullException(nameof(blobServiceClient));
         }
 
+        // =========================================================================
+        // 1. CREATE BACKUP
+        // =========================================================================
         public async Task<BackupResponseDto> CreateDatabaseBackupAsync(CreateBackupRequestDto request)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
@@ -55,7 +58,6 @@ namespace FourierIT_API.Services
                 return response;
             }
 
-            // Determine database name from the DbContext's connection
             string? connectionString = _context.Database.GetDbConnection().ConnectionString;
             if (string.IsNullOrWhiteSpace(connectionString))
             {
@@ -95,17 +97,14 @@ namespace FourierIT_API.Services
             {
                 _logger.LogInformation("Starting database backup to local file {FilePath}", tempFilePath);
 
-                // Execute SQL backup command
                 string sql = $"BACKUP DATABASE [{dbName}] TO DISK = '{tempFilePath.Replace("'", "''")}' WITH FORMAT, INIT;";
                 await _context.Database.ExecuteSqlRawAsync(sql);
 
                 _logger.LogInformation("Database backup finished, uploading to Azure Blob Storage container '{Container}'", containerName);
 
-                // Ensure container exists
                 var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
                 await containerClient.CreateIfNotExistsAsync();
 
-                // Upload the file
                 var blobClient = containerClient.GetBlobClient(fileName);
 
                 using (var fileStream = File.OpenRead(tempFilePath))
@@ -115,10 +114,6 @@ namespace FourierIT_API.Services
 
                 string blobUrl = blobClient.Uri.ToString();
 
-                // -------------------------------------------------------------
-                // Check if the provided UserId exists in AspNetUsers.
-                // If not found (e.g. testing with "1"), fall back to null.
-                // -------------------------------------------------------------
                 string? validUserId = null;
                 if (!string.IsNullOrWhiteSpace(request.UserId))
                 {
@@ -128,10 +123,10 @@ namespace FourierIT_API.Services
                         validUserId = request.UserId;
                     }
                 }
-                // Save metadata to database
+
                 var backup = new Backup
                 {
-                    UserId = request.UserId,
+                    UserId = validUserId,
                     FileName = fileName,
                     DateBackedUp = DateTimeOffset.UtcNow,
                     IsManualBackup = request.IsManualBackup
@@ -172,9 +167,135 @@ namespace FourierIT_API.Services
             }
         }
 
+        // =========================================================================
+        // 2. GET ALL BACKUPS
+        // =========================================================================
         public async Task<IEnumerable<Backup>> GetAllBackupsAsync()
         {
             return await _context.Backups.OrderByDescending(b => b.DateBackedUp).ToListAsync();
+        }
+
+        // =========================================================================
+        // 3. RESTORE DATABASE
+        // =========================================================================
+        public async Task<RestoreResponseDto> RestoreDatabaseAsync(int backupId)
+        {
+            string tempFilePath = null;
+            try
+            {
+                _logger.LogInformation("Starting database restore for BackupId={BackupId}", backupId);
+
+                var backup = await _context.Backups.FindAsync(backupId);
+                if (backup == null)
+                {
+                    _logger.LogWarning("Backup record not found for id {BackupId}", backupId);
+                    return new RestoreResponseDto
+                    {
+                        Success = false,
+                        Message = $"Backup record with id {backupId} not found.",
+                        RestoredAt = DateTimeOffset.UtcNow
+                    };
+                }
+
+                string containerName = _configuration["AzureBlobStorage:ContainerName"] ?? "docuvault-database-backups";
+                var container = _blobServiceClient.GetBlobContainerClient(containerName);
+                var blobClient = container.GetBlobClient(backup.FileName);
+
+                var tempDir = Path.Combine(_env.ContentRootPath, "TempBackups");
+                Directory.CreateDirectory(tempDir);
+
+                tempFilePath = Path.Combine(tempDir, backup.FileName);
+
+                _logger.LogInformation("Downloading backup blob {FileName} to {TempFilePath}", backup.FileName, tempFilePath);
+                await blobClient.DownloadToAsync(tempFilePath);
+                _logger.LogInformation("Download complete for backup id {BackupId}", backupId);
+
+                var currentConnectionString = _context.Database.GetDbConnection().ConnectionString;
+                var builder = new SqlConnectionStringBuilder(currentConnectionString);
+                var targetDbName = builder.InitialCatalog;
+
+                if (string.IsNullOrWhiteSpace(targetDbName))
+                {
+                    _logger.LogError("Could not determine target database name from connection string.");
+                    return new RestoreResponseDto
+                    {
+                        Success = false,
+                        Message = "Could not determine target database name from connection string.",
+                        RestoredAt = DateTimeOffset.UtcNow
+                    };
+                }
+
+                var masterBuilder = new SqlConnectionStringBuilder(currentConnectionString)
+                {
+                    InitialCatalog = "master"
+                };
+                var masterConnectionString = masterBuilder.ConnectionString;
+
+                using (var conn = new SqlConnection(masterConnectionString))
+                {
+                    await conn.OpenAsync();
+
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = $"ALTER DATABASE [{targetDbName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;";
+                        _logger.LogInformation("Executing: {Sql}", cmd.CommandText);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+
+                    try
+                    {
+                        using (var cmd = conn.CreateCommand())
+                        {
+                            var escapedPath = tempFilePath.Replace("'", "''");
+                            cmd.CommandText = $"RESTORE DATABASE [{targetDbName}] FROM DISK = '{escapedPath}' WITH REPLACE;";
+                            _logger.LogInformation("Executing: {Sql}", cmd.CommandText);
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+                    }
+                    finally
+                    {
+                        using (var cmd = conn.CreateCommand())
+                        {
+                            cmd.CommandText = $"ALTER DATABASE [{targetDbName}] SET MULTI_USER;";
+                            _logger.LogInformation("Executing: {Sql}", cmd.CommandText);
+                            await cmd.ExecuteNonQueryAsync();
+                        }
+                    }
+                }
+
+                _logger.LogInformation("Database restore completed successfully for backup id {BackupId}", backupId);
+                return new RestoreResponseDto
+                {
+                    Success = true,
+                    Message = "Database restored successfully.",
+                    RestoredAt = DateTimeOffset.UtcNow
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred during database restore for backup id {BackupId}", backupId);
+                return new RestoreResponseDto
+                {
+                    Success = false,
+                    Message = $"Error during restore: {ex.Message}",
+                    RestoredAt = DateTimeOffset.UtcNow
+                };
+            }
+            finally
+            {
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(tempFilePath) && File.Exists(tempFilePath))
+                    {
+                        File.Delete(tempFilePath);
+                        _logger.LogInformation("Deleted temporary backup file {TempFilePath}", tempFilePath);
+                    }
+                }
+                catch (Exception deleteEx)
+                {
+                    _logger.LogWarning(deleteEx, "Failed to delete temporary backup file {TempFilePath}", tempFilePath);
+                }
+            }
         }
     }
 }

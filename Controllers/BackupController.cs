@@ -43,5 +43,26 @@ namespace FourierIT_API.Controllers
             var backups = await _backupService.GetAllBackupsAsync();
             return Ok(backups);
         }
+
+        /// <summary>
+        /// Restore the local SQL Server database from a historical .bak file stored in Azure Blob Storage.
+        /// </summary>
+        /// <param name="id">Backup record id.</param>
+        /// <returns>Restore result with status and timestamp.</returns>
+        /// <response code="200">Restore result returned in body.</response>
+        [HttpPost("restore/{id}")]
+        [ProducesResponseType(typeof(RestoreResponseDto), 200)]
+        public async Task<IActionResult> RestoreDatabase([FromRoute] int id)
+        {
+            _logger.LogInformation("API called to restore database from backup id {BackupId}", id);
+            var result = await _backupService.RestoreDatabaseAsync(id);
+
+            if (!result.Success)
+            {
+                return BadRequest(result);
+            }
+
+            return Ok(result);
+        }
     }
 }
