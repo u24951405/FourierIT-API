@@ -8,11 +8,7 @@ namespace FourierIT_API.Models
         [Key]
         public int BackupId { get; set; }
 
-        // Track which user created the backup (Identity user id is string)
-        [ForeignKey(nameof(User))]
-        public string? UserId { get; set; }
-
-        public virtual User? User { get; set; }
+        public string? UserId { get; set; } = string.Empty;
 
         [Required]
         [StringLength(255)]

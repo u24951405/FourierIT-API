@@ -9,7 +9,7 @@ namespace FourierIT_API.Models
         [Key]
         public int AuditLogId { get; set; }
 
-        [ForeignKey(nameof(User))]
+        //[ForeignKey(nameof(User))]
         public String UserId { get; set; } = String.Empty;
 
         [Required]
@@ -35,6 +35,6 @@ namespace FourierIT_API.Models
         public string? BlockHash { get; set; }
 
         //navigation property to aspnetusers
-        public virtual User? User { get; set; }
+        //public virtual User? User { get; set; }
     }
 }

@@ -76,6 +76,17 @@ builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 builder.Services.AddScoped<IComplianceService, ComplianceService>();
 
+// Register Azure Blob Client
+builder.Services.AddSingleton(sp =>
+    new Azure.Storage.Blobs.BlobServiceClient(
+        sp.GetRequiredService<IConfiguration>()["AzureBlobStorage:ConnectionString"]));
+
+// Register Backup Service
+builder.Services.AddScoped<FourierIT_API.Interfaces.IBackupService, FourierIT_API.Services.BackupService>();
+
+// Register Daily Backup Service as a Hosted Service
+builder.Services.AddHostedService<DailyBackupService>();
+
 builder.Services.AddIdentity<User, Role>(options =>
 {
     options.Password.RequireDigit = true;

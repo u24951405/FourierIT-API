@@ -12,8 +12,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace FourierIT_API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260722114537_AddAuditLogAndBackup")]
-    partial class AddAuditLogAndBackup
+    [Migration("20260723114849_InitialDocuVault")]
+    partial class InitialDocuVault
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -144,10 +144,13 @@ namespace FourierIT_API.Migrations
                     b.Property<DateTimeOffset>("TimeStamp")
                         .HasColumnType("datetimeoffset");
 
-                    b.Property<int>("UserId")
-                        .HasColumnType("int");
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(450)");
 
                     b.HasKey("AuditLogId");
+
+                    b.HasIndex("UserId");
 
                     b.ToTable("AuditLogs");
                 });
@@ -172,11 +175,9 @@ namespace FourierIT_API.Migrations
                         .HasColumnType("bit");
 
                     b.Property<string>("UserId")
-                        .HasColumnType("nvarchar(450)");
+                        .HasColumnType("nvarchar(max)");
 
                     b.HasKey("BackupId");
-
-                    b.HasIndex("UserId");
 
                     b.ToTable("Backups");
                 });
@@ -2538,11 +2539,13 @@ namespace FourierIT_API.Migrations
                     b.Navigation("Suburb");
                 });
 
-            modelBuilder.Entity("FourierIT_API.Models.Backup", b =>
+            modelBuilder.Entity("FourierIT_API.Models.AuditLog", b =>
                 {
                     b.HasOne("FourierIT_API.Models.User", "User")
                         .WithMany()
-                        .HasForeignKey("UserId");
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
                     b.Navigation("User");
                 });
