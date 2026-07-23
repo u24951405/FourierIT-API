@@ -76,6 +76,9 @@ builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 builder.Services.AddScoped<IComplianceService, ComplianceService>();
 
+// Register Audit Log Service (mock, read-only)
+builder.Services.AddScoped<FourierIT_API.Interfaces.IAuditLogService, FourierIT_API.Services.AuditLogService>();
+
 // Register Azure Blob Client
 builder.Services.AddSingleton(sp =>
     new Azure.Storage.Blobs.BlobServiceClient(

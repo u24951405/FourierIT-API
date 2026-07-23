@@ -10,16 +10,18 @@ namespace FourierIT_API.Models
         public int AuditLogId { get; set; }
 
         //[ForeignKey(nameof(User))]
+        [Required]
+        [StringLength(450)]
         public String UserId { get; set; } = String.Empty;
 
         [Required]
-        [StringLength(20)]
+        [StringLength(50)]
         public string ActionCode { get; set; } = string.Empty;
 
         public DateTimeOffset TimeStamp { get; set; } = DateTimeOffset.UtcNow;
 
         
-        [StringLength(300)]
+        [StringLength(1000)]
         public string? Description { get; set; } = string.Empty;
 
         [Required]
@@ -34,7 +36,8 @@ namespace FourierIT_API.Models
         [StringLength(64)]
         public string? BlockHash { get; set; }
 
-        //navigation property to aspnetusers
-        //public virtual User? User { get; set; }
+        // Optional: Uncomment when ready to link to AspNetUsers table
+        // [ForeignKey(nameof(UserId))]
+        // public virtual User? User { get; set; }
     }
 }
