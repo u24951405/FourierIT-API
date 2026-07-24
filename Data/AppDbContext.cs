@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+
 namespace FourierIT_API.Data
 {
     public class AppDbContext : IdentityDbContext<User, Role, string>
@@ -16,6 +17,7 @@ namespace FourierIT_API.Data
         public DbSet<Branch> Branches { get; set; } = null!;
         public DbSet<InstitutionType> InstitutionTypes { get; set; } = null!;
         public DbSet<Institution> Institutions { get; set; }
+        public DbSet<InstitutionInvitation> InstitutionInvitations { get; set; }
         public DbSet<RolePermission> RolePermissions { get; set; }
         
         // Secure vault DbSets
@@ -48,6 +50,31 @@ namespace FourierIT_API.Data
         public DbSet<ComplianceHistory> ComplianceHistories { get; set; }
         public DbSet<ComplianceAlert> ComplianceAlerts { get; set; }
         public DbSet<ComplianceAuditLog> ComplianceAuditLogs { get; set; }
+
+        // Location DbSets
+        public DbSet<Address> Addresses { get; set; }
+        public DbSet<City> Cities { get; set; }
+        public DbSet<Suburb> Suburbs { get; set; }
+        public DbSet<Province> Provinces { get; set; }
+
+        // System DbSets
+        public DbSet<Backup> Backups { get; set; }
+        public DbSet<Permission> Permissions { get; set; }
+        public DbSet<SecurityQuestion> SecurityQuestions { get; set; }
+        public DbSet<FICARuleHistory> FICARuleHistories { get; set; }
+
+        // Risk Rating DbSets
+        public DbSet<RiskVariable> RiskVariables { get; set; }
+        public DbSet<RiskRatingVariable> RiskRatingVariables { get; set; }
+        public DbSet<ClientRiskRating> ClientRiskRatings { get; set; }
+
+        // User-Related DbSets
+        public DbSet<UserSecurityQuestion> UserSecurityQuestions { get; set; }
+        public DbSet<UserNotification> UserNotifications { get; set; }
+        public DbSet<Notification> Notifications { get; set; }
+        public DbSet<InstitutionMembers> InstitutionMembers { get; set; }
+        public DbSet<UserRole> UserRoles { get; set; }
+        public DbSet<PEPList> PEPLists { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -530,28 +557,28 @@ namespace FourierIT_API.Data
                 .HasMany(cs => cs.DocumentChecks)
                 .WithOne(dc => dc.ComplianceStatus)
                 .HasForeignKey(dc => dc.ComplianceStatusId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure ComplianceStatus one-to-many with ComplianceHistory
             modelBuilder.Entity<ComplianceStatus>()
                 .HasMany(cs => cs.ComplianceHistories)
                 .WithOne(ch => ch.ComplianceStatus)
                 .HasForeignKey(ch => ch.ComplianceStatusId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure ComplianceStatus one-to-many with ComplianceAlert
             modelBuilder.Entity<ComplianceStatus>()
                 .HasMany(cs => cs.ComplianceAlerts)
                 .WithOne(ca => ca.ComplianceStatus)
                 .HasForeignKey(ca => ca.ComplianceStatusId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure ComplianceStatus one-to-many with ComplianceAuditLog
             modelBuilder.Entity<ComplianceStatus>()
                 .HasMany(cs => cs.AuditLogs)
                 .WithOne(al => al.ComplianceStatus)
                 .HasForeignKey(al => al.ComplianceStatusId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure User one-to-one with ComplianceStatus (optional)
             modelBuilder.Entity<User>()
@@ -584,7 +611,7 @@ namespace FourierIT_API.Data
                 .HasOne(dc => dc.ManualReviewedByUser)
                 .WithMany()
                 .HasForeignKey(dc => dc.ManuallyReviewedBy)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             modelBuilder.Entity<DocumentComplianceCheck>()
                 .HasOne(dc => dc.AppliedRule)
@@ -597,20 +624,20 @@ namespace FourierIT_API.Data
                 .HasOne(ch => ch.ChangedByUser)
                 .WithMany()
                 .HasForeignKey(ch => ch.ChangedBy)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             modelBuilder.Entity<ComplianceHistory>()
                 .HasOne(ch => ch.ApprovedByUser)
                 .WithMany()
                 .HasForeignKey(ch => ch.ApprovedBy)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure ComplianceAlert relationships
             modelBuilder.Entity<ComplianceAlert>()
                 .HasOne(ca => ca.Document)
                 .WithMany()
                 .HasForeignKey(ca => ca.DocumentId)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             modelBuilder.Entity<ComplianceAlert>()
                 .HasOne(ca => ca.User)
@@ -622,7 +649,7 @@ namespace FourierIT_API.Data
                 .HasOne(ca => ca.AcknowledgedByUser)
                 .WithMany()
                 .HasForeignKey(ca => ca.AcknowledgedBy)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             modelBuilder.Entity<ComplianceAlert>()
                 .HasOne(ca => ca.ResolvedByUser)
@@ -634,7 +661,7 @@ namespace FourierIT_API.Data
                 .HasOne(ca => ca.EscalatedToUser)
                 .WithMany()
                 .HasForeignKey(ca => ca.EscalatedTo)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure ComplianceAuditLog relationships
             modelBuilder.Entity<ComplianceAuditLog>()
@@ -647,7 +674,7 @@ namespace FourierIT_API.Data
                 .HasOne(al => al.Document)
                 .WithMany()
                 .HasForeignKey(al => al.DocumentId)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             modelBuilder.Entity<ComplianceAuditLog>()
                 .HasOne(al => al.CheckRecord)

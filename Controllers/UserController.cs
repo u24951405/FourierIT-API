@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Configuration;
 using System.Linq.Expressions;
 using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
@@ -23,14 +24,25 @@ namespace FourierIT_API.Controllers
         private readonly SignInManager<User> _signInManager;
         private readonly AppDbContext _context;
         private readonly RoleManager<Role> _roleManager;
+        private readonly IEntityVerificationService _entityVerificationService;
+        private readonly IConfiguration _configuration;
 
-        public UserController(UserManager<User> userManager, ITokenService tokenService, SignInManager<User> signInManager, AppDbContext context, RoleManager<Role> roleManager)
+        public UserController(
+            UserManager<User> userManager,
+            ITokenService tokenService,
+            SignInManager<User> signInManager,
+            AppDbContext context,
+            RoleManager<Role> roleManager,
+            IEntityVerificationService entityVerificationService,
+            IConfiguration configuration)
         {
             _userManager = userManager;
             _tokenService = tokenService;
             _signInManager = signInManager;
             _context = context;
             _roleManager = roleManager;
+            _entityVerificationService = entityVerificationService;
+            _configuration = configuration;
         }
 
         [AllowAnonymous]
@@ -39,7 +51,14 @@ namespace FourierIT_API.Controllers
         {
             if (!ModelState.IsValid) return BadRequest(ModelState);
 
-            var user = await _userManager.Users.FirstOrDefaultAsync(u => u.UserName == loginDto.Username.ToLower());
+            var username = loginDto.Username?.Trim() ?? string.Empty;
+            var user = await _userManager.FindByNameAsync(username);
+            if (user == null)
+            {
+                // Fall back to searching by normalized username if direct lookup fails.
+                user = await _userManager.Users
+                    .FirstOrDefaultAsync(u => u.NormalizedUserName == username.ToUpperInvariant());
+            }
 
             if (user == null) return Unauthorized("Invalid username");
 
@@ -169,38 +188,32 @@ namespace FourierIT_API.Controllers
                     });
                 }
 
-                // Determine entity assignment based on requested roles
-                int? entityTypeIdToAssign = null;
-                var isDocumentOwner = requestedRoles.Any(r => r.Equals("Document Owner", StringComparison.OrdinalIgnoreCase));
-                var isDepartmentAdmin = requestedRoles.Any(r => r.Equals("Department Admin", StringComparison.OrdinalIgnoreCase));
+                var entityType = await _context.EntityTypes
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(et => et.EntityTypeId == userDto.EntityTypeId);
 
-                if (isDocumentOwner && !isDepartmentAdmin)
+                if (entityType == null)
                 {
-                    var individualEntity = await _context.EntityTypes
-                        .AsNoTracking()
-                        .FirstOrDefaultAsync(et => et.Name != null && et.Name.ToLower().Contains("individual"));
-                    if (individualEntity != null) entityTypeIdToAssign = individualEntity.EntityTypeId;
+                    return BadRequest(new { error = "Please select a valid entity type." });
                 }
-                else if (isDepartmentAdmin && !isDocumentOwner)
+
+                var verificationNumber = userDto.EntityIdentificationNumber?.Trim();
+                if (string.IsNullOrWhiteSpace(verificationNumber))
                 {
-                    var departmentEntity = await _context.EntityTypes
-                        .AsNoTracking()
-                        .FirstOrDefaultAsync(et => et.Name != null && et.Name.ToLower().Contains("department"));
-
-                    if (departmentEntity == null)
-                    {
-                        departmentEntity = await _context.EntityTypes
-                            .AsNoTracking()
-                            .FirstOrDefaultAsync(et => et.Name != null && (
-                                et.Name.ToLower().Contains("institution")
-                                || et.Name.ToLower().Contains("company")
-                                || et.Name.ToLower().Contains("organisation")
-                                || et.Name.ToLower().Contains("organization")));
-                    }
-
-                    if (departmentEntity != null) entityTypeIdToAssign = departmentEntity.EntityTypeId;
+                    return BadRequest(new { error = "Please enter an identification or registration number for the selected entity type." });
                 }
-                // If both roles are present, leave EntityTypeId null and force selection at upload time.
+
+                var expectedLengthMessage = ValidateEntityIdentificationNumber(userDto.EntityTypeId, verificationNumber);
+                if (expectedLengthMessage != null)
+                {
+                    return BadRequest(new { error = expectedLengthMessage });
+                }
+
+                var verificationResult = await _entityVerificationService.VerifyEntityAsync(userDto.EntityTypeId, verificationNumber);
+                if (!verificationResult.IsValid)
+                {
+                    return BadRequest(new { error = verificationResult.ErrorMessage ?? "Entity verification failed." });
+                }
 
                 var newUser = new User
                 {
@@ -208,7 +221,8 @@ namespace FourierIT_API.Controllers
                     Email = userDto.EmailAddress?.Trim(),
                     PhoneNumber = userDto.PhoneNumber,
                     AccountStatus = "Active",
-                    EntityTypeId = entityTypeIdToAssign
+                    EntityTypeId = userDto.EntityTypeId,
+                    EntityIdentificationNumber = verificationNumber
                 };
 
                 var createdUser = await _userManager.CreateAsync(newUser, userDto.Password);
@@ -256,6 +270,59 @@ namespace FourierIT_API.Controllers
             }
         }
 
+        [AllowAnonymous]
+        [HttpPost("verify-entity")]
+        public async Task<IActionResult> VerifyEntity([FromBody] VerifyEntityRequestDto request)
+        {
+            if (!ModelState.IsValid) return BadRequest(ModelState);
+
+            var result = await _entityVerificationService.VerifyEntityAsync(request.EntityTypeId, request.IdentificationNumber?.Trim() ?? string.Empty);
+            return Ok(new
+            {
+                isValid = result.IsValid,
+                message = result.ErrorMessage,
+                providerUnavailable = result.ProviderUnavailable
+            });
+        }
+
+        [AllowAnonymous]
+        [HttpGet("entity-types")]
+        public async Task<IActionResult> GetEntityTypes()
+        {
+            var entityTypes = await _context.EntityTypes
+                .AsNoTracking()
+                .OrderBy(et => et.EntityTypeId)
+                .Select(et => new
+                {
+                    et.EntityTypeId,
+                    et.Name
+                })
+                .ToListAsync();
+
+            return Ok(entityTypes);
+        }
+
+        private bool IsSuperAdminUser(User? user)
+        {
+            if (user == null) return false;
+            var superUserName = _configuration["SuperAdmin:Username"] ?? "superadmin";
+            return string.Equals(user.UserName, superUserName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string? ValidateEntityIdentificationNumber(int entityTypeId, string verificationNumber)
+        {
+            return entityTypeId switch
+            {
+                1 when !verificationNumber.All(char.IsDigit) || verificationNumber.Length != 13 => "South African ID numbers must be exactly 13 digits.",
+                2 when verificationNumber.Length < 4 => "Passport numbers must be at least 4 characters.",
+                3 when verificationNumber.Length < 4 => "Company registration numbers must be at least 4 characters.",
+                4 when verificationNumber.Length < 4 => "Trust registration numbers must be at least 4 characters.",
+                5 when verificationNumber.Length < 4 => "Partnership registration numbers must be at least 4 characters.",
+                6 when verificationNumber.Length < 4 => "Please enter a reference number for this entity type.",
+                _ => null
+            };
+        }
+
         [Authorize(Roles = "Department Admin")]
         [HttpPut("profile/{profileId}")]
         public async Task<IActionResult> UpdateManagedUser([FromRoute] int profileId, [FromBody] UpdateUserManagementRequestDto dto)
@@ -267,6 +334,7 @@ namespace FourierIT_API.Controllers
 
             var user = profile.User ?? await _userManager.FindByIdAsync(profile.UserId);
             if (user == null) return NotFound(new { error = "User not found for the profile." });
+            if (IsSuperAdminUser(user)) return BadRequest(new { error = "The Super Admin account cannot be edited." });
 
             var roleName = dto.Role.Trim();
             if (!await _roleManager.RoleExistsAsync(roleName))
@@ -307,6 +375,7 @@ namespace FourierIT_API.Controllers
 
             var user = profile.User ?? await _userManager.FindByIdAsync(profile.UserId);
             if (user == null) return NotFound(new { error = "User not found for the profile." });
+            if (IsSuperAdminUser(user)) return BadRequest(new { error = "The Super Admin account cannot be deleted." });
 
             _context.Profiles.Remove(profile);
             await _context.SaveChangesAsync();
@@ -336,6 +405,7 @@ namespace FourierIT_API.Controllers
 
                 userDtos.Add(new
                 {
+                    ProfileId = profile?.ProfileId,
                     user.Id,
                     user.UserName,
                     user.Email,
