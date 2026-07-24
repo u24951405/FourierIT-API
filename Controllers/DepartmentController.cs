@@ -97,5 +97,35 @@ namespace FourierIT_API.Controllers
             await _context.SaveChangesAsync();
             return NoContent();
         }
+
+        /// <summary>
+        /// Get all required document types for a specific department
+        /// </summary>
+        [Authorize]
+        [HttpGet("{DepartmentId}/required-documents")]
+        public async Task<IActionResult> GetRequiredDocuments([FromRoute] int DepartmentId)
+        {
+            var department = await _context.Departments
+                .FirstOrDefaultAsync(d => d.DepartmentId == DepartmentId);
+            if (department == null)
+                return NotFound(new { error = "Department not found." });
+
+            var requiredDocs = await _context.DepartmentDocumentTypes
+                .Where(ddt => ddt.DepartmentId == DepartmentId)
+                .Include(ddt => ddt.DocumentType)
+                .AsNoTracking()
+                .ToListAsync();
+
+            var result = requiredDocs.Select(ddt => new
+            {
+                departmentDocumentTypeId = ddt.DepartmentDocumentTypeId,
+                documentTypeId = ddt.DocumentTypeId,
+                documentTypeName = ddt.DocumentType?.TypeName ?? string.Empty,
+                isMandatory = ddt.IsMandatory,
+                createdAt = ddt.CreatedAt
+            }).ToList();
+
+            return Ok(result);
+        }
     }
 }

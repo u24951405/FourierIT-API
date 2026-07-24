@@ -155,8 +155,19 @@ namespace FourierIT_API.Controllers
                     requestedRoles.Add(userDto.Role.Trim());
                 }
 
-                if (requestedRoles.Count == 0)
+                // Only Super Admin can assign roles other than Document Owner during registration
+                // All normal users are registered as Document Owner by default
+                var currentUser = await _userManager.GetUserAsync(User);
+                var isSuperAdminRequest = currentUser != null && IsSuperAdminUser(currentUser);
+
+                if (!isSuperAdminRequest)
                 {
+                    // Normal user registration: always Document Owner, ignore any requested roles
+                    requestedRoles = new List<string> { "Document Owner" };
+                }
+                else if (requestedRoles.Count == 0)
+                {
+                    // Super Admin can explicitly request roles, or default to Document Owner
                     requestedRoles.Add("Document Owner");
                 }
 
@@ -424,6 +435,211 @@ namespace FourierIT_API.Controllers
 
             return Ok(userDtos);
         }
+
+        /// <summary>
+        /// [SUPER ADMIN ONLY] Get department admin (if assigned) for a specific department
+        /// </summary>
+        [Authorize]
+        [HttpGet("departments/{departmentId}/admin")]
+        public async Task<IActionResult> GetDepartmentAdmin([FromRoute] int departmentId)
+        {
+            var currentUser = await _userManager.GetUserAsync(User);
+            if (currentUser == null || !IsSuperAdminUser(currentUser))
+                return Forbid();
+
+            var department = await _context.Departments
+                .FirstOrDefaultAsync(d => d.DepartmentId == departmentId);
+            if (department == null)
+                return NotFound(new { error = "Department not found." });
+
+            var admin = await _userManager.Users
+                .Where(u => u.DepartmentId == departmentId)
+                .FirstOrDefaultAsync();
+
+            if (admin == null)
+                return Ok(new { departmentId, admin = (object?)null });
+
+            var hasAdminRole = await _userManager.IsInRoleAsync(admin, "Department Admin");
+            if (!hasAdminRole)
+                return Ok(new { departmentId, admin = (object?)null });
+
+            var profile = await _context.Profiles
+                .AsNoTracking()
+                .FirstOrDefaultAsync(p => p.UserId == admin.Id);
+
+            return Ok(new
+            {
+                departmentId,
+                admin = new DepartmentAdminDto
+                {
+                    UserId = admin.Id,
+                    UserName = admin.UserName ?? string.Empty,
+                    Email = admin.Email ?? string.Empty,
+                    DepartmentId = admin.DepartmentId,
+                    DepartmentName = department.DepartmentName,
+                    FirstName = profile?.FirstName ?? string.Empty,
+                    LastName = profile?.LastName ?? string.Empty,
+                    JobTitle = profile?.JobTitle ?? string.Empty
+                }
+            });
+        }
+
+        /// <summary>
+        /// [SUPER ADMIN ONLY] Create or assign a Department Admin to a department.
+        /// Only one active Department Admin per department is allowed.
+        /// </summary>
+        [Authorize]
+        [HttpPost("departments/{departmentId}/admin")]
+        public async Task<IActionResult> CreateOrAssignDepartmentAdmin(
+            [FromRoute] int departmentId,
+            [FromBody] CreateDepartmentAdminRequestDto dto)
+        {
+            var currentUser = await _userManager.GetUserAsync(User);
+            if (currentUser == null || !IsSuperAdminUser(currentUser))
+                return Forbid();
+
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var department = await _context.Departments
+                .FirstOrDefaultAsync(d => d.DepartmentId == departmentId);
+            if (department == null)
+                return NotFound(new { error = "Department not found." });
+
+            // Check if department already has an active admin
+            var existingAdmin = await _userManager.Users
+                .Where(u => u.DepartmentId == departmentId)
+                .FirstOrDefaultAsync();
+
+            if (existingAdmin != null)
+            {
+                var isAdmin = await _userManager.IsInRoleAsync(existingAdmin, "Department Admin");
+                if (isAdmin)
+                    return Conflict(new { error = "Department already has an active Department Admin. Remove or reassign the current admin first." });
+            }
+
+            User? targetUser = null;
+
+            if (!string.IsNullOrWhiteSpace(dto.UserId))
+            {
+                // Assign existing user as Department Admin
+                targetUser = await _userManager.FindByIdAsync(dto.UserId.Trim());
+                if (targetUser == null)
+                    return NotFound(new { error = "User not found." });
+
+                // Check if user is already assigned to another department
+                if (targetUser.DepartmentId.HasValue && targetUser.DepartmentId != departmentId)
+                    return BadRequest(new { error = "User is already assigned to another department." });
+            }
+            else
+            {
+                // Create new Department Admin user
+                if (string.IsNullOrWhiteSpace(dto.Username) || string.IsNullOrWhiteSpace(dto.Password) || string.IsNullOrWhiteSpace(dto.EmailAddress))
+                    return BadRequest(new { error = "Username, password, and email are required to create a new Department Admin." });
+
+                var existingUser = await _userManager.FindByNameAsync(dto.Username.ToLower());
+                if (existingUser != null)
+                    return BadRequest(new { error = "Username already exists." });
+
+                var entityType = await _context.EntityTypes.FirstOrDefaultAsync(et => et.EntityTypeId == 1); // SA Individual
+                if (entityType == null)
+                    return StatusCode(StatusCodes.Status500InternalServerError, new { error = "Default entity type not found." });
+
+                targetUser = new User
+                {
+                    UserName = dto.Username?.ToLower().Trim(),
+                    Email = dto.EmailAddress?.Trim(),
+                    PhoneNumber = dto.PhoneNumber,
+                    AccountStatus = "Active",
+                    DepartmentId = departmentId,
+                    EntityTypeId = 1, // Default to SA Individual
+                    EntityIdentificationNumber = string.Empty
+                };
+
+                var createResult = await _userManager.CreateAsync(targetUser, dto.Password ?? string.Empty);
+                if (!createResult.Succeeded)
+                    return StatusCode(StatusCodes.Status500InternalServerError, createResult.Errors);
+
+                // Create profile
+                var profile = new Profile
+                {
+                    FirstName = dto.FirstName ?? string.Empty,
+                    LastName = dto.LastName ?? string.Empty,
+                    PhoneNumber = dto.PhoneNumber ?? string.Empty,
+                    JobTitle = dto.JobTitle ?? string.Empty,
+                    UserId = targetUser.Id
+                };
+                _context.Profiles.Add(profile);
+                await _context.SaveChangesAsync();
+            }
+
+            // Ensure user is assigned to department
+            if (!targetUser.DepartmentId.HasValue || targetUser.DepartmentId != departmentId)
+            {
+                targetUser.DepartmentId = departmentId;
+                await _userManager.UpdateAsync(targetUser);
+            }
+
+            // Remove any existing Department Admin role
+            var existingRoles = await _userManager.GetRolesAsync(targetUser);
+            if (existingRoles.Any())
+            {
+                await _userManager.RemoveFromRolesAsync(targetUser, existingRoles);
+            }
+
+            // Assign Department Admin role
+            var roleResult = await _userManager.AddToRoleAsync(targetUser, "Department Admin");
+            if (!roleResult.Succeeded)
+                return StatusCode(StatusCodes.Status500InternalServerError, roleResult.Errors);
+
+            var adminProfile = await _context.Profiles
+                .AsNoTracking()
+                .FirstOrDefaultAsync(p => p.UserId == targetUser.Id);
+
+            return Ok(new
+            {
+                message = "Department Admin assigned successfully.",
+                admin = new DepartmentAdminDto
+                {
+                    UserId = targetUser.Id,
+                    UserName = targetUser.UserName ?? string.Empty,
+                    Email = targetUser.Email ?? string.Empty,
+                    DepartmentId = targetUser.DepartmentId,
+                    DepartmentName = department.DepartmentName,
+                    FirstName = adminProfile?.FirstName ?? string.Empty,
+                    LastName = adminProfile?.LastName ?? string.Empty,
+                    JobTitle = adminProfile?.JobTitle ?? string.Empty
+                }
+            });
+        }
+
+        /// <summary>
+        /// [SUPER ADMIN ONLY] Remove a Department Admin from a department (does not delete user).
+        /// </summary>
+        [Authorize]
+        [HttpDelete("departments/{departmentId}/admin")]
+        public async Task<IActionResult> RemoveDepartmentAdmin([FromRoute] int departmentId)
+        {
+            var currentUser = await _userManager.GetUserAsync(User);
+            if (currentUser == null || !IsSuperAdminUser(currentUser))
+                return Forbid();
+
+            var department = await _context.Departments
+                .FirstOrDefaultAsync(d => d.DepartmentId == departmentId);
+            if (department == null)
+                return NotFound(new { error = "Department not found." });
+
+            var admin = await _userManager.Users
+                .FirstOrDefaultAsync(u => u.DepartmentId == departmentId);
+
+            if (admin == null)
+                return NotFound(new { error = "No Department Admin assigned to this department." });
+
+            var removeResult = await _userManager.RemoveFromRoleAsync(admin, "Department Admin");
+            if (!removeResult.Succeeded)
+                return StatusCode(StatusCodes.Status500InternalServerError, removeResult.Errors);
+
+            return Ok(new { message = "Department Admin removed successfully." });
+        }
     }
 }
-
