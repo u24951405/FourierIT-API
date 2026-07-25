@@ -76,6 +76,19 @@ builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 builder.Services.AddScoped<IComplianceService, ComplianceService>();
 
+// Register Audit Log Service (mock, read-only)
+builder.Services.AddScoped<FourierIT_API.Interfaces.IAuditLogService, FourierIT_API.Services.AuditLogService>();
+
+// Register Azure Blob Client
+builder.Services.AddSingleton(sp =>
+    new Azure.Storage.Blobs.BlobServiceClient(
+        sp.GetRequiredService<IConfiguration>()["AzureBlobStorage:ConnectionString"]));
+
+// Register Backup Service
+builder.Services.AddScoped<FourierIT_API.Interfaces.IBackupService, FourierIT_API.Services.BackupService>();
+
+// Register Daily Backup Service as a Hosted Service
+builder.Services.AddHostedService<DailyBackupService>();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("EmailSettings"));
 builder.Services.AddScoped<IEmailService, EmailService>();
 

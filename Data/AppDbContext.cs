@@ -52,6 +52,9 @@ namespace FourierIT_API.Data
         public DbSet<ComplianceAlert> ComplianceAlerts { get; set; }
         public DbSet<ComplianceAuditLog> ComplianceAuditLogs { get; set; }
 
+        // System (Backup, Restore, Auditlog) Db Sets 
+        public DbSet<AuditLog> AuditLogs { get; set; }
+        public DbSet<Backup> Backups { get; set; }
         // Location DbSets
         public DbSet<Address> Addresses { get; set; }
         public DbSet<City> Cities { get; set; }
