@@ -4,6 +4,7 @@ using FourierIT_API.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace FourierIT_API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260724182826_AddDepartmentDocumentTypes")]
+    partial class AddDepartmentDocumentTypes
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -102,54 +105,6 @@ namespace FourierIT_API.Migrations
 
                     b.HasIndex("SuburbId");
 
-                    b.ToTable("Address");
-                });
-
-            modelBuilder.Entity("FourierIT_API.Models.AuditLog", b =>
-                {
-                    b.Property<int>("AuditLogId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("AuditLogId"));
-
-                    b.Property<string>("ActionCode")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)");
-
-                    b.Property<string>("BlockHash")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.Property<string>("Description")
-                        .HasMaxLength(300)
-                        .HasColumnType("nvarchar(300)");
-
-                    b.Property<string>("PreviousBlockHash")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.Property<int?>("RecordID")
-                        .HasColumnType("int");
-
-                    b.Property<string>("TableAffected")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<DateTimeOffset>("TimeStamp")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("UserId")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(450)");
-
-                    b.HasKey("AuditLogId");
-
-                    b.HasIndex("UserId");
-
-                    b.ToTable("AuditLogs");
                     b.ToTable("Addresses");
                 });
 
@@ -171,9 +126,6 @@ namespace FourierIT_API.Migrations
 
                     b.Property<bool>("IsManualBackup")
                         .HasColumnType("bit");
-
-                    b.Property<string>("UserId")
-                        .HasColumnType("nvarchar(max)");
 
                     b.HasKey("BackupId");
 
@@ -2933,17 +2885,6 @@ namespace FourierIT_API.Migrations
                         .IsRequired();
 
                     b.Navigation("Suburb");
-                });
-
-            modelBuilder.Entity("FourierIT_API.Models.AuditLog", b =>
-                {
-                    b.HasOne("FourierIT_API.Models.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("FourierIT_API.Models.BlobHistory", b =>

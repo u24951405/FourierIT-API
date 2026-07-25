@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using System.Runtime.CompilerServices;
 
 namespace FourierIT_API.Controllers
@@ -17,12 +18,14 @@ namespace FourierIT_API.Controllers
         private readonly AppDbContext _context;
         private readonly UserManager<User> _userManager;
         private readonly RoleManager<Role> _roleManager;
-        public AssignRoleController(AppDbContext context, UserManager<User> userManager, RoleManager<Role> roleManager)
+        private readonly IConfiguration _configuration;
+        public AssignRoleController(AppDbContext context, UserManager<User> userManager, RoleManager<Role> roleManager, IConfiguration configuration)
         {
             //this is assigning the variables 
             _context = context;
             _userManager = userManager;
             _roleManager = roleManager;
+            _configuration = configuration;
         }
         [HttpGet("{userName}/Roles")]
         public async Task<IActionResult> GetUserRoles([FromRoute] string userName)
@@ -44,6 +47,7 @@ namespace FourierIT_API.Controllers
 
             var user = await _userManager.FindByNameAsync(userName);
             if (user == null) return NotFound(new { error = "User not found." });
+            if (IsSuperAdminUser(user)) return BadRequest(new { error = "The Super Admin account cannot be modified." });
 
             roleName = roleName.Trim();
 
@@ -73,6 +77,7 @@ namespace FourierIT_API.Controllers
 
             var user = await _userManager.FindByNameAsync(userName);
             if (user == null) return NotFound();
+            if (IsSuperAdminUser(user)) return BadRequest(new { error = "The Super Admin account cannot be modified." });
 
             var oldRole = dto.OldRole.Trim();
             var newRole = dto.NewRole.Trim();
@@ -117,6 +122,7 @@ namespace FourierIT_API.Controllers
 
             var user = await _userManager.FindByNameAsync(userName);
             if (user == null) return NotFound();
+            if (IsSuperAdminUser(user)) return BadRequest(new { error = "The Super Admin account cannot be modified." });
 
             roleName = roleName.Trim();
 
@@ -129,6 +135,12 @@ namespace FourierIT_API.Controllers
             if (!result.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, result.Errors);
 
             return Ok(new { userName = user.UserName, roles = await _userManager.GetRolesAsync(user) });
+        }
+        private bool IsSuperAdminUser(User? user)
+        {
+            if (user == null) return false;
+            var superUserName = _configuration["SuperAdmin:Username"] ?? "superadmin";
+            return string.Equals(user.UserName, superUserName, StringComparison.OrdinalIgnoreCase);
         }
     }
 }

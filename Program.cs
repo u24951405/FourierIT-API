@@ -89,6 +89,15 @@ builder.Services.AddScoped<FourierIT_API.Interfaces.IBackupService, FourierIT_AP
 
 // Register Daily Backup Service as a Hosted Service
 builder.Services.AddHostedService<DailyBackupService>();
+builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("EmailSettings"));
+builder.Services.AddScoped<IEmailService, EmailService>();
+
+builder.Services.Configure<FourierIT_API.Models.EntityVerificationOptions>(
+    builder.Configuration.GetSection("EntityVerification"));
+builder.Services.AddScoped<FourierIT_API.Services.LocalEntityVerificationService>();
+builder.Services.AddHttpClient<FourierIT_API.Services.ExternalEntityVerificationService>();
+builder.Services.AddScoped<FourierIT_API.Services.ExternalEntityVerificationService>();
+builder.Services.AddScoped<FourierIT_API.Interfaces.IEntityVerificationService, FourierIT_API.Services.FallbackEntityVerificationService>();
 
 builder.Services.AddIdentity<User, Role>(options =>
 {
@@ -124,6 +133,8 @@ builder.Services.AddAuthentication(options =>
 });
 
 builder.Services.AddScoped<ITokenService, TokenService>();
+// Register SuperAdmin authorization handler so the seeded Super Admin user bypasses role-based checks
+builder.Services.AddSingleton<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, FourierIT_API.Security.SuperAdminRoleHandler>();
 
 var app = builder.Build();
 
@@ -140,15 +151,66 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+// Note: Automatic migration and seeding for development.
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.MigrateAsync();
+    await DevLookupSeed.EnsureBranchesExistAsync(db);
+}
 
-// Note: Automatic migration disabled - run "dotnet ef database update" manually
-// to apply migrations if you have a fresh database
-// Uncomment the code below only for fresh database setup:
-// using (var scope = app.Services.CreateScope())
-// {
-//     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-//     await db.Database.MigrateAsync();
-//     await DevLookupSeed.EnsureBranchesExistAsync(db);
-// }
+// Ensure the seeded Super Admin user exists on startup (best-effort).
+// This user is granted full access via a dedicated claim, without relying on a special seeded role.
+using (var scope = app.Services.CreateScope())
+{
+    try
+    {
+        var userMgr = scope.ServiceProvider.GetRequiredService<Microsoft.AspNetCore.Identity.UserManager<FourierIT_API.Models.User>>();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        var superUserName = builder.Configuration["SuperAdmin:Username"] ?? "superadmin";
+        var superPassword = builder.Configuration["SuperAdmin:Password"] ?? "Sup3r@dmin!";
+        var superEmail = builder.Configuration["SuperAdmin:Email"] ?? "superadmin@fourier.local";
+
+        var superUser = await userMgr.FindByNameAsync(superUserName);
+        if (superUser == null)
+        {
+            superUser = new FourierIT_API.Models.User
+            {
+                UserName = superUserName,
+                NormalizedUserName = superUserName.ToUpperInvariant(),
+                Email = superEmail,
+                NormalizedEmail = superEmail.ToUpperInvariant(),
+                EmailConfirmed = true,
+                AccountStatus = "Active"
+            };
+
+            var createResult = await userMgr.CreateAsync(superUser, superPassword);
+            if (!createResult.Succeeded)
+            {
+                logger.LogWarning("Failed to seed Super Admin user: {Errors}", string.Join(", ", createResult.Errors.Select(e => e.Description)));
+            }
+        }
+        else
+        {
+            // If the configured Super Admin password has changed since the account was first seeded,
+            // reset the password so the configured credential remains valid.
+            if (!string.IsNullOrWhiteSpace(superPassword) && !await userMgr.CheckPasswordAsync(superUser, superPassword))
+            {
+                var resetToken = await userMgr.GeneratePasswordResetTokenAsync(superUser);
+                var resetResult = await userMgr.ResetPasswordAsync(superUser, resetToken, superPassword);
+                if (!resetResult.Succeeded)
+                {
+                    logger.LogWarning("Failed to reset Super Admin password: {Errors}", string.Join(", ", resetResult.Errors.Select(e => e.Description)));
+                }
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        // Best-effort only; do not crash the app if seeding fails.
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        logger.LogWarning(ex, "Super Admin seeding encountered an exception.");
+    }
+}
 
 app.Run();

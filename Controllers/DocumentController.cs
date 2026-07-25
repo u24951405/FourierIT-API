@@ -133,6 +133,17 @@ namespace FourierIT_API.Controllers
             if (entityType == null)
                 return BadRequest(new { error = "Invalid entity type selected." });
 
+            // Prevent duplicate uploads of the same document type for the same user
+            var existingUpload = await _context.Documents
+                .AnyAsync(d => d.UserId == user.Id
+                    && d.DocumentTypeId == dto.DocumentTypeId
+                    && d.CurrentStatus != "Deleted");
+
+            if (existingUpload)
+            {
+                return BadRequest(new { error = "You have already uploaded this document type. Please choose a different type or update the existing document." });
+            }
+
             // Ensure the uploaded document type is allowed/required for the selected entity
             var allowedForEntity = entityType.RequiredDocuments.Any(rd => rd.DocumentTypeId == dto.DocumentTypeId);
             if (!allowedForEntity)

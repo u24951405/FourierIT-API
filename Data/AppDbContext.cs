@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+
 namespace FourierIT_API.Data
 {
     public class AppDbContext : IdentityDbContext<User, Role, string>
@@ -16,6 +17,7 @@ namespace FourierIT_API.Data
         public DbSet<Branch> Branches { get; set; } = null!;
         public DbSet<InstitutionType> InstitutionTypes { get; set; } = null!;
         public DbSet<Institution> Institutions { get; set; }
+        public DbSet<InstitutionInvitation> InstitutionInvitations { get; set; }
         public DbSet<RolePermission> RolePermissions { get; set; }
         
         // Secure vault DbSets
@@ -24,6 +26,7 @@ namespace FourierIT_API.Data
         public DbSet<DocumentAccessLog> DocumentAccessLogs { get; set; }
 
         public DbSet<DocumentType> DocumentTypes { get; set; }
+        public DbSet<DepartmentDocumentType> DepartmentDocumentTypes { get; set; }
         public DbSet<DocumentBlob> DocumentBlobs { get; set; }
         public DbSet<BlobHistory> BlobHistories { get; set; }
         public DbSet<FICARule> FICARules { get; set; }
@@ -52,6 +55,31 @@ namespace FourierIT_API.Data
         // System (Backup, Restore, Auditlog) Db Sets 
         public DbSet<AuditLog> AuditLogs { get; set; }
         public DbSet<Backup> Backups { get; set; }
+        // Location DbSets
+        public DbSet<Address> Addresses { get; set; }
+        public DbSet<City> Cities { get; set; }
+        public DbSet<Suburb> Suburbs { get; set; }
+        public DbSet<Province> Provinces { get; set; }
+
+        // System DbSets
+        public DbSet<Backup> Backups { get; set; }
+        public DbSet<Permission> Permissions { get; set; }
+        public DbSet<SecurityQuestion> SecurityQuestions { get; set; }
+        public DbSet<FICARuleHistory> FICARuleHistories { get; set; }
+
+        // Risk Rating DbSets
+        public DbSet<RiskVariable> RiskVariables { get; set; }
+        public DbSet<RiskRatingVariable> RiskRatingVariables { get; set; }
+        public DbSet<ClientRiskRating> ClientRiskRatings { get; set; }
+
+        // User-Related DbSets
+        public DbSet<UserSecurityQuestion> UserSecurityQuestions { get; set; }
+        public DbSet<UserNotification> UserNotifications { get; set; }
+        public DbSet<Notification> Notifications { get; set; }
+        public DbSet<InstitutionMembers> InstitutionMembers { get; set; }
+        public DbSet<UserRole> UserRoles { get; set; }
+        public DbSet<PEPList> PEPLists { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -173,6 +201,62 @@ namespace FourierIT_API.Data
                 new RequiredDocument { RequiredDocumentId = 24, EntityTypeId = 5, DocumentTypeId = 19, IsMandatory = true, Description = "Address proof for partner required" }
             };
             modelBuilder.Entity<RequiredDocument>().HasData(requiredDocuments);
+
+            // Seed Departments - required for department-admin workflow
+            // Note: These departments reference BranchId = 1, which should exist or be seeded separately
+            List<Department> departments = new List<Department>
+            {
+                new Department { DepartmentId = 1, DepartmentName = "Fourier IT Innovation", BranchId = 1, CreatedAt = DateTimeOffset.UtcNow },
+                new Department { DepartmentId = 2, DepartmentName = "Fourier-E Consultation", BranchId = 1, CreatedAt = DateTimeOffset.UtcNow },
+                new Department { DepartmentId = 3, DepartmentName = "RQTech", BranchId = 1, CreatedAt = DateTimeOffset.UtcNow },
+                new Department { DepartmentId = 4, DepartmentName = "Fourier Recruitment", BranchId = 1, CreatedAt = DateTimeOffset.UtcNow }
+            };
+            modelBuilder.Entity<Department>().HasData(departments);
+
+            // Seed DepartmentDocumentTypes - KYC/FICA requirements per department
+            // All departments require standard KYC documents
+            List<DepartmentDocumentType> departmentDocumentTypes = new List<DepartmentDocumentType>
+            {
+                // Fourier IT Innovation - KYC/FICA core documents
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 1, DepartmentId = 1, DocumentTypeId = 1, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 2, DepartmentId = 1, DocumentTypeId = 2, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 3, DepartmentId = 1, DocumentTypeId = 3, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 4, DepartmentId = 1, DocumentTypeId = 7, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 5, DepartmentId = 1, DocumentTypeId = 8, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 6, DepartmentId = 1, DocumentTypeId = 10, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 7, DepartmentId = 1, DocumentTypeId = 11, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 8, DepartmentId = 1, DocumentTypeId = 12, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+
+                // Fourier-E Consultation - KYC/FICA core documents
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 9, DepartmentId = 2, DocumentTypeId = 1, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 10, DepartmentId = 2, DocumentTypeId = 4, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 11, DepartmentId = 2, DocumentTypeId = 5, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 12, DepartmentId = 2, DocumentTypeId = 7, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 13, DepartmentId = 2, DocumentTypeId = 10, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 14, DepartmentId = 2, DocumentTypeId = 11, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 15, DepartmentId = 2, DocumentTypeId = 12, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 16, DepartmentId = 2, DocumentTypeId = 13, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+
+                // RQTech - KYC/FICA core documents
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 17, DepartmentId = 3, DocumentTypeId = 1, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 18, DepartmentId = 3, DocumentTypeId = 2, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 19, DepartmentId = 3, DocumentTypeId = 7, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 20, DepartmentId = 3, DocumentTypeId = 8, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 21, DepartmentId = 3, DocumentTypeId = 11, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 22, DepartmentId = 3, DocumentTypeId = 13, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 23, DepartmentId = 3, DocumentTypeId = 14, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 24, DepartmentId = 3, DocumentTypeId = 18, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+
+                // Fourier Recruitment - KYC/FICA core documents
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 25, DepartmentId = 4, DocumentTypeId = 1, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 26, DepartmentId = 4, DocumentTypeId = 2, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 27, DepartmentId = 4, DocumentTypeId = 3, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 28, DepartmentId = 4, DocumentTypeId = 4, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 29, DepartmentId = 4, DocumentTypeId = 5, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 30, DepartmentId = 4, DocumentTypeId = 7, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 31, DepartmentId = 4, DocumentTypeId = 10, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow }
+            };
+            modelBuilder.Entity<DepartmentDocumentType>().HasData(departmentDocumentTypes);
 
             // Configure UserRole many-to-many relationship
 
@@ -348,6 +432,19 @@ namespace FourierIT_API.Data
                 .HasMany(b => b.Departments)
                 .WithOne(d => d.Branch)
                 .HasForeignKey(d => d.BranchId);
+
+            // Configure DepartmentDocumentType relationships
+            modelBuilder.Entity<DepartmentDocumentType>()
+                .HasOne(ddt => ddt.Department)
+                .WithMany(d => d.DepartmentDocumentTypes)
+                .HasForeignKey(ddt => ddt.DepartmentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<DepartmentDocumentType>()
+                .HasOne(ddt => ddt.DocumentType)
+                .WithMany()
+                .HasForeignKey(ddt => ddt.DocumentTypeId)
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure ClientEnlistment relationships
             modelBuilder.Entity<ClientEnlistment>()
@@ -533,28 +630,28 @@ namespace FourierIT_API.Data
                 .HasMany(cs => cs.DocumentChecks)
                 .WithOne(dc => dc.ComplianceStatus)
                 .HasForeignKey(dc => dc.ComplianceStatusId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure ComplianceStatus one-to-many with ComplianceHistory
             modelBuilder.Entity<ComplianceStatus>()
                 .HasMany(cs => cs.ComplianceHistories)
                 .WithOne(ch => ch.ComplianceStatus)
                 .HasForeignKey(ch => ch.ComplianceStatusId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure ComplianceStatus one-to-many with ComplianceAlert
             modelBuilder.Entity<ComplianceStatus>()
                 .HasMany(cs => cs.ComplianceAlerts)
                 .WithOne(ca => ca.ComplianceStatus)
                 .HasForeignKey(ca => ca.ComplianceStatusId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure ComplianceStatus one-to-many with ComplianceAuditLog
             modelBuilder.Entity<ComplianceStatus>()
                 .HasMany(cs => cs.AuditLogs)
                 .WithOne(al => al.ComplianceStatus)
                 .HasForeignKey(al => al.ComplianceStatusId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure User one-to-one with ComplianceStatus (optional)
             modelBuilder.Entity<User>()
@@ -587,7 +684,7 @@ namespace FourierIT_API.Data
                 .HasOne(dc => dc.ManualReviewedByUser)
                 .WithMany()
                 .HasForeignKey(dc => dc.ManuallyReviewedBy)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             modelBuilder.Entity<DocumentComplianceCheck>()
                 .HasOne(dc => dc.AppliedRule)
@@ -600,20 +697,20 @@ namespace FourierIT_API.Data
                 .HasOne(ch => ch.ChangedByUser)
                 .WithMany()
                 .HasForeignKey(ch => ch.ChangedBy)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             modelBuilder.Entity<ComplianceHistory>()
                 .HasOne(ch => ch.ApprovedByUser)
                 .WithMany()
                 .HasForeignKey(ch => ch.ApprovedBy)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure ComplianceAlert relationships
             modelBuilder.Entity<ComplianceAlert>()
                 .HasOne(ca => ca.Document)
                 .WithMany()
                 .HasForeignKey(ca => ca.DocumentId)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             modelBuilder.Entity<ComplianceAlert>()
                 .HasOne(ca => ca.User)
@@ -625,7 +722,7 @@ namespace FourierIT_API.Data
                 .HasOne(ca => ca.AcknowledgedByUser)
                 .WithMany()
                 .HasForeignKey(ca => ca.AcknowledgedBy)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             modelBuilder.Entity<ComplianceAlert>()
                 .HasOne(ca => ca.ResolvedByUser)
@@ -637,7 +734,7 @@ namespace FourierIT_API.Data
                 .HasOne(ca => ca.EscalatedToUser)
                 .WithMany()
                 .HasForeignKey(ca => ca.EscalatedTo)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Configure ComplianceAuditLog relationships
             modelBuilder.Entity<ComplianceAuditLog>()
@@ -650,7 +747,7 @@ namespace FourierIT_API.Data
                 .HasOne(al => al.Document)
                 .WithMany()
                 .HasForeignKey(al => al.DocumentId)
-                .OnDelete(DeleteBehavior.SetNull);
+                .OnDelete(DeleteBehavior.NoAction);
 
             modelBuilder.Entity<ComplianceAuditLog>()
                 .HasOne(al => al.CheckRecord)

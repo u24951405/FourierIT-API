@@ -24,6 +24,9 @@ namespace FourierIT_API.Models
 
         // One-to-many relationship with ComplianceStatus (FICA Compliance)
         public ICollection<ComplianceStatus> ComplianceStatuses { get; set; } = new List<ComplianceStatus>();
+
+        // One-to-many relationship with DepartmentDocumentType (required documents for this department)
+        public ICollection<DepartmentDocumentType> DepartmentDocumentTypes { get; set; } = new List<DepartmentDocumentType>();
     }
 
 }

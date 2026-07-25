@@ -51,6 +51,9 @@ namespace FourierIT_API.Models
         public int? EntityTypeId { get; set; }
         public EntityType? EntityType { get; set; }
 
+        [MaxLength(100)]
+        public string EntityIdentificationNumber { get; set; } = string.Empty;
+
         // Many-to-one relationship with Department (a user belongs to a department)
         public int? DepartmentId { get; set; }
 

@@ -34,8 +34,14 @@ namespace FourierIT_API.Service
             var roles = await _userManager.GetRolesAsync(user);
             foreach (var role in roles)
             {
-                // add ClaimTypes.Role (the default RoleClaimType in ASP.NET Core) to the claims collection
                 claims.Add(new Claim(ClaimTypes.Role, role));
+            }
+
+            // If this is the seeded Super Admin account, add a dedicated bypass claim.
+            var superUserName = _config["SuperAdmin:Username"] ?? "superadmin";
+            if (string.Equals(user.UserName, superUserName, StringComparison.OrdinalIgnoreCase))
+            {
+                claims.Add(new Claim("superadmin", "true"));
             }
 
             var creds = new SigningCredentials(_key, SecurityAlgorithms.HmacSha512Signature);

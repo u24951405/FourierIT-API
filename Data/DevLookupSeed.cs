@@ -19,31 +19,40 @@ namespace FourierIT_API.Data
             "Investment Bank",
             "Microfinance Institution",
             "Pension Fund Administrator",
+            "Payment Service Provider",
             "Regulatory / Supervisory Body",
             "Retail Banking Group",
             "Stockbroker / Wealth Manager",
             "Other Financial Services",
         };
 
+        private static readonly (string InstitutionName, string VerifiedDomain, int RegNumber, string InstitutionTypeName)[] SampleInstitutions =
+        {
+            ("Fourier IT", "fourier.local", 1, "Other Financial Services"),
+            ("Standard Bank Group", "standardbank.co.za", 1002, "Commercial Bank"),
+            ("Old Mutual Insurance", "oldmutual.com", 1003, "Insurance Underwriter"),
+            ("Sanlam Investments", "sanlam.co.za", 1004, "Asset Management"),
+            ("Investec Investment Bank", "investec.com", 1005, "Investment Bank"),
+            ("JSE Limited", "jse.co.za", 1006, "Exchange / Trading Venue"),
+            ("Yoco Payments", "yoco.co.za", 1007, "FinTech"),
+            ("Capitec Credit Solutions", "capitec.co.za", 1008, "Credit Provider (non-bank)"),
+            ("Alexander Forbes Retirement Services", "alexforbes.co.za", 1009, "Pension Fund Administrator"),
+            ("PayGate Payment Services", "paygate.co.za", 1010, "Payment Service Provider"),
+            ("RMB Stockbrokers", "rmb.co.za", 1011, "Stockbroker / Wealth Manager"),
+            ("Blue Financial Services", "bluefin.co.za", 1012, "Microfinance Institution"),
+            ("Nedbank Retail Banking", "nedbank.co.za", 1013, "Retail Banking Group"),
+            ("Financial Sector Conduct Authority", "fsca.co.za", 1014, "Regulatory / Supervisory Body"),
+            ("Absa Corporate Treasury", "absa.co.za", 1015, "Corporate Treasury / Holding"),
+        };
+
         public static async Task EnsureBranchesExistAsync(AppDbContext db, CancellationToken ct = default)
         {
             await EnsureFinancialInstitutionTypesAsync(db, ct);
+            await EnsureSampleInstitutionsAsync(db, ct);
 
             var typeId = await ResolveDefaultInstitutionTypeIdAsync(db, ct);
 
-            if (!await db.Institutions.AnyAsync(ct))
-            {
-                db.Institutions.Add(new Institution
-                {
-                    InstitutionName = "Fourier IT",
-                    VerifiedDomain = "fourier.local",
-                    RegNumber = 1,
-                    TypeId = typeId
-                });
-                await db.SaveChangesAsync(ct);
-            }
-
-            var institutionId = await db.Institutions.Select(i => i.InstitutionId).FirstAsync(ct);
+            var institutionId = await ResolveSeedInstitutionIdAsync(db, ct);
 
             if (!await db.Branches.AnyAsync(ct))
             {
@@ -68,6 +77,56 @@ namespace FourierIT_API.Data
             }
 
             await db.SaveChangesAsync(ct);
+        }
+
+        private static async Task EnsureSampleInstitutionsAsync(AppDbContext db, CancellationToken ct)
+        {
+            var institutionsToAdd = new List<Institution>();
+
+            foreach (var (name, domain, regNumber, typeName) in SampleInstitutions)
+            {
+                if (await db.Institutions.AnyAsync(i => i.InstitutionName == name, ct))
+                    continue;
+
+                var institutionType = await db.InstitutionTypes
+                    .Where(t => t.InstitutionTypeName == typeName)
+                    .Select(t => new { t.InstitutionTypeId })
+                    .FirstOrDefaultAsync(ct);
+
+                if (institutionType == null)
+                    continue;
+
+                institutionsToAdd.Add(new Institution
+                {
+                    InstitutionName = name,
+                    VerifiedDomain = domain,
+                    RegNumber = regNumber,
+                    TypeId = institutionType.InstitutionTypeId
+                });
+            }
+
+            if (institutionsToAdd.Count > 0)
+            {
+                db.Institutions.AddRange(institutionsToAdd);
+                await db.SaveChangesAsync(ct);
+            }
+        }
+
+        private static async Task<int> ResolveSeedInstitutionIdAsync(AppDbContext db, CancellationToken ct)
+        {
+            const string preferred = "Fourier IT";
+            var id = await db.Institutions
+                .Where(i => i.InstitutionName == preferred)
+                .Select(i => i.InstitutionId)
+                .FirstOrDefaultAsync(ct);
+
+            if (id != 0)
+                return id;
+
+            return await db.Institutions
+                .OrderBy(i => i.InstitutionId)
+                .Select(i => i.InstitutionId)
+                .FirstAsync(ct);
         }
 
         /// <summary>Prefer a sensible default for seeded demo data; otherwise first type by id.</summary>

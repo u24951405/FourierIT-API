@@ -26,5 +26,15 @@
         /// List of documents being requested
         /// </summary>
         public List<RequestedDocumentTypeDto> RequestedDocuments { get; set; } = new();
+
+        /// <summary>
+        /// Optional deadline for submission of the requested documents.
+        /// </summary>
+        public DateTimeOffset? SubmissionDeadline { get; set; }
+
+        /// <summary>
+        /// Reference number supplied by the requesting institution.
+        /// </summary>
+        public string ReferenceNumber { get; set; } = string.Empty;
     }
 }

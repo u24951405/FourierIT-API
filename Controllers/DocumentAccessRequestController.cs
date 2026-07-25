@@ -121,6 +121,29 @@ namespace FourierIT_API.Controllers
             }
             else if (targetDepartment != null)
             {
+                // Validate that requested document types belong to the department's required documents
+                var departmentRequiredDocTypeIds = await _context.DepartmentDocumentTypes
+                    .Where(ddt => ddt.DepartmentId == targetDepartment.DepartmentId)
+                    .Select(ddt => ddt.DocumentTypeId)
+                    .ToListAsync();
+
+                if (!departmentRequiredDocTypeIds.Any())
+                    return BadRequest(new { error = "Target department has no required document types configured." });
+
+                var invalidDocumentTypes = requestedDocumentTypeIds
+                    .Except(departmentRequiredDocTypeIds)
+                    .ToList();
+
+                if (invalidDocumentTypes.Any())
+                {
+                    return BadRequest(new
+                    {
+                        error = "One or more requested document types do not belong to the target department's required documents.",
+                        invalidDocumentTypeIds = invalidDocumentTypes,
+                        allowedDocumentTypeIds = departmentRequiredDocTypeIds
+                    });
+                }
+
                 // For department requests, check if at least one user in the department has these documents
                 var departmentUserIds = await _context.Users
                     .Where(u => u.DepartmentId == targetDepartment.DepartmentId)
@@ -210,6 +233,8 @@ namespace FourierIT_API.Controllers
                 request.TargetDepartmentId,
                 request.TargetUserId,
                 request.Status,
+                submissionDeadline = dto.SubmissionDeadline,
+                referenceNumber = dto.ReferenceNumber?.Trim(),
                 request.RequestDate,
                 RequestedDocumentTypeIds = requestedDocumentTypeIds,
                 Message = dto.RequestType == "Department" 
@@ -579,6 +604,57 @@ namespace FourierIT_API.Controllers
 
             var fileBytes = await _documentService.DownloadDocumentAsync(documentId, request.TargetUserId);
             return File(fileBytes, "application/octet-stream", document.FileName);
+        }
+
+        [AllowAnonymous]
+        [HttpGet("institution-access/documents")]
+        public async Task<IActionResult> GetApprovedInstitutionDocuments([FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest(new { error = "A valid access token is required." });
+
+            var accessToken = await _context.AccessTokens
+                .Include(at => at.institutionEnquiryRequest)
+                    .ThenInclude(ier => ier.RequestedDocumentTypes)
+                .Include(at => at.institutionEnquiryRequest)
+                    .ThenInclude(r => r.Institution)
+                .FirstOrDefaultAsync(at => at.TokenString == token);
+
+            if (accessToken == null ||
+                accessToken.IsRevoked ||
+                accessToken.ExpiryTimeStamp <= DateTimeOffset.UtcNow)
+            {
+                if (accessToken != null && !accessToken.IsRevoked)
+                {
+                    accessToken.IsRevoked = true;
+                    await _context.SaveChangesAsync();
+                }
+
+                return Unauthorized(new { error = "The access token is invalid or has expired." });
+            }
+
+            var request = accessToken.institutionEnquiryRequest;
+            if (request.Status != "Approved")
+                return Forbid();
+
+            var approvedDocuments = await _context.DocumentAccessApprovals
+                .AsNoTracking()
+                .Include(daa => daa.Document)
+                    .ThenInclude(d => d.DocumentType)
+                .Where(daa => daa.EnquiryRequestId == request.EnquiryRequestId
+                    && !daa.IsRevoked
+                    && (!daa.ExpiresAt.HasValue || daa.ExpiresAt.Value > DateTime.UtcNow))
+                .Select(daa => new
+                {
+                    daa.DocumentId,
+                    DocumentName = daa.Document.FileName,
+                    DocumentTypeName = daa.Document.DocumentType.TypeName,
+                    ApprovedAt = daa.ApprovedAt,
+                    ExpiresAt = daa.ExpiresAt
+                })
+                .ToListAsync();
+
+            return Ok(approvedDocuments);
         }
 
         private async Task<User?> ResolveUserAsync(string identifier)

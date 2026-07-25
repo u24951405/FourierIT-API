@@ -4,6 +4,7 @@ using FourierIT_API.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace FourierIT_API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260722212043_AddEntityVerificationToUsers")]
+    partial class AddEntityVerificationToUsers
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -102,54 +105,6 @@ namespace FourierIT_API.Migrations
 
                     b.HasIndex("SuburbId");
 
-                    b.ToTable("Address");
-                });
-
-            modelBuilder.Entity("FourierIT_API.Models.AuditLog", b =>
-                {
-                    b.Property<int>("AuditLogId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("AuditLogId"));
-
-                    b.Property<string>("ActionCode")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)");
-
-                    b.Property<string>("BlockHash")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.Property<string>("Description")
-                        .HasMaxLength(300)
-                        .HasColumnType("nvarchar(300)");
-
-                    b.Property<string>("PreviousBlockHash")
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.Property<int?>("RecordID")
-                        .HasColumnType("int");
-
-                    b.Property<string>("TableAffected")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<DateTimeOffset>("TimeStamp")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("UserId")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(450)");
-
-                    b.HasKey("AuditLogId");
-
-                    b.HasIndex("UserId");
-
-                    b.ToTable("AuditLogs");
                     b.ToTable("Addresses");
                 });
 
@@ -171,9 +126,6 @@ namespace FourierIT_API.Migrations
 
                     b.Property<bool>("IsManualBackup")
                         .HasColumnType("bit");
-
-                    b.Property<string>("UserId")
-                        .HasColumnType("nvarchar(max)");
 
                     b.HasKey("BackupId");
 
@@ -827,315 +779,6 @@ namespace FourierIT_API.Migrations
                     b.HasIndex("BranchId");
 
                     b.ToTable("Departments");
-
-                    b.HasData(
-                        new
-                        {
-                            DepartmentId = 1,
-                            BranchId = 1,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8811), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentName = "Fourier IT Innovation"
-                        },
-                        new
-                        {
-                            DepartmentId = 2,
-                            BranchId = 1,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8815), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentName = "Fourier-E Consultation"
-                        },
-                        new
-                        {
-                            DepartmentId = 3,
-                            BranchId = 1,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8816), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentName = "RQTech"
-                        },
-                        new
-                        {
-                            DepartmentId = 4,
-                            BranchId = 1,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8818), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentName = "Fourier Recruitment"
-                        });
-                });
-
-            modelBuilder.Entity("FourierIT_API.Models.DepartmentDocumentType", b =>
-                {
-                    b.Property<int>("DepartmentDocumentTypeId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("DepartmentDocumentTypeId"));
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<int>("DepartmentId")
-                        .HasColumnType("int");
-
-                    b.Property<int>("DocumentTypeId")
-                        .HasColumnType("int");
-
-                    b.Property<bool>("IsMandatory")
-                        .HasColumnType("bit");
-
-                    b.HasKey("DepartmentDocumentTypeId");
-
-                    b.HasIndex("DepartmentId");
-
-                    b.HasIndex("DocumentTypeId");
-
-                    b.ToTable("DepartmentDocumentTypes");
-
-                    b.HasData(
-                        new
-                        {
-                            DepartmentDocumentTypeId = 1,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8863), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 1,
-                            DocumentTypeId = 1,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 2,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8865), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 1,
-                            DocumentTypeId = 2,
-                            IsMandatory = false
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 3,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8867), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 1,
-                            DocumentTypeId = 3,
-                            IsMandatory = false
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 4,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8869), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 1,
-                            DocumentTypeId = 7,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 5,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8870), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 1,
-                            DocumentTypeId = 8,
-                            IsMandatory = false
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 6,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8873), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 1,
-                            DocumentTypeId = 10,
-                            IsMandatory = false
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 7,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8874), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 1,
-                            DocumentTypeId = 11,
-                            IsMandatory = false
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 8,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8876), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 1,
-                            DocumentTypeId = 12,
-                            IsMandatory = false
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 9,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8880), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 2,
-                            DocumentTypeId = 1,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 10,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8883), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 2,
-                            DocumentTypeId = 4,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 11,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8885), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 2,
-                            DocumentTypeId = 5,
-                            IsMandatory = false
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 12,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8887), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 2,
-                            DocumentTypeId = 7,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 13,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8889), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 2,
-                            DocumentTypeId = 10,
-                            IsMandatory = false
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 14,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8891), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 2,
-                            DocumentTypeId = 11,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 15,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8892), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 2,
-                            DocumentTypeId = 12,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 16,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8894), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 2,
-                            DocumentTypeId = 13,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 17,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8895), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 3,
-                            DocumentTypeId = 1,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 18,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8898), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 3,
-                            DocumentTypeId = 2,
-                            IsMandatory = false
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 19,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8899), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 3,
-                            DocumentTypeId = 7,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 20,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8901), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 3,
-                            DocumentTypeId = 8,
-                            IsMandatory = false
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 21,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8902), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 3,
-                            DocumentTypeId = 11,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 22,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8904), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 3,
-                            DocumentTypeId = 13,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 23,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8906), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 3,
-                            DocumentTypeId = 14,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 24,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8908), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 3,
-                            DocumentTypeId = 18,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 25,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8909), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 4,
-                            DocumentTypeId = 1,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 26,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8911), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 4,
-                            DocumentTypeId = 2,
-                            IsMandatory = false
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 27,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8912), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 4,
-                            DocumentTypeId = 3,
-                            IsMandatory = false
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 28,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8914), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 4,
-                            DocumentTypeId = 4,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 29,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8915), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 4,
-                            DocumentTypeId = 5,
-                            IsMandatory = false
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 30,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8917), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 4,
-                            DocumentTypeId = 7,
-                            IsMandatory = true
-                        },
-                        new
-                        {
-                            DepartmentDocumentTypeId = 31,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 24, 18, 28, 25, 286, DateTimeKind.Unspecified).AddTicks(8919), new TimeSpan(0, 0, 0, 0, 0)),
-                            DepartmentId = 4,
-                            DocumentTypeId = 10,
-                            IsMandatory = false
-                        });
                 });
 
             modelBuilder.Entity("FourierIT_API.Models.Document", b =>
@@ -1933,57 +1576,6 @@ namespace FourierIT_API.Migrations
                     b.HasIndex("TargetUserId");
 
                     b.ToTable("InstitutionEnquiryRequests");
-                });
-
-            modelBuilder.Entity("FourierIT_API.Models.InstitutionInvitation", b =>
-                {
-                    b.Property<int>("InvitationId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("InvitationId"));
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("Email")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("nvarchar(255)");
-
-                    b.Property<int>("InstitutionId")
-                        .HasColumnType("int");
-
-                    b.Property<bool>("IsRevoked")
-                        .HasColumnType("bit");
-
-                    b.Property<bool>("IsUsed")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("OtpCodeHash")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("nvarchar(255)");
-
-                    b.Property<DateTimeOffset>("OtpExpiryTimeStamp")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<int>("OtpSendCount")
-                        .HasColumnType("int");
-
-                    b.Property<DateTimeOffset>("TokenExpiryTimeStamp")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("TokenString")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("nvarchar(255)");
-
-                    b.HasKey("InvitationId");
-
-                    b.HasIndex("InstitutionId");
-
-                    b.ToTable("InstitutionInvitations");
                 });
 
             modelBuilder.Entity("FourierIT_API.Models.InstitutionMembers", b =>
@@ -2935,17 +2527,6 @@ namespace FourierIT_API.Migrations
                     b.Navigation("Suburb");
                 });
 
-            modelBuilder.Entity("FourierIT_API.Models.AuditLog", b =>
-                {
-                    b.HasOne("FourierIT_API.Models.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("User");
-                });
-
             modelBuilder.Entity("FourierIT_API.Models.BlobHistory", b =>
                 {
                     b.HasOne("FourierIT_API.Models.DocumentBlob", "DocumentBlob")
@@ -3151,25 +2732,6 @@ namespace FourierIT_API.Migrations
                         .IsRequired();
 
                     b.Navigation("Branch");
-                });
-
-            modelBuilder.Entity("FourierIT_API.Models.DepartmentDocumentType", b =>
-                {
-                    b.HasOne("FourierIT_API.Models.Department", "Department")
-                        .WithMany("DepartmentDocumentTypes")
-                        .HasForeignKey("DepartmentId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("FourierIT_API.Models.DocumentType", "DocumentType")
-                        .WithMany()
-                        .HasForeignKey("DocumentTypeId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
-
-                    b.Navigation("Department");
-
-                    b.Navigation("DocumentType");
                 });
 
             modelBuilder.Entity("FourierIT_API.Models.Document", b =>
@@ -3417,17 +2979,6 @@ namespace FourierIT_API.Migrations
                     b.Navigation("TargetDepartment");
 
                     b.Navigation("TargetUser");
-                });
-
-            modelBuilder.Entity("FourierIT_API.Models.InstitutionInvitation", b =>
-                {
-                    b.HasOne("FourierIT_API.Models.Institution", "Institution")
-                        .WithMany()
-                        .HasForeignKey("InstitutionId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Institution");
                 });
 
             modelBuilder.Entity("FourierIT_API.Models.InstitutionMembers", b =>
@@ -3740,8 +3291,6 @@ namespace FourierIT_API.Migrations
             modelBuilder.Entity("FourierIT_API.Models.Department", b =>
                 {
                     b.Navigation("ComplianceStatuses");
-
-                    b.Navigation("DepartmentDocumentTypes");
 
                     b.Navigation("DepartmentUsers");
                 });
