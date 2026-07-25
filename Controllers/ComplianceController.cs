@@ -76,6 +76,9 @@ namespace FourierIT_API.Controllers
         {
             try
             {
+                if (!await UserCanAccessDepartmentAsync(departmentId))
+                    return Forbid("You can only check compliance for your own department.");
+
                 var status = await _complianceService.CheckDepartmentComplianceAsync(departmentId);
                 return Ok(new { success = true, data = status });
             }
@@ -131,6 +134,23 @@ namespace FourierIT_API.Controllers
             }
         }
 
+        private async Task<User?> GetCurrentUserAsync()
+        {
+            return await _userManager.GetUserAsync(User);
+        }
+
+        private async Task<bool> UserCanAccessDepartmentAsync(int departmentId)
+        {
+            if (User.IsInRole("Admin"))
+                return true;
+
+            if (!User.IsInRole("Department Admin"))
+                return false;
+
+            var currentUser = await GetCurrentUserAsync();
+            return currentUser != null && currentUser.DepartmentId == departmentId;
+        }
+
         /// <summary>
         /// Get compliance details for all users in a department
         /// </summary>
@@ -140,6 +160,9 @@ namespace FourierIT_API.Controllers
         {
             try
             {
+                if (!await UserCanAccessDepartmentAsync(departmentId))
+                    return Forbid("You can only view compliance for your own department.");
+
                 var details = await _complianceService.GetDepartmentUserComplianceAsync(departmentId);
                 return Ok(new { success = true, count = details.Count, data = details });
             }
@@ -180,6 +203,9 @@ namespace FourierIT_API.Controllers
         {
             try
             {
+                if (!await UserCanAccessDepartmentAsync(departmentId))
+                    return Forbid("You can only view the dashboard for your own department.");
+
                 var dashboard = await _complianceService.GetDepartmentDashboardAsync(departmentId);
                 return Ok(new { success = true, data = dashboard });
             }

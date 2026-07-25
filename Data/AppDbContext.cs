@@ -18,6 +18,7 @@ namespace FourierIT_API.Data
         public DbSet<InstitutionType> InstitutionTypes { get; set; } = null!;
         public DbSet<Institution> Institutions { get; set; }
         public DbSet<InstitutionInvitation> InstitutionInvitations { get; set; }
+        public DbSet<InstitutionSessionToken> InstitutionSessionTokens { get; set; }
         public DbSet<RolePermission> RolePermissions { get; set; }
         
         // Secure vault DbSets
@@ -91,6 +92,12 @@ namespace FourierIT_API.Data
             {
                 new Role
                 {
+                Id = "AD",
+                Name = "Admin",
+                NormalizedName = "ADMIN"
+                },
+                new Role
+                {
                 Id = "DA",
                 Name = "Department Admin",
                 NormalizedName = "DEPARTMENT ADMIN"
@@ -100,6 +107,12 @@ namespace FourierIT_API.Data
                 Id = "DO",
                 Name = "Document Owner",
                 NormalizedName = "DOCUMENT OWNER"
+                },
+                new Role
+                {
+                Id = "CO",
+                Name = "Compliance Officer",
+                NormalizedName = "COMPLIANCE OFFICER"
                 },
                 new Role
                 {
@@ -144,7 +157,12 @@ namespace FourierIT_API.Data
     
                 // Authorized Person Documents (for entities)
                 new DocumentType { DocumentTypeId = 18, TypeName = "Director/Trustee ID", Description = "ID of authorized representative (certified copy)" },
-                new DocumentType { DocumentTypeId = 19, TypeName = "Proof of Address - Representative", Description = "Proof of residential address for authorized person" }
+                new DocumentType { DocumentTypeId = 19, TypeName = "Proof of Address - Representative", Description = "Proof of residential address for authorized person" },
+
+                // Department Compliance - KYC/FICA Onboarding Requirements
+                new DocumentType { DocumentTypeId = 20, TypeName = "SARS Tax Clearance Certificate", Description = "Valid SARS Tax Clearance Certificate (not older than 12 months)" },
+                new DocumentType { DocumentTypeId = 21, TypeName = "Bank Confirmation Letter", Description = "Bank confirmation of account and authorized signatories" },
+                new DocumentType { DocumentTypeId = 22, TypeName = "Beneficial Ownership Declaration", Description = "Declaration of beneficial owners with shareholding details" }
             };
             modelBuilder.Entity<DocumentType>().HasData(documentTypes);
 
@@ -211,47 +229,65 @@ namespace FourierIT_API.Data
             modelBuilder.Entity<Department>().HasData(departments);
 
             // Seed DepartmentDocumentTypes - KYC/FICA requirements per department
-            // All departments require standard KYC documents
+            // All departments require standard KYC/FICA compliance documents
             List<DepartmentDocumentType> departmentDocumentTypes = new List<DepartmentDocumentType>
             {
-                // Fourier IT Innovation - KYC/FICA core documents
+                // Fourier IT Innovation - Mandatory KYC/FICA compliance documents
+                // ID 1-8: Core identity/address and corporate documents
                 new DepartmentDocumentType { DepartmentDocumentTypeId = 1, DepartmentId = 1, DocumentTypeId = 1, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
                 new DepartmentDocumentType { DepartmentDocumentTypeId = 2, DepartmentId = 1, DocumentTypeId = 2, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
                 new DepartmentDocumentType { DepartmentDocumentTypeId = 3, DepartmentId = 1, DocumentTypeId = 3, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
                 new DepartmentDocumentType { DepartmentDocumentTypeId = 4, DepartmentId = 1, DocumentTypeId = 7, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
                 new DepartmentDocumentType { DepartmentDocumentTypeId = 5, DepartmentId = 1, DocumentTypeId = 8, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
                 new DepartmentDocumentType { DepartmentDocumentTypeId = 6, DepartmentId = 1, DocumentTypeId = 10, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 7, DepartmentId = 1, DocumentTypeId = 11, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 8, DepartmentId = 1, DocumentTypeId = 12, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 7, DepartmentId = 1, DocumentTypeId = 11, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 8, DepartmentId = 1, DocumentTypeId = 12, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 9, DepartmentId = 1, DocumentTypeId = 13, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 10, DepartmentId = 1, DocumentTypeId = 20, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 11, DepartmentId = 1, DocumentTypeId = 21, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 12, DepartmentId = 1, DocumentTypeId = 22, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
 
-                // Fourier-E Consultation - KYC/FICA core documents
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 9, DepartmentId = 2, DocumentTypeId = 1, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 10, DepartmentId = 2, DocumentTypeId = 4, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 11, DepartmentId = 2, DocumentTypeId = 5, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 12, DepartmentId = 2, DocumentTypeId = 7, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 13, DepartmentId = 2, DocumentTypeId = 10, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 14, DepartmentId = 2, DocumentTypeId = 11, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 15, DepartmentId = 2, DocumentTypeId = 12, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 16, DepartmentId = 2, DocumentTypeId = 13, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                // Fourier-E Consultation - Mandatory KYC/FICA compliance documents
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 13, DepartmentId = 2, DocumentTypeId = 1, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 14, DepartmentId = 2, DocumentTypeId = 4, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 15, DepartmentId = 2, DocumentTypeId = 5, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 16, DepartmentId = 2, DocumentTypeId = 7, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 17, DepartmentId = 2, DocumentTypeId = 10, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 18, DepartmentId = 2, DocumentTypeId = 11, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 19, DepartmentId = 2, DocumentTypeId = 12, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 20, DepartmentId = 2, DocumentTypeId = 13, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 21, DepartmentId = 2, DocumentTypeId = 20, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 22, DepartmentId = 2, DocumentTypeId = 21, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 23, DepartmentId = 2, DocumentTypeId = 22, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
 
-                // RQTech - KYC/FICA core documents
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 17, DepartmentId = 3, DocumentTypeId = 1, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 18, DepartmentId = 3, DocumentTypeId = 2, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 19, DepartmentId = 3, DocumentTypeId = 7, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 20, DepartmentId = 3, DocumentTypeId = 8, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 21, DepartmentId = 3, DocumentTypeId = 11, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 22, DepartmentId = 3, DocumentTypeId = 13, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 23, DepartmentId = 3, DocumentTypeId = 14, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 24, DepartmentId = 3, DocumentTypeId = 18, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                // RQTech - Mandatory KYC/FICA compliance documents
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 24, DepartmentId = 3, DocumentTypeId = 1, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 25, DepartmentId = 3, DocumentTypeId = 2, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 26, DepartmentId = 3, DocumentTypeId = 7, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 27, DepartmentId = 3, DocumentTypeId = 8, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 28, DepartmentId = 3, DocumentTypeId = 11, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 29, DepartmentId = 3, DocumentTypeId = 12, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 30, DepartmentId = 3, DocumentTypeId = 13, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 31, DepartmentId = 3, DocumentTypeId = 14, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 32, DepartmentId = 3, DocumentTypeId = 18, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 33, DepartmentId = 3, DocumentTypeId = 20, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 34, DepartmentId = 3, DocumentTypeId = 21, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 35, DepartmentId = 3, DocumentTypeId = 22, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
 
-                // Fourier Recruitment - KYC/FICA core documents
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 25, DepartmentId = 4, DocumentTypeId = 1, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 26, DepartmentId = 4, DocumentTypeId = 2, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 27, DepartmentId = 4, DocumentTypeId = 3, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 28, DepartmentId = 4, DocumentTypeId = 4, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 29, DepartmentId = 4, DocumentTypeId = 5, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 30, DepartmentId = 4, DocumentTypeId = 7, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
-                new DepartmentDocumentType { DepartmentDocumentTypeId = 31, DepartmentId = 4, DocumentTypeId = 10, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow }
+                // Fourier Recruitment - Mandatory KYC/FICA compliance documents
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 36, DepartmentId = 4, DocumentTypeId = 1, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 37, DepartmentId = 4, DocumentTypeId = 2, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 38, DepartmentId = 4, DocumentTypeId = 3, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 39, DepartmentId = 4, DocumentTypeId = 4, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 40, DepartmentId = 4, DocumentTypeId = 5, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 41, DepartmentId = 4, DocumentTypeId = 7, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 42, DepartmentId = 4, DocumentTypeId = 10, IsMandatory = false, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 43, DepartmentId = 4, DocumentTypeId = 11, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 44, DepartmentId = 4, DocumentTypeId = 12, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 45, DepartmentId = 4, DocumentTypeId = 13, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 46, DepartmentId = 4, DocumentTypeId = 20, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 47, DepartmentId = 4, DocumentTypeId = 21, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow },
+                new DepartmentDocumentType { DepartmentDocumentTypeId = 48, DepartmentId = 4, DocumentTypeId = 22, IsMandatory = true, CreatedAt = DateTimeOffset.UtcNow }
             };
             modelBuilder.Entity<DepartmentDocumentType>().HasData(departmentDocumentTypes);
 

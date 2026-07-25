@@ -89,6 +89,10 @@ namespace FourierIT_API.Controllers
             var roles = (await _userManager.GetRolesAsync(user)).ToList();
             var profile = await _context.Profiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == user.Id);
 
+            var department = user.DepartmentId.HasValue
+                ? await _context.Departments.AsNoTracking().FirstOrDefaultAsync(d => d.DepartmentId == user.DepartmentId.Value)
+                : null;
+
             var dto = new CurrentAccountDto
             {
                 UserId = user.Id,
@@ -102,7 +106,9 @@ namespace FourierIT_API.Controllers
                 LastName = profile?.LastName,
                 ProfilePhoneNumber = profile?.PhoneNumber,
                 JobTitle = profile?.JobTitle,
-                DateOfBirth = profile?.DateOfBirth
+                DateOfBirth = profile?.DateOfBirth,
+                DepartmentId = user.DepartmentId,
+                DepartmentName = department?.DepartmentName
             };
 
             return Ok(dto);
@@ -199,31 +205,44 @@ namespace FourierIT_API.Controllers
                     });
                 }
 
-                var entityType = await _context.EntityTypes
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(et => et.EntityTypeId == userDto.EntityTypeId);
-
-                if (entityType == null)
-                {
-                    return BadRequest(new { error = "Please select a valid entity type." });
-                }
-
                 var verificationNumber = userDto.EntityIdentificationNumber?.Trim();
-                if (string.IsNullOrWhiteSpace(verificationNumber))
-                {
-                    return BadRequest(new { error = "Please enter an identification or registration number for the selected entity type." });
-                }
+                var requiresEntityVerification = requestedRoles.Any(r =>
+                    string.Equals(r, "Document Owner", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(r, "Department Admin", StringComparison.OrdinalIgnoreCase)
+                );
 
-                var expectedLengthMessage = ValidateEntityIdentificationNumber(userDto.EntityTypeId, verificationNumber);
-                if (expectedLengthMessage != null)
+                if (requiresEntityVerification)
                 {
-                    return BadRequest(new { error = expectedLengthMessage });
-                }
+                    if (!userDto.EntityTypeId.HasValue)
+                    {
+                        return BadRequest(new { error = "Please select a valid entity type." });
+                    }
 
-                var verificationResult = await _entityVerificationService.VerifyEntityAsync(userDto.EntityTypeId, verificationNumber);
-                if (!verificationResult.IsValid)
-                {
-                    return BadRequest(new { error = verificationResult.ErrorMessage ?? "Entity verification failed." });
+                    var entityType = await _context.EntityTypes
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(et => et.EntityTypeId == userDto.EntityTypeId.Value);
+
+                    if (entityType == null)
+                    {
+                        return BadRequest(new { error = "Please select a valid entity type." });
+                    }
+
+                    if (string.IsNullOrWhiteSpace(verificationNumber))
+                    {
+                        return BadRequest(new { error = "Please enter an identification or registration number for the selected entity type." });
+                    }
+
+                    var expectedLengthMessage = ValidateEntityIdentificationNumber(userDto.EntityTypeId.Value, verificationNumber);
+                    if (expectedLengthMessage != null)
+                    {
+                        return BadRequest(new { error = expectedLengthMessage });
+                    }
+
+                    var verificationResult = await _entityVerificationService.VerifyEntityAsync(userDto.EntityTypeId.Value, verificationNumber);
+                    if (!verificationResult.IsValid)
+                    {
+                        return BadRequest(new { error = verificationResult.ErrorMessage ?? "Entity verification failed." });
+                    }
                 }
 
                 var newUser = new User
@@ -233,7 +252,7 @@ namespace FourierIT_API.Controllers
                     PhoneNumber = userDto.PhoneNumber,
                     AccountStatus = "Active",
                     EntityTypeId = userDto.EntityTypeId,
-                    EntityIdentificationNumber = verificationNumber
+                    EntityIdentificationNumber = verificationNumber ?? string.Empty
                 };
 
                 var createdUser = await _userManager.CreateAsync(newUser, userDto.Password);
@@ -397,7 +416,7 @@ namespace FourierIT_API.Controllers
             return NoContent();
         }
 
-        [Authorize(Roles = "Department Admin")]
+        [Authorize(Roles = "Admin,Department Admin")]
         [HttpGet("all")]
         public async Task<IActionResult> GetAllUsers()
         {
@@ -422,6 +441,7 @@ namespace FourierIT_API.Controllers
                     user.Email,
                     user.PhoneNumber,
                     user.AccountStatus,
+                    user.DepartmentId,
                     Roles = roles,
                     Profile = new
                     {
@@ -434,6 +454,51 @@ namespace FourierIT_API.Controllers
             }
 
             return Ok(userDtos);
+        }
+
+        /// <summary>
+        /// [SUPER ADMIN ONLY] Get unassigned Department Admin users (all with department info shown).
+        /// </summary>
+        [Authorize]
+        [HttpGet("departments/admins/unassigned")]
+        public async Task<IActionResult> GetUnassignedDepartmentAdmins()
+        {
+            var currentUser = await _userManager.GetUserAsync(User);
+            if (currentUser == null || !IsSuperAdminUser(currentUser))
+                return Forbid();
+
+            var allUsers = await _userManager.Users
+                .ToListAsync();
+
+            var adminDtos = new List<object>();
+
+            foreach (var user in allUsers)
+            {
+                var roles = await _userManager.GetRolesAsync(user);
+                if (roles.Contains("Department Admin"))
+                {
+                    // Get department name if assigned
+                    string? departmentName = null;
+                    if (user.DepartmentId.HasValue)
+                    {
+                        var department = await _context.Departments
+                            .FirstOrDefaultAsync(d => d.DepartmentId == user.DepartmentId.Value);
+                        departmentName = department?.DepartmentName;
+                    }
+
+                    adminDtos.Add(new
+                    {
+                        userId = user.Id,
+                        userName = user.UserName,
+                        email = user.Email,
+                        phoneNumber = user.PhoneNumber,
+                        departmentId = user.DepartmentId,
+                        departmentName = departmentName
+                    });
+                }
+            }
+
+            return Ok(adminDtos.OrderBy(a => ((dynamic)a).userName));
         }
 
         /// <summary>
@@ -506,18 +571,6 @@ namespace FourierIT_API.Controllers
             if (department == null)
                 return NotFound(new { error = "Department not found." });
 
-            // Check if department already has an active admin
-            var existingAdmin = await _userManager.Users
-                .Where(u => u.DepartmentId == departmentId)
-                .FirstOrDefaultAsync();
-
-            if (existingAdmin != null)
-            {
-                var isAdmin = await _userManager.IsInRoleAsync(existingAdmin, "Department Admin");
-                if (isAdmin)
-                    return Conflict(new { error = "Department already has an active Department Admin. Remove or reassign the current admin first." });
-            }
-
             User? targetUser = null;
 
             if (!string.IsNullOrWhiteSpace(dto.UserId))
@@ -530,20 +583,31 @@ namespace FourierIT_API.Controllers
                 // Check if user is already assigned to another department
                 if (targetUser.DepartmentId.HasValue && targetUser.DepartmentId != departmentId)
                     return BadRequest(new { error = "User is already assigned to another department." });
+
+                if (dto.DateOfBirth.HasValue)
+                {
+                    var existingProfile = await _context.Profiles.FirstOrDefaultAsync(p => p.UserId == targetUser.Id);
+                    if (existingProfile != null)
+                    {
+                        existingProfile.DateOfBirth = dto.DateOfBirth.Value;
+                        _context.Profiles.Update(existingProfile);
+                        await _context.SaveChangesAsync();
+                    }
+                }
             }
             else
             {
                 // Create new Department Admin user
-                if (string.IsNullOrWhiteSpace(dto.Username) || string.IsNullOrWhiteSpace(dto.Password) || string.IsNullOrWhiteSpace(dto.EmailAddress))
-                    return BadRequest(new { error = "Username, password, and email are required to create a new Department Admin." });
+                if (string.IsNullOrWhiteSpace(dto.Username) || string.IsNullOrWhiteSpace(dto.Password) || string.IsNullOrWhiteSpace(dto.EmailAddress) || !dto.DateOfBirth.HasValue)
+                    return BadRequest(new { error = "Username, password, email, and date of birth are required to create a new Department Admin." });
 
                 var existingUser = await _userManager.FindByNameAsync(dto.Username.ToLower());
                 if (existingUser != null)
                     return BadRequest(new { error = "Username already exists." });
 
-                var entityType = await _context.EntityTypes.FirstOrDefaultAsync(et => et.EntityTypeId == 1); // SA Individual
+                var entityType = await _context.EntityTypes.FirstOrDefaultAsync(et => et.EntityTypeId == 3); // Company / Department entity type
                 if (entityType == null)
-                    return StatusCode(StatusCodes.Status500InternalServerError, new { error = "Default entity type not found." });
+                    return StatusCode(StatusCodes.Status500InternalServerError, new { error = "Default entity type for Department Admin not found." });
 
                 targetUser = new User
                 {
@@ -552,7 +616,7 @@ namespace FourierIT_API.Controllers
                     PhoneNumber = dto.PhoneNumber,
                     AccountStatus = "Active",
                     DepartmentId = departmentId,
-                    EntityTypeId = 1, // Default to SA Individual
+                    EntityTypeId = entityType.EntityTypeId,
                     EntityIdentificationNumber = string.Empty
                 };
 
@@ -567,6 +631,7 @@ namespace FourierIT_API.Controllers
                     LastName = dto.LastName ?? string.Empty,
                     PhoneNumber = dto.PhoneNumber ?? string.Empty,
                     JobTitle = dto.JobTitle ?? string.Empty,
+                    DateOfBirth = dto.DateOfBirth.Value,
                     UserId = targetUser.Id
                 };
                 _context.Profiles.Add(profile);
@@ -578,6 +643,19 @@ namespace FourierIT_API.Controllers
             {
                 targetUser.DepartmentId = departmentId;
                 await _userManager.UpdateAsync(targetUser);
+            }
+
+            var departmentAdminUsers = await _userManager.Users
+                .Where(u => u.DepartmentId == departmentId && u.Id != targetUser.Id)
+                .ToListAsync();
+
+            foreach (var departmentAdminUser in departmentAdminUsers)
+            {
+                var isCurrentAdmin = await _userManager.IsInRoleAsync(departmentAdminUser, "Department Admin");
+                if (isCurrentAdmin)
+                {
+                    await _userManager.RemoveFromRoleAsync(departmentAdminUser, "Department Admin");
+                }
             }
 
             // Remove any existing Department Admin role
@@ -608,7 +686,8 @@ namespace FourierIT_API.Controllers
                     DepartmentName = department.DepartmentName,
                     FirstName = adminProfile?.FirstName ?? string.Empty,
                     LastName = adminProfile?.LastName ?? string.Empty,
-                    JobTitle = adminProfile?.JobTitle ?? string.Empty
+                    JobTitle = adminProfile?.JobTitle ?? string.Empty,
+                    DateOfBirth = adminProfile?.DateOfBirth
                 }
             });
         }

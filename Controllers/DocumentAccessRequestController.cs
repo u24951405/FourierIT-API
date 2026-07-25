@@ -1,8 +1,8 @@
-using System.Security.Cryptography;
 using FourierIT_API.Data;
 using FourierIT_API.DTOs.Document;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
+using FourierIT_API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -19,15 +19,182 @@ namespace FourierIT_API.Controllers
         private readonly AppDbContext _context;
         private readonly UserManager<User> _userManager;
         private readonly IDocumentService _documentService;
+        private readonly DepartmentRequestValidationService _departmentRequestValidationService;
 
         public DocumentAccessRequestsController(
             AppDbContext context,
             UserManager<User> userManager,
-            IDocumentService documentService)
+            IDocumentService documentService,
+            DepartmentRequestValidationService departmentRequestValidationService)
         {
             _context = context;
             _userManager = userManager;
             _documentService = documentService;
+            _departmentRequestValidationService = departmentRequestValidationService;
+        }
+
+        /// <summary>
+        /// Create a document access request from the institution portal (no JWT required).
+        /// Uses session token authentication.
+        /// </summary>
+        [AllowAnonymous]
+        [HttpPost("institution-access/requests")]
+        public async Task<IActionResult> CreateInstitutionRequest(
+            [FromQuery] string token,
+            [FromBody] InstitutionDocumentRequestDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return Unauthorized(new { error = "Session token is required." });
+
+            if (dto == null)
+                return BadRequest(new { error = "Request data is required." });
+
+            // Validate session token
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && 
+                                          !st.IsRevoked && 
+                                          st.ExpiresAt > DateTime.UtcNow);
+
+            if (sessionToken == null)
+                return Unauthorized(new { error = "Invalid or expired session token." });
+
+            var institutionId = sessionToken.InstitutionId;
+
+            // Validate request type and target
+            if (string.IsNullOrWhiteSpace(dto.RequestType) || 
+                (dto.RequestType != "Department" && dto.RequestType != "Individual"))
+                return BadRequest(new { error = "RequestType must be either 'Department' or 'Individual'." });
+
+            // Validate requested documents
+            var requestedDocumentTypeIds = dto.RequestedDocuments
+                .Select(r => r.DocumentTypeId)
+                .Distinct()
+                .ToList();
+
+            if (!requestedDocumentTypeIds.Any())
+                return BadRequest(new { error = "At least one document type must be requested." });
+
+            // Validate request based on type
+            Department? targetDepartment = null;
+            User? targetUser = null;
+
+            if (dto.RequestType == "Department")
+            {
+                if (!dto.TargetDepartmentId.HasValue || dto.TargetDepartmentId <= 0)
+                    return BadRequest(new { error = "TargetDepartmentId is required for department requests." });
+
+                targetDepartment = await _context.Departments
+                    .Include(d => d.Branch)
+                    .FirstOrDefaultAsync(d => d.DepartmentId == dto.TargetDepartmentId.Value);
+
+                if (targetDepartment == null)
+                    return NotFound(new { error = "Target department not found." });
+
+                // Verify department belongs to the institution
+                if (targetDepartment.Branch.InstitutionId != institutionId)
+                    return BadRequest(new { error = "Department does not belong to the specified institution." });
+
+                // Verify requested document types belong to department
+                var departmentRequiredDocTypeIds = await _context.DepartmentDocumentTypes
+                    .Where(ddt => ddt.DepartmentId == targetDepartment.DepartmentId)
+                    .Select(ddt => ddt.DocumentTypeId)
+                    .ToListAsync();
+
+                if (!departmentRequiredDocTypeIds.Any())
+                    return BadRequest(new { error = "Target department has no required document types configured." });
+
+                var validationResult = _departmentRequestValidationService.ValidateRequestedDocumentTypes(
+                    departmentRequiredDocTypeIds,
+                    requestedDocumentTypeIds);
+
+                if (!validationResult.IsValid)
+                {
+                    return BadRequest(new
+                    {
+                        error = "One or more requested document types do not belong to the target department's required documents.",
+                        invalidDocumentTypeIds = validationResult.InvalidDocumentTypeIds,
+                        allowedDocumentTypeIds = validationResult.AllowedDocumentTypeIds
+                    });
+                }
+            }
+            else // Individual request
+            {
+                if (string.IsNullOrWhiteSpace(dto.TargetUserId))
+                    return BadRequest(new { error = "TargetUserId is required for individual requests." });
+
+                targetUser = await ResolveUserAsync(dto.TargetUserId);
+                if (targetUser == null)
+                    return NotFound(new { error = "Target user not found." });
+            }
+
+            var defaultRule = await EnsureDefaultFicaRuleAsync();
+
+            // Create the enquiry request
+            var request = new InstitutionEnquiryRequest
+            {
+                InstitutionId = institutionId,
+                RequestType = dto.RequestType,
+                TargetDepartmentId = targetDepartment?.DepartmentId,
+                TargetUserId = targetUser?.Id,
+                PurposeNote = dto.PurposeNote?.Trim() ?? string.Empty,
+                Status = dto.RequestType == "Department" ? "Department_Pending" : "Pending",
+                RequestDate = DateTimeOffset.UtcNow
+            };
+
+            _context.InstitutionEnquiryRequests.Add(request);
+            await _context.SaveChangesAsync();
+
+            // Add requested document types
+            foreach (var requestedDocument in dto.RequestedDocuments.DistinctBy(r => r.DocumentTypeId))
+            {
+                var documentTypeExists = await _context.DocumentTypes
+                    .AnyAsync(dt => dt.DocumentTypeId == requestedDocument.DocumentTypeId);
+
+                if (!documentTypeExists)
+                    return BadRequest(new { error = $"Document type {requestedDocument.DocumentTypeId} does not exist." });
+
+                var ficaRuleId = requestedDocument.FICARuleId;
+
+                if (ficaRuleId.HasValue)
+                {
+                    var ficaRuleExists = await _context.FICARules
+                        .AnyAsync(fr => fr.RuleId == ficaRuleId.Value);
+
+                    if (!ficaRuleExists)
+                        return BadRequest(new { error = $"FICA rule {ficaRuleId.Value} does not exist." });
+                }
+                else
+                {
+                    ficaRuleId = defaultRule.RuleId;
+                }
+
+                _context.InstitutionRequestedDocumentTypes.Add(new InstitutionRequestedDocumentType
+                {
+                    EnquiryRequestId = request.EnquiryRequestId,
+                    DocumentTypeId = requestedDocument.DocumentTypeId,
+                    FICARuleId = ficaRuleId.Value,
+                    isMandatory = requestedDocument.IsMandatory
+                });
+            }
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                request.EnquiryRequestId,
+                request.InstitutionId,
+                request.RequestType,
+                request.TargetDepartmentId,
+                request.TargetUserId,
+                request.Status,
+                submissionDeadline = dto.SubmissionDeadline,
+                referenceNumber = dto.ReferenceNumber?.Trim(),
+                request.RequestDate,
+                RequestedDocumentTypeIds = requestedDocumentTypeIds,
+                Message = dto.RequestType == "Department" 
+                    ? "Request created and routed to department for review."
+                    : "Request created and sent to document owner for approval."
+            });
         }
 
         [HttpPost("institutions/{institutionId:int}/document-access-requests")]
@@ -130,17 +297,17 @@ namespace FourierIT_API.Controllers
                 if (!departmentRequiredDocTypeIds.Any())
                     return BadRequest(new { error = "Target department has no required document types configured." });
 
-                var invalidDocumentTypes = requestedDocumentTypeIds
-                    .Except(departmentRequiredDocTypeIds)
-                    .ToList();
+                var validationResult = _departmentRequestValidationService.ValidateRequestedDocumentTypes(
+                    departmentRequiredDocTypeIds,
+                    requestedDocumentTypeIds);
 
-                if (invalidDocumentTypes.Any())
+                if (!validationResult.IsValid)
                 {
                     return BadRequest(new
                     {
                         error = "One or more requested document types do not belong to the target department's required documents.",
-                        invalidDocumentTypeIds = invalidDocumentTypes,
-                        allowedDocumentTypeIds = departmentRequiredDocTypeIds
+                        invalidDocumentTypeIds = validationResult.InvalidDocumentTypeIds,
+                        allowedDocumentTypeIds = validationResult.AllowedDocumentTypeIds
                     });
                 }
 
@@ -241,6 +408,40 @@ namespace FourierIT_API.Controllers
                     ? "Request created and routed to department for review."
                     : "Request created and sent to document owner for approval."
             });
+        }
+
+        /// <summary>
+        /// Get request counts for the current institution.
+        /// </summary>
+        [HttpGet("institutions/{institutionId:int}/document-access-requests/summary")]
+        public async Task<IActionResult> GetInstitutionRequestSummary([FromRoute] int institutionId)
+        {
+            var currentUser = await _userManager.GetUserAsync(User);
+            if (currentUser == null)
+                return Unauthorized();
+
+            var isMember = await _context.Institutions
+                .Include(i => i.InstitutionMembers)
+                .Where(i => i.InstitutionId == institutionId)
+                .SelectMany(i => i.InstitutionMembers)
+                .AnyAsync(im => im.UserId == currentUser.Id);
+
+            if (!isMember)
+                return Forbid();
+
+            var summary = await _context.InstitutionEnquiryRequests
+                .AsNoTracking()
+                .Where(r => r.InstitutionId == institutionId)
+                .GroupBy(r => 1)
+                .Select(g => new
+                {
+                    PendingRequests = g.Count(r => r.Status == "Pending" || r.Status == "Department_Pending"),
+                    ApprovedRequests = g.Count(r => r.Status == "Approved"),
+                    DeniedRequests = g.Count(r => r.Status == "Denied")
+                })
+                .FirstOrDefaultAsync();
+
+            return Ok(summary ?? new { PendingRequests = 0, ApprovedRequests = 0, DeniedRequests = 0 });
         }
 
         /// <summary>

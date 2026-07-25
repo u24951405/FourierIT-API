@@ -120,6 +120,7 @@ builder.Services.AddAuthentication(options =>
 });
 
 builder.Services.AddScoped<ITokenService, TokenService>();
+builder.Services.AddScoped<DepartmentRequestValidationService>();
 // Register SuperAdmin authorization handler so the seeded Super Admin user bypasses role-based checks
 builder.Services.AddSingleton<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, FourierIT_API.Security.SuperAdminRoleHandler>();
 
@@ -144,6 +145,7 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
     await DevLookupSeed.EnsureBranchesExistAsync(db);
+    await DevLookupSeed.EnsureDepartmentsAndRequirementsAsync(db);
 }
 
 // Ensure the seeded Super Admin user exists on startup (best-effort).

@@ -4,6 +4,7 @@ using FourierIT_API.Mappers;
 using FourierIT_API.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -14,15 +15,36 @@ namespace FourierIT_API.Controllers
     public class DepartmentController : ControllerBase
     {
         private readonly AppDbContext _context; // create a private variable to hold our database context and prevents it from being mutable
-        public DepartmentController(AppDbContext context)// bring in our database context to the controller
+        private readonly UserManager<User> _userManager;
+        public DepartmentController(AppDbContext context, UserManager<User> userManager)// bring in our database context to the controller
         {
             _context = context;
+            _userManager = userManager;
         }
 
         [Authorize]
         [HttpGet]
         public async Task<IActionResult> GetAll()
         {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null)
+                return Unauthorized();
+
+            if (await _userManager.IsInRoleAsync(user, "Department Admin") && !await _userManager.IsInRoleAsync(user, "Super Admin"))
+            {
+                if (!user.DepartmentId.HasValue)
+                {
+                    return Ok(Array.Empty<DepartmentDto>());
+                }
+
+                var department = await _context.Departments
+                    .AsNoTracking()
+                    .Where(d => d.DepartmentId == user.DepartmentId.Value)
+                    .ToListAsync();
+
+                return Ok(department.Select(d => d.ToDepartmentDto()));
+            }
+
             var departments = await _context.Departments.AsNoTracking().ToListAsync();
             return Ok(departments.Select(d => d.ToDepartmentDto()));
         }
@@ -30,8 +52,20 @@ namespace FourierIT_API.Controllers
 
         [Authorize]
         [HttpGet("{DepartmentId}")]
-        public async  Task<IActionResult> GetById([FromRoute] int DepartmentId)//  get a specific department by its id, the id is passed as a parameter in the route and is marked with [FromRoute] to indicate that it should be bound from the route data
+        public async Task<IActionResult> GetById([FromRoute] int DepartmentId)//  get a specific department by its id, the id is passed as a parameter in the route and is marked with [FromRoute] to indicate that it should be bound from the route data
         {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null)
+                return Unauthorized();
+
+            if (await _userManager.IsInRoleAsync(user, "Department Admin") && !await _userManager.IsInRoleAsync(user, "Super Admin"))
+            {
+                if (!user.DepartmentId.HasValue || user.DepartmentId.Value != DepartmentId)
+                {
+                    return Forbid();
+                }
+            }
+
             var department = await _context.Departments.FindAsync(DepartmentId);//  deffered excecution to find a department by its id using the Find method of the database context, which will return null if no department is found with the specified id
             if (department == null)
             {
@@ -40,7 +74,7 @@ namespace FourierIT_API.Controllers
             return Ok(department.ToDepartmentDto());
         }
 
-        [Authorize(Roles = "Department Admin")]
+        [Authorize(Roles = "Super Admin")]
         [HttpPost]
         public async Task<IActionResult> create([FromBody] CreateDepartmentRequestDto DepartmentDto)
         {
@@ -62,6 +96,19 @@ namespace FourierIT_API.Controllers
         [Route("{DepartmentId}")]
         public async Task<IActionResult> Update([FromRoute] int DepartmentId, [FromBody] UpdateDepartmentRequestDto UpdateDto)
         {
+            // Ensure Department Admins can only update their own department
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null)
+                return Unauthorized();
+
+            if (await _userManager.IsInRoleAsync(user, "Department Admin") && !await _userManager.IsInRoleAsync(user, "Super Admin"))
+            {
+                if (!user.DepartmentId.HasValue || user.DepartmentId.Value != DepartmentId)
+                {
+                    return Forbid();
+                }
+            }
+
             var departmentModel = await _context.Departments.FirstOrDefaultAsync(x => x.DepartmentId == DepartmentId);
             if (departmentModel == null)
             {
@@ -80,7 +127,7 @@ namespace FourierIT_API.Controllers
 
         }
 
-        [Authorize(Roles = "Department Admin")]
+        [Authorize(Roles = "Super Admin")]
         [HttpDelete]
         [Route("{DepartmentId}")]
         public async Task<IActionResult> Delete([FromRoute] int DepartmentId)

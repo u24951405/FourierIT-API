@@ -67,6 +67,77 @@ namespace FourierIT_API.Data
             await EnsureMissingNamedBranchesAsync(db, institutionId, ct);
         }
 
+        public static async Task EnsureDepartmentsAndRequirementsAsync(AppDbContext db, CancellationToken ct = default)
+        {
+            var institutionId = await ResolveSeedInstitutionIdAsync(db, ct);
+            var branch = await db.Branches
+                .Where(b => b.InstitutionId == institutionId)
+                .OrderBy(b => b.BranchId)
+                .FirstOrDefaultAsync(ct);
+
+            if (branch == null)
+                return;
+
+            var departments = new[]
+            {
+                new Department { DepartmentName = "Fourier IT Innovation", BranchId = branch.BranchId, CreatedAt = DateTimeOffset.UtcNow },
+                new Department { DepartmentName = "Fourier-E Consultation", BranchId = branch.BranchId, CreatedAt = DateTimeOffset.UtcNow },
+                new Department { DepartmentName = "RQTech", BranchId = branch.BranchId, CreatedAt = DateTimeOffset.UtcNow },
+                new Department { DepartmentName = "Fourier Recruitment", BranchId = branch.BranchId, CreatedAt = DateTimeOffset.UtcNow }
+            };
+
+            foreach (var department in departments)
+            {
+                var exists = await db.Departments.AnyAsync(d => d.DepartmentName == department.DepartmentName, ct);
+                if (!exists)
+                {
+                    db.Departments.Add(department);
+                }
+            }
+
+            await db.SaveChangesAsync(ct);
+
+            var documentTypes = await db.DocumentTypes.AsNoTracking().ToListAsync(ct);
+            var allDocumentTypeIds = documentTypes.Select(dt => dt.DocumentTypeId).ToHashSet();
+
+            var departmentLookup = await db.Departments.AsNoTracking().ToListAsync(ct);
+            var requirements = new List<DepartmentDocumentType>();
+
+            foreach (var department in departmentLookup)
+            {
+                var departmentName = department.DepartmentName;
+                var requiredIds = departmentName switch
+                {
+                    "Fourier IT Innovation" => new[] { 1, 2, 7, 10, 11, 12 },
+                    "Fourier-E Consultation" => new[] { 1, 4, 7, 10, 11, 12, 13 },
+                    "RQTech" => new[] { 1, 2, 7, 8, 11, 13, 14, 18 },
+                    "Fourier Recruitment" => new[] { 1, 2, 4, 7, 10 },
+                    _ => Array.Empty<int>()
+                };
+
+                foreach (var docTypeId in requiredIds.Where(allDocumentTypeIds.Contains))
+                {
+                    var exists = await db.DepartmentDocumentTypes.AnyAsync(ddt => ddt.DepartmentId == department.DepartmentId && ddt.DocumentTypeId == docTypeId, ct);
+                    if (!exists)
+                    {
+                        requirements.Add(new DepartmentDocumentType
+                        {
+                            DepartmentId = department.DepartmentId,
+                            DocumentTypeId = docTypeId,
+                            IsMandatory = true,
+                            CreatedAt = DateTimeOffset.UtcNow
+                        });
+                    }
+                }
+            }
+
+            if (requirements.Count > 0)
+            {
+                db.DepartmentDocumentTypes.AddRange(requirements);
+                await db.SaveChangesAsync(ct);
+            }
+        }
+
         private static async Task EnsureFinancialInstitutionTypesAsync(AppDbContext db, CancellationToken ct)
         {
             foreach (var name in FinancialInstitutionTypeNames)

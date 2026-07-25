@@ -99,6 +99,10 @@ namespace FourierIT_API.Services
             status.ComplianceScore = await CalculateComplianceScoreAsync(userId);
             status.OverallRiskScore = await AssessRiskLevelAsync(userId);
 
+            // Tag the status with the user's department and compliance category.
+            status.DepartmentId = user.DepartmentId;
+            status.ComplianceCategory = DetermineComplianceCategory(user);
+
             // Determine overall status
             status.OverallStatus = DetermineOverallStatus(status);
             status.RiskLevel = DetermineRiskLevel(status);
@@ -282,7 +286,6 @@ namespace FourierIT_API.Services
             var totalUsers = await _userManager.Users.CountAsync();
             var statuses = await _context.ComplianceStatuses
                 .AsNoTracking()
-                .Where(s => s.DepartmentId == null) // Only user-level statuses
                 .ToListAsync();
 
             var dashboard = new ComplianceDashboardDto
@@ -397,13 +400,39 @@ namespace FourierIT_API.Services
                 CompliantUsers = statuses.Count(s => s.OverallStatus == "Compliant"),
                 NonCompliantUsers = statuses.Count(s => s.OverallStatus == "Non-Compliant"),
                 PartialCompliantUsers = statuses.Count(s => s.OverallStatus == "Partial"),
+                ReviewRequiredUsers = statuses.Count(s => s.OverallStatus == "Review-Required"),
                 CriticalRiskUsers = statuses.Count(s => s.RiskLevel == "Critical"),
-                HighRiskUsers = statuses.Count(s => s.RiskLevel == "High")
+                HighRiskUsers = statuses.Count(s => s.RiskLevel == "High"),
+                MediumRiskUsers = statuses.Count(s => s.RiskLevel == "Medium"),
+                LowRiskUsers = statuses.Count(s => s.RiskLevel == "Low")
             };
 
             dashboard.OverallCompliancePercentage = statuses.Count > 0
                 ? (dashboard.CompliantUsers * 100m) / statuses.Count
                 : 0;
+
+            var statusIds = statuses.Select(s => s.ComplianceStatusId).ToList();
+
+            dashboard.TotalOpenAlerts = await _context.ComplianceAlerts
+                .AsNoTracking()
+                .Where(a => !a.IsResolved && statusIds.Contains(a.ComplianceStatusId))
+                .CountAsync();
+
+            dashboard.CriticalAlerts = await _context.ComplianceAlerts
+                .AsNoTracking()
+                .Where(a => !a.IsResolved && a.Severity == "Critical" && statusIds.Contains(a.ComplianceStatusId))
+                .OrderByDescending(a => a.CreatedAt)
+                .Select(a => new ComplianceAlertDto
+                {
+                    AlertId = a.AlertId,
+                    AlertType = a.AlertType,
+                    Severity = a.Severity,
+                    Message = a.AlertMessage,
+                    UserName = a.User != null ? a.User.UserName : null,
+                    CreatedAt = a.CreatedAt,
+                    RequiredAction = a.RequiredAction
+                })
+                .ToListAsync();
 
             return dashboard;
         }
@@ -1134,6 +1163,18 @@ namespace FourierIT_API.Services
                 .Include(rd => rd.DocumentType)
                 .Where(rd => rd.EntityTypeId == entityTypeId)
                 .ToListAsync();
+        }
+
+        private string DetermineComplianceCategory(User user)
+        {
+            return user.EntityTypeId switch
+            {
+                3 => "Business",
+                4 => "Trust",
+                5 => "Partnership",
+                6 => "Legal Entity",
+                _ => "Individual"
+            };
         }
 
         private async Task GenerateAlertsAsync(ComplianceStatus status)

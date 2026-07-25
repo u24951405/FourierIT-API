@@ -25,11 +25,9 @@ namespace FourierIT_API.DTOs.User
         [Required]
         public string? Password { get; set; } = null;
 
-        [Required]
-        public int EntityTypeId { get; set; }
+        public int? EntityTypeId { get; set; }
 
-        [Required]
-        public string EntityIdentificationNumber { get; set; } = string.Empty;
+        public string? EntityIdentificationNumber { get; set; }
 
         // Up to two roles can be selected during registration.
         // Role is kept for backward compatibility with older clients.

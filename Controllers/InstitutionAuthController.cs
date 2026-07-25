@@ -172,13 +172,27 @@ namespace FourierIT_API.Controllers
 
             invitation.IsUsed = true;
             invitation.IsRevoked = true;
+
+            var sessionToken = GenerateSessionToken();
+            var expiresAt = DateTimeOffset.UtcNow.AddHours(8);
+
+            // Store session token in database
+            var sessionRecord = new InstitutionSessionToken
+            {
+                InstitutionId = invitation.InstitutionId,
+                TokenString = sessionToken,
+                IssuedAt = DateTime.UtcNow,
+                ExpiresAt = expiresAt.DateTime,
+                IsRevoked = false
+            };
+            _context.InstitutionSessionTokens.Add(sessionRecord);
             await _context.SaveChangesAsync();
 
             var response = new OtpVerifyResponseDto
             {
                 Success = true,
-                SessionToken = GenerateSessionToken(),
-                ExpiresAt = DateTimeOffset.UtcNow.AddHours(8),
+                SessionToken = sessionToken,
+                ExpiresAt = expiresAt,
                 Message = "OTP verified successfully."
             };
 

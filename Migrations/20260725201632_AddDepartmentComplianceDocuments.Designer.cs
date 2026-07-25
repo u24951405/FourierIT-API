@@ -4,6 +4,7 @@ using FourierIT_API.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace FourierIT_API.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260725201632_AddDepartmentComplianceDocuments")]
+    partial class AddDepartmentComplianceDocuments
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -782,28 +785,28 @@ namespace FourierIT_API.Migrations
                         {
                             DepartmentId = 1,
                             BranchId = 1,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2570), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(703), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentName = "Fourier IT Innovation"
                         },
                         new
                         {
                             DepartmentId = 2,
                             BranchId = 1,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2574), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(711), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentName = "Fourier-E Consultation"
                         },
                         new
                         {
                             DepartmentId = 3,
                             BranchId = 1,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2576), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(714), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentName = "RQTech"
                         },
                         new
                         {
                             DepartmentId = 4,
                             BranchId = 1,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2578), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(717), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentName = "Fourier Recruitment"
                         });
                 });
@@ -840,7 +843,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 1,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2644), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(801), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 1,
                             DocumentTypeId = 1,
                             IsMandatory = true
@@ -848,7 +851,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 2,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2648), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(811), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 1,
                             DocumentTypeId = 2,
                             IsMandatory = false
@@ -856,7 +859,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 3,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2650), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(813), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 1,
                             DocumentTypeId = 3,
                             IsMandatory = false
@@ -864,7 +867,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 4,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2653), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(818), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 1,
                             DocumentTypeId = 7,
                             IsMandatory = true
@@ -872,7 +875,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 5,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2655), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(820), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 1,
                             DocumentTypeId = 8,
                             IsMandatory = false
@@ -880,7 +883,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 6,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2659), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(825), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 1,
                             DocumentTypeId = 10,
                             IsMandatory = false
@@ -888,7 +891,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 7,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2660), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(827), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 1,
                             DocumentTypeId = 11,
                             IsMandatory = true
@@ -896,7 +899,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 8,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2662), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(829), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 1,
                             DocumentTypeId = 12,
                             IsMandatory = true
@@ -904,7 +907,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 9,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2665), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(831), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 1,
                             DocumentTypeId = 13,
                             IsMandatory = true
@@ -912,7 +915,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 10,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2668), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(834), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 1,
                             DocumentTypeId = 20,
                             IsMandatory = true
@@ -920,7 +923,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 11,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2685), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(860), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 1,
                             DocumentTypeId = 21,
                             IsMandatory = true
@@ -928,7 +931,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 12,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2687), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(862), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 1,
                             DocumentTypeId = 22,
                             IsMandatory = true
@@ -936,7 +939,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 13,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2689), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(864), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 2,
                             DocumentTypeId = 1,
                             IsMandatory = true
@@ -944,7 +947,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 14,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2691), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(866), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 2,
                             DocumentTypeId = 4,
                             IsMandatory = true
@@ -952,7 +955,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 15,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2692), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(867), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 2,
                             DocumentTypeId = 5,
                             IsMandatory = false
@@ -960,7 +963,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 16,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2694), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(869), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 2,
                             DocumentTypeId = 7,
                             IsMandatory = true
@@ -968,7 +971,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 17,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2696), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(871), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 2,
                             DocumentTypeId = 10,
                             IsMandatory = false
@@ -976,7 +979,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 18,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2699), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(874), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 2,
                             DocumentTypeId = 11,
                             IsMandatory = true
@@ -984,7 +987,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 19,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2701), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(875), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 2,
                             DocumentTypeId = 12,
                             IsMandatory = true
@@ -992,7 +995,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 20,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2704), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(877), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 2,
                             DocumentTypeId = 13,
                             IsMandatory = true
@@ -1000,7 +1003,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 21,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2706), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(879), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 2,
                             DocumentTypeId = 20,
                             IsMandatory = true
@@ -1008,7 +1011,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 22,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2708), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(884), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 2,
                             DocumentTypeId = 21,
                             IsMandatory = true
@@ -1016,7 +1019,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 23,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2709), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(886), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 2,
                             DocumentTypeId = 22,
                             IsMandatory = true
@@ -1024,7 +1027,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 24,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2711), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(888), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 3,
                             DocumentTypeId = 1,
                             IsMandatory = true
@@ -1032,7 +1035,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 25,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2713), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(889), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 3,
                             DocumentTypeId = 2,
                             IsMandatory = false
@@ -1040,7 +1043,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 26,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2715), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(891), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 3,
                             DocumentTypeId = 7,
                             IsMandatory = true
@@ -1048,7 +1051,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 27,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2717), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(893), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 3,
                             DocumentTypeId = 8,
                             IsMandatory = false
@@ -1056,7 +1059,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 28,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2718), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(895), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 3,
                             DocumentTypeId = 11,
                             IsMandatory = true
@@ -1064,7 +1067,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 29,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2720), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(896), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 3,
                             DocumentTypeId = 12,
                             IsMandatory = true
@@ -1072,7 +1075,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 30,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2722), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(898), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 3,
                             DocumentTypeId = 13,
                             IsMandatory = true
@@ -1080,7 +1083,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 31,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2723), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(900), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 3,
                             DocumentTypeId = 14,
                             IsMandatory = true
@@ -1088,7 +1091,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 32,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2725), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(901), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 3,
                             DocumentTypeId = 18,
                             IsMandatory = true
@@ -1096,7 +1099,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 33,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2727), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(903), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 3,
                             DocumentTypeId = 20,
                             IsMandatory = true
@@ -1104,7 +1107,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 34,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2730), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(906), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 3,
                             DocumentTypeId = 21,
                             IsMandatory = true
@@ -1112,7 +1115,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 35,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2732), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(963), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 3,
                             DocumentTypeId = 22,
                             IsMandatory = true
@@ -1120,7 +1123,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 36,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2734), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(965), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 4,
                             DocumentTypeId = 1,
                             IsMandatory = true
@@ -1128,7 +1131,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 37,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2736), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(967), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 4,
                             DocumentTypeId = 2,
                             IsMandatory = false
@@ -1136,7 +1139,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 38,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2737), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(968), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 4,
                             DocumentTypeId = 3,
                             IsMandatory = false
@@ -1144,7 +1147,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 39,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2739), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(970), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 4,
                             DocumentTypeId = 4,
                             IsMandatory = true
@@ -1152,7 +1155,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 40,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2742), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(972), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 4,
                             DocumentTypeId = 5,
                             IsMandatory = false
@@ -1160,7 +1163,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 41,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2743), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(975), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 4,
                             DocumentTypeId = 7,
                             IsMandatory = true
@@ -1168,7 +1171,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 42,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2745), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(977), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 4,
                             DocumentTypeId = 10,
                             IsMandatory = false
@@ -1176,7 +1179,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 43,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2747), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(979), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 4,
                             DocumentTypeId = 11,
                             IsMandatory = true
@@ -1184,7 +1187,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 44,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2749), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(980), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 4,
                             DocumentTypeId = 12,
                             IsMandatory = true
@@ -1192,7 +1195,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 45,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2751), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(982), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 4,
                             DocumentTypeId = 13,
                             IsMandatory = true
@@ -1200,7 +1203,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 46,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2752), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(984), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 4,
                             DocumentTypeId = 20,
                             IsMandatory = true
@@ -1208,7 +1211,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 47,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2754), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(985), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 4,
                             DocumentTypeId = 21,
                             IsMandatory = true
@@ -1216,7 +1219,7 @@ namespace FourierIT_API.Migrations
                         new
                         {
                             DepartmentDocumentTypeId = 48,
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 23, 1, 24, 535, DateTimeKind.Unspecified).AddTicks(2756), new TimeSpan(0, 0, 0, 0, 0)),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 7, 25, 20, 16, 31, 80, DateTimeKind.Unspecified).AddTicks(987), new TimeSpan(0, 0, 0, 0, 0)),
                             DepartmentId = 4,
                             DocumentTypeId = 22,
                             IsMandatory = true
@@ -2135,40 +2138,6 @@ namespace FourierIT_API.Migrations
                     b.ToTable("InstitutionRequestedDocumentTypes");
                 });
 
-            modelBuilder.Entity("FourierIT_API.Models.InstitutionSessionToken", b =>
-                {
-                    b.Property<int>("SessionId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("SessionId"));
-
-                    b.Property<DateTime>("ExpiresAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<int>("InstitutionId")
-                        .HasColumnType("int");
-
-                    b.Property<bool>("IsRevoked")
-                        .HasColumnType("bit");
-
-                    b.Property<DateTime>("IssuedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<DateTime?>("RevokedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("TokenString")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.HasKey("SessionId");
-
-                    b.HasIndex("InstitutionId");
-
-                    b.ToTable("InstitutionSessionTokens");
-                });
-
             modelBuilder.Entity("FourierIT_API.Models.InstitutionType", b =>
                 {
                     b.Property<int>("InstitutionTypeId")
@@ -2672,12 +2641,6 @@ namespace FourierIT_API.Migrations
                     b.HasData(
                         new
                         {
-                            Id = "AD",
-                            Name = "Admin",
-                            NormalizedName = "ADMIN"
-                        },
-                        new
-                        {
                             Id = "DA",
                             Name = "Department Admin",
                             NormalizedName = "DEPARTMENT ADMIN"
@@ -2687,12 +2650,6 @@ namespace FourierIT_API.Migrations
                             Id = "DO",
                             Name = "Document Owner",
                             NormalizedName = "DOCUMENT OWNER"
-                        },
-                        new
-                        {
-                            Id = "CO",
-                            Name = "Compliance Officer",
-                            NormalizedName = "COMPLIANCE OFFICER"
                         },
                         new
                         {
@@ -3612,17 +3569,6 @@ namespace FourierIT_API.Migrations
                     b.Navigation("FICARule");
 
                     b.Navigation("InstitutionEnquiryRequest");
-                });
-
-            modelBuilder.Entity("FourierIT_API.Models.InstitutionSessionToken", b =>
-                {
-                    b.HasOne("FourierIT_API.Models.Institution", "Institution")
-                        .WithMany()
-                        .HasForeignKey("InstitutionId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Institution");
                 });
 
             modelBuilder.Entity("FourierIT_API.Models.NotificationHistory", b =>

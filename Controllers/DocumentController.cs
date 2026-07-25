@@ -43,6 +43,57 @@ namespace FourierIT_API.Controllers
             var user = await _userManager.GetUserAsync(User);
             if (user == null) return Unauthorized();
 
+            bool isDepartmentAdmin = await _userManager.IsInRoleAsync(user, "Department Admin");
+            var documentQuery = _context.Documents.Where(d => d.UserId == user.Id && d.CurrentStatus != "Deleted");
+
+            if (isDepartmentAdmin && user.DepartmentId.HasValue)
+            {
+                var department = await _context.Departments
+                    .Include(d => d.DepartmentDocumentTypes)
+                    .ThenInclude(ddt => ddt.DocumentType)
+                    .FirstOrDefaultAsync(d => d.DepartmentId == user.DepartmentId.Value);
+
+                if (department == null)
+                    return NotFound(new { error = "Assigned department not found." });
+
+                var companyRequiredDocumentTypeIds = await _context.RequiredDocuments
+                    .Where(rd => rd.EntityTypeId == 3)
+                    .Select(rd => rd.DocumentTypeId)
+                    .ToListAsync();
+
+                var departmentComplianceDocumentTypeIds = new[] { 20, 21, 22 };
+
+                var departmentRequiredDocs = department.DepartmentDocumentTypes
+                    .Where(ddt => companyRequiredDocumentTypeIds.Contains(ddt.DocumentTypeId)
+                        || departmentComplianceDocumentTypeIds.Contains(ddt.DocumentTypeId))
+                    .ToList();
+
+                var departmentUserDocs = await documentQuery
+                    .GroupBy(d => d.DocumentTypeId)
+                    .Select(g => new { DocumentTypeId = g.Key, count = g.Count() })
+                    .ToDictionaryAsync(x => x.DocumentTypeId, x => x.count);
+
+                var departmentResult = departmentRequiredDocs.Select(rd => new
+                {
+                    rd.DocumentTypeId,
+                    DocumentTypeName = rd.DocumentType.TypeName,
+                    rd.IsMandatory,
+                    rd.DocumentType.Description,
+                    IsUploaded = departmentUserDocs.ContainsKey(rd.DocumentTypeId),
+                    UploadCount = departmentUserDocs.GetValueOrDefault(rd.DocumentTypeId, 0)
+                });
+
+                var departmentMissingMandatory = departmentResult.Where(r => r.IsMandatory && !r.IsUploaded).ToList();
+
+                return Ok(new
+                {
+                    EntityType = department.DepartmentName,
+                    IsComplete = !departmentMissingMandatory.Any(),
+                    MissingCount = departmentMissingMandatory.Count,
+                    Documents = departmentResult
+                });
+            }
+
             // 1. Get user's default entity type
             var userWithEntity = await _context.Users
                 .Include(u => u.EntityType)
@@ -53,17 +104,14 @@ namespace FourierIT_API.Controllers
 
             if (entityTypeId.HasValue)
             {
-                // The user explicitly provided an entity type (e.g., they have both roles)
                 targetEntityTypeId = entityTypeId.Value;
             }
             else if (userWithEntity?.EntityTypeId != null)
             {
-                // Fallback to the one saved on their profile (single role registration)
                 targetEntityTypeId = userWithEntity.EntityTypeId.Value;
             }
             else
             {
-                // They have no profile entity type and didn't pass one through the endpoint
                 return BadRequest(new { error = "User has not selected an entity type. Please specify an entity type" });
             }
 
@@ -78,9 +126,7 @@ namespace FourierIT_API.Controllers
 
             var requiredDocs = entityType.RequiredDocuments;
 
-            // 4. Get user's uploaded documents grouped by type
-            var userDocs = await _context.Documents
-                .Where(d => d.UserId == user.Id && d.CurrentStatus != "Deleted")
+            var userDocs = await documentQuery
                 .GroupBy(d => d.DocumentTypeId)
                 .Select(g => new
                 {
@@ -89,7 +135,6 @@ namespace FourierIT_API.Controllers
                 })
                 .ToDictionaryAsync(x => x.DocumentTypeId, x => x.count);
 
-            //5. Map the results
             var result = requiredDocs.Select(rd => new
             {
                 rd.DocumentTypeId,
@@ -367,6 +412,45 @@ namespace FourierIT_API.Controllers
         {
             var user = await _userManager.GetUserAsync(User);
             if (user == null) return Unauthorized();
+
+            var isDepartmentAdmin = await _userManager.IsInRoleAsync(user, "Department Admin");
+            if (isDepartmentAdmin && user.DepartmentId.HasValue)
+            {
+                var department = await _context.Departments
+                    .Include(d => d.DepartmentDocumentTypes)
+                    .ThenInclude(ddt => ddt.DocumentType)
+                    .FirstOrDefaultAsync(d => d.DepartmentId == user.DepartmentId.Value);
+
+                if (department == null)
+                    return NotFound(new { error = "Assigned department not found." });
+
+                var companyRequiredDocumentTypeIds = await _context.RequiredDocuments
+                    .Where(rd => rd.EntityTypeId == 3)
+                    .Select(rd => rd.DocumentTypeId)
+                    .ToListAsync();
+
+                var departmentDocumentTypes = department.DepartmentDocumentTypes
+                    .Where(ddt => companyRequiredDocumentTypeIds.Contains(ddt.DocumentTypeId))
+                    .OrderBy(ddt => ddt.IsMandatory ? 0 : 1)
+                    .ThenBy(ddt => ddt.DocumentType.TypeName)
+                    .Select(ddt => new
+                    {
+                        ddt.DocumentTypeId,
+                        ddt.DocumentType.TypeName,
+                        ddt.DocumentType.Description,
+                        ddt.IsMandatory,
+                        RequirementNote = ddt.DocumentType.Description
+                    })
+                    .ToList();
+
+                return Ok(new
+                {
+                    EntityType = department.DepartmentName,
+                    DocumentCount = departmentDocumentTypes.Count,
+                    MandatoryCount = departmentDocumentTypes.Count(r => r.IsMandatory),
+                    DocumentTypes = departmentDocumentTypes
+                });
+            }
 
             // Get user with their entity type
             var userWithEntity = await _context.Users
