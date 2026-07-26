@@ -63,6 +63,7 @@ namespace FourierIT_API.Data
         public DbSet<Province> Provinces { get; set; }
 
         // System DbSets
+        public DbSet<Backup> Backups { get; set; }
         public DbSet<Permission> Permissions { get; set; }
         public DbSet<SecurityQuestion> SecurityQuestions { get; set; }
         public DbSet<FICARuleHistory> FICARuleHistories { get; set; }
