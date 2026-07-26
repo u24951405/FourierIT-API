@@ -10,6 +10,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
 using System.Linq.Expressions;
+using System.Net;
 using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
 
@@ -27,6 +28,7 @@ namespace FourierIT_API.Controllers
         private readonly IEntityVerificationService _entityVerificationService;
         private readonly IConfiguration _configuration;
         private readonly IAuditLogService _auditLogService;
+        private readonly IEmailService _emailService;
 
         public UserController(
             UserManager<User> userManager,
@@ -36,7 +38,8 @@ namespace FourierIT_API.Controllers
             RoleManager<Role> roleManager,
             IEntityVerificationService entityVerificationService,
             IConfiguration configuration,
-            IAuditLogService auditLogService)
+            IAuditLogService auditLogService,
+            IEmailService emailService)
         {
             _userManager = userManager;
             _tokenService = tokenService;
@@ -46,6 +49,7 @@ namespace FourierIT_API.Controllers
             _entityVerificationService = entityVerificationService;
             _configuration = configuration;
             _auditLogService = auditLogService;
+            _emailService = emailService;
         }
 
         [AllowAnonymous]
@@ -141,6 +145,55 @@ namespace FourierIT_API.Controllers
                 return await _userManager.FindByIdAsync(userId);
 
             return null;
+        }
+
+        [AllowAnonymous]
+        [HttpPost("forgot-password")]
+        public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequestDto request)
+        {
+            if (!ModelState.IsValid) return BadRequest(ModelState);
+
+            var email = request.EmailAddress.Trim();
+            var user = await _userManager.FindByEmailAsync(email);
+            if (user == null)
+            {
+                // Do not reveal that the email is not registered.
+                return Ok(new { message = "If an account exists for this email, a password reset link has been sent." });
+            }
+
+            var token = await _userManager.GeneratePasswordResetTokenAsync(user);
+            var encodedToken = WebUtility.UrlEncode(token);
+            var frontendBase = _configuration["EmailSettings:FrontendBaseUrl"]?.TrimEnd('/') ?? "http://localhost:4200";
+            var resetLink = $"{frontendBase}/auth/reset-password?email={WebUtility.UrlEncode(email)}&token={encodedToken}";
+            var expiresAt = DateTimeOffset.UtcNow.AddHours(1);
+
+            await _emailService.SendPasswordResetEmailAsync(email, resetLink, expiresAt);
+
+            return Ok(new { message = "If an account exists for this email, a password reset link has been sent." });
+        }
+
+        [AllowAnonymous]
+        [HttpPost("reset-password")]
+        public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequestDto request)
+        {
+            if (!ModelState.IsValid) return BadRequest(ModelState);
+
+            var email = request.EmailAddress.Trim();
+            var user = await _userManager.FindByEmailAsync(email);
+            if (user == null)
+            {
+                // Avoid leaking registered emails.
+                return BadRequest(new { error = "Invalid password reset request." });
+            }
+
+            var decodedToken = WebUtility.UrlDecode(request.Token);
+            var resetResult = await _userManager.ResetPasswordAsync(user, decodedToken, request.NewPassword);
+            if (!resetResult.Succeeded)
+            {
+                return BadRequest(new { error = "Password reset failed.", details = resetResult.Errors.Select(e => e.Description) });
+            }
+
+            return Ok(new { message = "Your password has been reset successfully." });
         }
 
         [AllowAnonymous]

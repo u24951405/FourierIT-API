@@ -12,13 +12,23 @@ using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.EntityFrameworkCore.SqlServer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
 
 // Add services to the container.
 
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
+        options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+        options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+            // Allow enums to be sent/received as strings (e.g. "OTP_SENT") from the frontend
+            options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    });
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AngularClient", policy =>
@@ -76,7 +86,7 @@ builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 builder.Services.AddScoped<IComplianceService, ComplianceService>();
 
-// Register Audit Log Service (mock, read-only)
+// Register Audit Log Service
 builder.Services.AddScoped<FourierIT_API.Interfaces.IAuditLogService, FourierIT_API.Services.AuditLogService>();
 
 // Register Azure Blob Client
@@ -156,7 +166,48 @@ app.MapControllers();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await db.Database.MigrateAsync();
+    db.Database.SetCommandTimeout(300);
+
+    try
+    {
+        await db.Database.MigrateAsync();
+    }
+    catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number == 1801)
+    {
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        logger.LogWarning(ex, "Database '{Database}' already exists. Skipping creation.", db.Database.GetDbConnection().Database);
+    }
+
+    try
+    {
+        await db.Database.ExecuteSqlRawAsync(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_InstitutionInvitations_TokenString')
+            BEGIN
+                CREATE INDEX IX_InstitutionInvitations_TokenString ON InstitutionInvitations(TokenString);
+            END
+
+            IF EXISTS (
+                SELECT 1 FROM sys.columns
+                WHERE object_id = OBJECT_ID('InstitutionSessionTokens')
+                  AND name = 'TokenString'
+                  AND max_length = -1
+            )
+            BEGIN
+                ALTER TABLE InstitutionSessionTokens ALTER COLUMN TokenString nvarchar(255) NOT NULL;
+            END
+
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_InstitutionSessionTokens_TokenString')
+            BEGIN
+                CREATE INDEX IX_InstitutionSessionTokens_TokenString ON InstitutionSessionTokens(TokenString);
+            END
+        ");
+    }
+    catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number == -2)
+    {
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        logger.LogWarning(ex, "Database index/column migration timed out after {Timeout}s. The app will continue, but database tuning may be required.", 300);
+    }
+
     await DevLookupSeed.EnsureBranchesExistAsync(db);
     await DevLookupSeed.EnsureDepartmentsAndRequirementsAsync(db);
 }

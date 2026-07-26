@@ -59,6 +59,94 @@ namespace FourierIT_API.Services
             await client.SendMailAsync(message);
         }
 
+        public async Task SendPasswordResetEmailAsync(string toEmail, string resetLink, DateTimeOffset expiresAt)
+        {
+            if (string.IsNullOrWhiteSpace(_settings.Host))
+                throw new InvalidOperationException("SMTP host is not configured.");
+
+            if (string.IsNullOrWhiteSpace(toEmail))
+                throw new ArgumentException("Recipient email address is required.", nameof(toEmail));
+
+            if (string.IsNullOrWhiteSpace(resetLink))
+                throw new ArgumentException("Reset link is required.", nameof(resetLink));
+
+            var message = new MailMessage
+            {
+                From = new MailAddress(_settings.FromAddress, _settings.FromDisplayName),
+                Subject = "DocuVault Password Reset",
+                Body = BuildPasswordResetEmailHtmlBody(resetLink, expiresAt),
+                IsBodyHtml = true,
+                BodyEncoding = Encoding.UTF8,
+                SubjectEncoding = Encoding.UTF8,
+                Priority = MailPriority.High
+            };
+            message.Headers.Add("X-Priority", "1");
+            message.Headers.Add("Importance", "High");
+            message.Headers.Add("X-MSMail-Priority", "High");
+
+            message.To.Add(toEmail);
+            message.AlternateViews.Add(AlternateView.CreateAlternateViewFromString(BuildPasswordResetEmailPlainTextBody(resetLink, expiresAt), null, "text/plain"));
+
+            using var client = new SmtpClient(_settings.Host, _settings.Port)
+            {
+                UseDefaultCredentials = false,
+                EnableSsl = _settings.EnableSsl,
+                DeliveryMethod = SmtpDeliveryMethod.Network
+            };
+
+            if (!string.IsNullOrWhiteSpace(_settings.Username))
+            {
+                client.Credentials = new NetworkCredential(_settings.Username, _settings.Password);
+            }
+
+            await client.SendMailAsync(message);
+        }
+
+        private static string BuildPasswordResetEmailPlainTextBody(string resetLink, DateTimeOffset expiresAt)
+        {
+            return $"Hello,\n\n" +
+                   "We received a request to reset your DocuVault password. Use the link below to choose a new password:\n\n" +
+                   $"{resetLink}\n\n" +
+                   $"This link expires on {expiresAt:yyyy-MM-dd HH:mm} UTC.\n\n" +
+                   "If you did not request a password reset, you can safely ignore this message.\n\n" +
+                   "Thank you,\n" +
+                   "M5CS | DocuVault Security Team\n";
+        }
+
+        private static string BuildPasswordResetEmailHtmlBody(string resetLink, DateTimeOffset expiresAt)
+        {
+            var logoData = GetInlineLogoSvgBase64();
+            return $"<html><body style=\"font-family:Segoe UI,Arial,sans-serif;color:#111827;background:#f3f4f6;margin:0;padding:0;\">" +
+                   "<div style=\"max-width:680px;margin:0 auto;padding:32px 16px;\">" +
+                   "<div style=\"background:#ffffff;border-radius:24px;box-shadow:0 24px 80px rgba(15,23,42,0.08);overflow:hidden;\">" +
+                   "<div style=\"padding:32px 40px;background:#0f172a;color:#f8fafc;text-align:center;\">" +
+                   $"<img src=\"data:image/svg+xml;base64,{logoData}\" alt=\"M5CS logo\" width=60 height=60 style=\"display:block;margin:0 auto 18px;\" />" +
+                   "<p style=\"margin:0;font-size:14px;letter-spacing:0.16em;color:#94a3b8;text-transform:uppercase;\">Password reset request</p>" +
+                   "<h1 style=\"margin:16px 0 0;font-size:30px;font-weight:700;line-height:1.1;\">Reset your password</h1>" +
+                   "</div>" +
+                   "<div style=\"padding:32px 40px;\">" +
+                   "<p style=\"margin:0 0 24px;font-size:16px;color:#334155;\">Hello,<br/>We received a request to reset the password for your DocuVault account. Click the button below to choose a new password.</p>" +
+                   $"<p style=\"margin:0 0 32px;text-align:center;\"><a href=\"{resetLink}\" style=\"display:inline-flex;align-items:center;justify-content:center;padding:14px 26px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:12px;font-weight:700;box-shadow:0 12px 30px rgba(37,99,235,0.18);\">Reset Password</a></p>" +
+                   "<div style=\"padding:24px;background:#f8fafc;border-radius:18px;border:1px solid #e2e8f0;margin-bottom:32px;\">" +
+                   "<p style=\"margin:0 0 12px;font-size:14px;font-weight:700;color:#0f172a;\">Link expiry</p>" +
+                   $"<p style=\"margin:0;font-size:15px;color:#475569;\">This link expires on <strong>{expiresAt:yyyy-MM-dd HH:mm} UTC</strong>.</p>" +
+                   "</div>" +
+                   "<p style=\"margin:0 0 18px;font-size:15px;color:#475569;\">If you did not request a password reset, please ignore this message or contact your administrator.</p>" +
+                   "</div>" +
+                   "<div style=\"padding:24px 40px 32px;border-top:1px solid #e2e8f0;background:#fff;display:flex;align-items:center;gap:16px;\">" +
+                   $"<div style=\"width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,#2563eb,#22c55e);display:flex;align-items:center;justify-content:center;\">" +
+                   $"<span style=\"font-size:20px;font-weight:800;color:#ffffff;font-family:Segoe UI,Arial,sans-serif;\">M5</span>" +
+                   "</div>" +
+                   "<div>" +
+                   "<p style=\"margin:0;font-size:15px;font-weight:700;color:#0f172a;\">M5CS</p>" +
+                   "<p style=\"margin:4px 0 0;font-size:13px;color:#64748b;\">Secure document exchange for institutions.</p>" +
+                   "</div>" +
+                   "</div>" +
+                   "</div>" +
+                   "</div>" +
+                   "</body></html>";
+        }
+
         public async Task SendOtpEmailAsync(string toEmail, string institutionName, string otpCode, DateTimeOffset expiresAt)
         {
             if (string.IsNullOrWhiteSpace(_settings.Host))
