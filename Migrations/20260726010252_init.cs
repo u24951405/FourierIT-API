@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace FourierIT_API.Migrations
 {
     /// <inheritdoc />
-    public partial class Initial : Migration
+    public partial class init : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -28,11 +28,32 @@ namespace FourierIT_API.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "AuditLogs",
+                columns: table => new
+                {
+                    AuditLogId = table.Column<int>(type: "int", nullable: false)
+                        .Annotation("SqlServer:Identity", "1, 1"),
+                    UserId = table.Column<string>(type: "nvarchar(450)", maxLength: 450, nullable: false),
+                    ActionCode = table.Column<string>(type: "nvarchar(50)", maxLength: 50, nullable: false),
+                    TimeStamp = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false),
+                    Description = table.Column<string>(type: "nvarchar(1000)", maxLength: 1000, nullable: true),
+                    TableAffected = table.Column<string>(type: "nvarchar(50)", maxLength: 50, nullable: false),
+                    RecordID = table.Column<int>(type: "int", nullable: true),
+                    PreviousBlockHash = table.Column<string>(type: "nvarchar(64)", maxLength: 64, nullable: true),
+                    BlockHash = table.Column<string>(type: "nvarchar(64)", maxLength: 64, nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_AuditLogs", x => x.AuditLogId);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "Backups",
                 columns: table => new
                 {
                     BackupId = table.Column<int>(type: "int", nullable: false)
                         .Annotation("SqlServer:Identity", "1, 1"),
+                    UserId = table.Column<string>(type: "nvarchar(max)", nullable: true),
                     FileName = table.Column<string>(type: "nvarchar(255)", maxLength: 255, nullable: false),
                     DateBackedUp = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false),
                     IsManualBackup = table.Column<bool>(type: "bit", nullable: false)
@@ -398,6 +419,58 @@ namespace FourierIT_API.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "InstitutionInvitations",
+                columns: table => new
+                {
+                    InvitationId = table.Column<int>(type: "int", nullable: false)
+                        .Annotation("SqlServer:Identity", "1, 1"),
+                    InstitutionId = table.Column<int>(type: "int", nullable: false),
+                    Email = table.Column<string>(type: "nvarchar(255)", maxLength: 255, nullable: false),
+                    TokenString = table.Column<string>(type: "nvarchar(255)", maxLength: 255, nullable: false),
+                    OtpCodeHash = table.Column<string>(type: "nvarchar(255)", maxLength: 255, nullable: false),
+                    TokenExpiryTimeStamp = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false),
+                    OtpExpiryTimeStamp = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false),
+                    IsRevoked = table.Column<bool>(type: "bit", nullable: false),
+                    IsUsed = table.Column<bool>(type: "bit", nullable: false),
+                    OtpSendCount = table.Column<int>(type: "int", nullable: false),
+                    CreatedAt = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_InstitutionInvitations", x => x.InvitationId);
+                    table.ForeignKey(
+                        name: "FK_InstitutionInvitations_Institutions_InstitutionId",
+                        column: x => x.InstitutionId,
+                        principalTable: "Institutions",
+                        principalColumn: "InstitutionId",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "InstitutionSessionTokens",
+                columns: table => new
+                {
+                    SessionId = table.Column<int>(type: "int", nullable: false)
+                        .Annotation("SqlServer:Identity", "1, 1"),
+                    InstitutionId = table.Column<int>(type: "int", nullable: false),
+                    TokenString = table.Column<string>(type: "nvarchar(max)", nullable: false),
+                    IssuedAt = table.Column<DateTime>(type: "datetime2", nullable: false),
+                    ExpiresAt = table.Column<DateTime>(type: "datetime2", nullable: false),
+                    IsRevoked = table.Column<bool>(type: "bit", nullable: false),
+                    RevokedAt = table.Column<DateTime>(type: "datetime2", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_InstitutionSessionTokens", x => x.SessionId);
+                    table.ForeignKey(
+                        name: "FK_InstitutionSessionTokens_Institutions_InstitutionId",
+                        column: x => x.InstitutionId,
+                        principalTable: "Institutions",
+                        principalColumn: "InstitutionId",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "Suburbs",
                 columns: table => new
                 {
@@ -471,6 +544,7 @@ namespace FourierIT_API.Migrations
                     AccountStatus = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
                     HasAccessToken = table.Column<bool>(type: "bit", nullable: false),
                     EntityTypeId = table.Column<int>(type: "int", nullable: true),
+                    EntityIdentificationNumber = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: false),
                     DepartmentId = table.Column<int>(type: "int", nullable: true),
                     UserName = table.Column<string>(type: "nvarchar(256)", maxLength: 256, nullable: true),
                     NormalizedUserName = table.Column<string>(type: "nvarchar(256)", maxLength: 256, nullable: true),
@@ -500,6 +574,33 @@ namespace FourierIT_API.Migrations
                         column: x => x.EntityTypeId,
                         principalTable: "EntityTypes",
                         principalColumn: "EntityTypeId");
+                });
+
+            migrationBuilder.CreateTable(
+                name: "DepartmentDocumentTypes",
+                columns: table => new
+                {
+                    DepartmentDocumentTypeId = table.Column<int>(type: "int", nullable: false)
+                        .Annotation("SqlServer:Identity", "1, 1"),
+                    DepartmentId = table.Column<int>(type: "int", nullable: false),
+                    DocumentTypeId = table.Column<int>(type: "int", nullable: false),
+                    IsMandatory = table.Column<bool>(type: "bit", nullable: false),
+                    CreatedAt = table.Column<DateTimeOffset>(type: "datetimeoffset", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_DepartmentDocumentTypes", x => x.DepartmentDocumentTypeId);
+                    table.ForeignKey(
+                        name: "FK_DepartmentDocumentTypes_Departments_DepartmentId",
+                        column: x => x.DepartmentId,
+                        principalTable: "Departments",
+                        principalColumn: "DepartmentId",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_DepartmentDocumentTypes_DocumentTypes_DocumentTypeId",
+                        column: x => x.DocumentTypeId,
+                        principalTable: "DocumentTypes",
+                        principalColumn: "DocumentTypeId");
                 });
 
             migrationBuilder.CreateTable(
@@ -1496,9 +1597,22 @@ namespace FourierIT_API.Migrations
                 columns: new[] { "Id", "ConcurrencyStamp", "Name", "NormalizedName" },
                 values: new object[,]
                 {
+                    { "AD", null, "Admin", "ADMIN" },
+                    { "CO", null, "Compliance Officer", "COMPLIANCE OFFICER" },
                     { "DA", null, "Department Admin", "DEPARTMENT ADMIN" },
                     { "DO", null, "Document Owner", "DOCUMENT OWNER" },
                     { "SH", null, "Stakeholder", "STAKEHOLDER" }
+                });
+
+            migrationBuilder.InsertData(
+                table: "Departments",
+                columns: new[] { "DepartmentId", "BranchId", "CreatedAt", "DepartmentName" },
+                values: new object[,]
+                {
+                    { 1, 1, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9564), new TimeSpan(0, 0, 0, 0, 0)), "Fourier IT Innovation" },
+                    { 2, 1, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9574), new TimeSpan(0, 0, 0, 0, 0)), "Fourier-E Consultation" },
+                    { 3, 1, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9580), new TimeSpan(0, 0, 0, 0, 0)), "RQTech" },
+                    { 4, 1, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9586), new TimeSpan(0, 0, 0, 0, 0)), "Fourier Recruitment" }
                 });
 
             migrationBuilder.InsertData(
@@ -1524,7 +1638,10 @@ namespace FourierIT_API.Migrations
                     { 16, "Resolution from trustees authorizing the transaction", "Trust Resolution" },
                     { 17, "Registered partnership agreement", "Partnership Agreement" },
                     { 18, "ID of authorized representative (certified copy)", "Director/Trustee ID" },
-                    { 19, "Proof of residential address for authorized person", "Proof of Address - Representative" }
+                    { 19, "Proof of residential address for authorized person", "Proof of Address - Representative" },
+                    { 20, "Valid SARS Tax Clearance Certificate (not older than 12 months)", "SARS Tax Clearance Certificate" },
+                    { 21, "Bank confirmation of account and authorized signatories", "Bank Confirmation Letter" },
+                    { 22, "Declaration of beneficial owners with shareholding details", "Beneficial Ownership Declaration" }
                 });
 
             migrationBuilder.InsertData(
@@ -1538,6 +1655,61 @@ namespace FourierIT_API.Migrations
                     { 4, "Trust" },
                     { 5, "Partnership" },
                     { 6, "Legal Entity - Other" }
+                });
+
+            migrationBuilder.InsertData(
+                table: "DepartmentDocumentTypes",
+                columns: new[] { "DepartmentDocumentTypeId", "CreatedAt", "DepartmentId", "DocumentTypeId", "IsMandatory" },
+                values: new object[,]
+                {
+                    { 1, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9681), new TimeSpan(0, 0, 0, 0, 0)), 1, 1, true },
+                    { 2, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9695), new TimeSpan(0, 0, 0, 0, 0)), 1, 2, false },
+                    { 3, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9700), new TimeSpan(0, 0, 0, 0, 0)), 1, 3, false },
+                    { 4, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9705), new TimeSpan(0, 0, 0, 0, 0)), 1, 7, true },
+                    { 5, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9710), new TimeSpan(0, 0, 0, 0, 0)), 1, 8, false },
+                    { 6, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9719), new TimeSpan(0, 0, 0, 0, 0)), 1, 10, false },
+                    { 7, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9723), new TimeSpan(0, 0, 0, 0, 0)), 1, 11, true },
+                    { 8, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9728), new TimeSpan(0, 0, 0, 0, 0)), 1, 12, true },
+                    { 9, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9733), new TimeSpan(0, 0, 0, 0, 0)), 1, 13, true },
+                    { 10, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9743), new TimeSpan(0, 0, 0, 0, 0)), 1, 20, true },
+                    { 11, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9747), new TimeSpan(0, 0, 0, 0, 0)), 1, 21, true },
+                    { 12, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9752), new TimeSpan(0, 0, 0, 0, 0)), 1, 22, true },
+                    { 13, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9757), new TimeSpan(0, 0, 0, 0, 0)), 2, 1, true },
+                    { 14, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9762), new TimeSpan(0, 0, 0, 0, 0)), 2, 4, true },
+                    { 15, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9767), new TimeSpan(0, 0, 0, 0, 0)), 2, 5, false },
+                    { 16, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9772), new TimeSpan(0, 0, 0, 0, 0)), 2, 7, true },
+                    { 17, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9777), new TimeSpan(0, 0, 0, 0, 0)), 2, 10, false },
+                    { 18, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9785), new TimeSpan(0, 0, 0, 0, 0)), 2, 11, true },
+                    { 19, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9789), new TimeSpan(0, 0, 0, 0, 0)), 2, 12, true },
+                    { 20, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9794), new TimeSpan(0, 0, 0, 0, 0)), 2, 13, true },
+                    { 21, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9799), new TimeSpan(0, 0, 0, 0, 0)), 2, 20, true },
+                    { 22, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9803), new TimeSpan(0, 0, 0, 0, 0)), 2, 21, true },
+                    { 23, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9808), new TimeSpan(0, 0, 0, 0, 0)), 2, 22, true },
+                    { 24, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9812), new TimeSpan(0, 0, 0, 0, 0)), 3, 1, true },
+                    { 25, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9817), new TimeSpan(0, 0, 0, 0, 0)), 3, 2, false },
+                    { 26, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9822), new TimeSpan(0, 0, 0, 0, 0)), 3, 7, true },
+                    { 27, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9826), new TimeSpan(0, 0, 0, 0, 0)), 3, 8, false },
+                    { 28, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9831), new TimeSpan(0, 0, 0, 0, 0)), 3, 11, true },
+                    { 29, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9836), new TimeSpan(0, 0, 0, 0, 0)), 3, 12, true },
+                    { 30, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9844), new TimeSpan(0, 0, 0, 0, 0)), 3, 13, true },
+                    { 31, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9849), new TimeSpan(0, 0, 0, 0, 0)), 3, 14, true },
+                    { 32, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9854), new TimeSpan(0, 0, 0, 0, 0)), 3, 18, true },
+                    { 33, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9859), new TimeSpan(0, 0, 0, 0, 0)), 3, 20, true },
+                    { 34, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9867), new TimeSpan(0, 0, 0, 0, 0)), 3, 21, true },
+                    { 35, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9871), new TimeSpan(0, 0, 0, 0, 0)), 3, 22, true },
+                    { 36, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9875), new TimeSpan(0, 0, 0, 0, 0)), 4, 1, true },
+                    { 37, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9880), new TimeSpan(0, 0, 0, 0, 0)), 4, 2, false },
+                    { 38, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9885), new TimeSpan(0, 0, 0, 0, 0)), 4, 3, false },
+                    { 39, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9889), new TimeSpan(0, 0, 0, 0, 0)), 4, 4, true },
+                    { 40, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9894), new TimeSpan(0, 0, 0, 0, 0)), 4, 5, false },
+                    { 41, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9898), new TimeSpan(0, 0, 0, 0, 0)), 4, 7, true },
+                    { 42, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9903), new TimeSpan(0, 0, 0, 0, 0)), 4, 10, false },
+                    { 43, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9907), new TimeSpan(0, 0, 0, 0, 0)), 4, 11, true },
+                    { 44, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9913), new TimeSpan(0, 0, 0, 0, 0)), 4, 12, true },
+                    { 45, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9917), new TimeSpan(0, 0, 0, 0, 0)), 4, 13, true },
+                    { 46, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9922), new TimeSpan(0, 0, 0, 0, 0)), 4, 20, true },
+                    { 47, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9927), new TimeSpan(0, 0, 0, 0, 0)), 4, 21, true },
+                    { 48, new DateTimeOffset(new DateTime(2026, 7, 26, 1, 2, 49, 812, DateTimeKind.Unspecified).AddTicks(9931), new TimeSpan(0, 0, 0, 0, 0)), 4, 22, true }
                 });
 
             migrationBuilder.InsertData(
@@ -1792,6 +1964,16 @@ namespace FourierIT_API.Migrations
                 unique: true);
 
             migrationBuilder.CreateIndex(
+                name: "IX_DepartmentDocumentTypes_DepartmentId",
+                table: "DepartmentDocumentTypes",
+                column: "DepartmentId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_DepartmentDocumentTypes_DocumentTypeId",
+                table: "DepartmentDocumentTypes",
+                column: "DocumentTypeId");
+
+            migrationBuilder.CreateIndex(
                 name: "IX_Departments_BranchId",
                 table: "Departments",
                 column: "BranchId");
@@ -1925,6 +2107,11 @@ namespace FourierIT_API.Migrations
                 column: "TargetUserId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_InstitutionInvitations_InstitutionId",
+                table: "InstitutionInvitations",
+                column: "InstitutionId");
+
+            migrationBuilder.CreateIndex(
                 name: "IX_InstitutionMembers_InstitutionId",
                 table: "InstitutionMembers",
                 column: "InstitutionId");
@@ -1948,6 +2135,11 @@ namespace FourierIT_API.Migrations
                 name: "IX_Institutions_TypeId",
                 table: "Institutions",
                 column: "TypeId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_InstitutionSessionTokens_InstitutionId",
+                table: "InstitutionSessionTokens",
+                column: "InstitutionId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_NotificationHistory_NotificationId",
@@ -2030,6 +2222,9 @@ namespace FourierIT_API.Migrations
                 name: "AspNetUserTokens");
 
             migrationBuilder.DropTable(
+                name: "AuditLogs");
+
+            migrationBuilder.DropTable(
                 name: "Backups");
 
             migrationBuilder.DropTable(
@@ -2046,6 +2241,9 @@ namespace FourierIT_API.Migrations
 
             migrationBuilder.DropTable(
                 name: "ComplianceHistories");
+
+            migrationBuilder.DropTable(
+                name: "DepartmentDocumentTypes");
 
             migrationBuilder.DropTable(
                 name: "DocumentAccessApprovals");
@@ -2072,10 +2270,16 @@ namespace FourierIT_API.Migrations
                 name: "FICARuleHistories");
 
             migrationBuilder.DropTable(
+                name: "InstitutionInvitations");
+
+            migrationBuilder.DropTable(
                 name: "InstitutionMembers");
 
             migrationBuilder.DropTable(
                 name: "InstitutionRequestedDocumentTypes");
+
+            migrationBuilder.DropTable(
+                name: "InstitutionSessionTokens");
 
             migrationBuilder.DropTable(
                 name: "NotificationHistory");
