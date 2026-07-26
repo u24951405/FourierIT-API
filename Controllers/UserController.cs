@@ -26,6 +26,7 @@ namespace FourierIT_API.Controllers
         private readonly RoleManager<Role> _roleManager;
         private readonly IEntityVerificationService _entityVerificationService;
         private readonly IConfiguration _configuration;
+        private readonly IAuditLogService _auditLogService;
 
         public UserController(
             UserManager<User> userManager,
@@ -34,7 +35,8 @@ namespace FourierIT_API.Controllers
             AppDbContext context,
             RoleManager<Role> roleManager,
             IEntityVerificationService entityVerificationService,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            IAuditLogService auditLogService)
         {
             _userManager = userManager;
             _tokenService = tokenService;
@@ -43,6 +45,7 @@ namespace FourierIT_API.Controllers
             _roleManager = roleManager;
             _entityVerificationService = entityVerificationService;
             _configuration = configuration;
+            _auditLogService = auditLogService;
         }
 
         [AllowAnonymous]
@@ -330,6 +333,22 @@ namespace FourierIT_API.Controllers
                 .ToListAsync();
 
             return Ok(entityTypes);
+        }
+
+        [AllowAnonymous]
+        [HttpGet("password-policy")]
+        public IActionResult GetPasswordPolicy()
+        {
+            var passwordOptions = _userManager.Options.Password;
+            
+            return Ok(new
+            {
+                requireDigit = passwordOptions.RequireDigit,
+                requireLowercase = passwordOptions.RequireLowercase,
+                requireUppercase = passwordOptions.RequireUppercase,
+                requireNonAlphanumeric = passwordOptions.RequireNonAlphanumeric,
+                requiredLength = passwordOptions.RequiredLength
+            });
         }
 
         private bool IsSuperAdminUser(User? user)
@@ -673,6 +692,16 @@ namespace FourierIT_API.Controllers
             var adminProfile = await _context.Profiles
                 .AsNoTracking()
                 .FirstOrDefaultAsync(p => p.UserId == targetUser.Id);
+
+            await _auditLogService.CreateAuditLogAsync(new AuditLog
+            {
+                UserId = currentUser?.Id ?? "system",
+                ActionCode = "DEPARTMENT_ADMIN_ASSIGNED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = $"Assigned Department Admin '{targetUser.UserName}' ({targetUser.Email}) to department '{department.DepartmentName}' (DepartmentId={departmentId}).",
+                TableAffected = "Departments",
+                RecordID = departmentId
+            });
 
             return Ok(new
             {

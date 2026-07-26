@@ -445,6 +445,171 @@ namespace FourierIT_API.Controllers
         }
 
         /// <summary>
+        /// Return departments for the institution identified by session token.
+        /// </summary>
+        [AllowAnonymous]
+        [HttpGet("institution-access/requests/departments")]
+        public async Task<IActionResult> GetInstitutionDepartments([FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest(new { error = "A valid session token is required." });
+
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+
+            if (sessionToken == null)
+                return Unauthorized(new { error = "Invalid or expired session token." });
+
+            var institutionId = sessionToken.InstitutionId;
+
+            var departments = await _context.Departments
+                .Include(d => d.Branch)
+                .AsNoTracking()
+                .Where(d => d.Branch.InstitutionId == institutionId)
+                .Select(d => new
+                {
+                    departmentId = d.DepartmentId,
+                    departmentName = d.DepartmentName
+                })
+                .ToListAsync();
+
+            return Ok(departments);
+        }
+
+        /// <summary>
+        /// Return institution users (members) for the institution identified by session token.
+        /// </summary>
+        [AllowAnonymous]
+        [HttpGet("institution-access/requests/users")]
+        public async Task<IActionResult> GetInstitutionUsers([FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest(new { error = "A valid session token is required." });
+
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+
+            if (sessionToken == null)
+                return Unauthorized(new { error = "Invalid or expired session token." });
+
+            var institutionId = sessionToken.InstitutionId;
+
+            var documentOwnerRoleId = await _context.Roles
+                .Where(r => r.NormalizedName == "DOCUMENT OWNER")
+                .Select(r => r.Id)
+                .FirstOrDefaultAsync();
+
+            if (string.IsNullOrWhiteSpace(documentOwnerRoleId))
+            {
+                return Ok(new object[] { });
+            }
+
+            var institutionUserIds = _context.InstitutionMembers
+                .Where(im => im.InstitutionId == institutionId)
+                .Select(im => im.UserId);
+
+            var members = await _context.Users
+                .AsNoTracking()
+                .Where(u => _context.UserRoles.Any(ur => ur.UserId == u.Id && ur.RoleId == documentOwnerRoleId)
+                            && (institutionUserIds.Contains(u.Id) ||
+                                (u.Department != null && u.Department.Branch.InstitutionId == institutionId)))
+                .Select(u => new
+                {
+                    userId = u.Id,
+                    userName = u.UserName,
+                    displayName = string.IsNullOrWhiteSpace(u.UserName) ? u.Id : u.UserName
+                })
+                .Distinct()
+                .ToListAsync();
+
+            return Ok(members);
+        }
+
+        /// <summary>
+        /// Get recipient document types for the selected request type and recipient.
+        /// </summary>
+        [AllowAnonymous]
+        [HttpGet("institution-access/requests/document-types")]
+        public async Task<IActionResult> GetInstitutionRecipientDocumentTypes(
+            [FromQuery] string token,
+            [FromQuery] string requestType,
+            [FromQuery] string recipientId)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest(new { error = "A valid session token is required." });
+
+            if (string.IsNullOrWhiteSpace(requestType) ||
+                (requestType != "Department" && requestType != "Individual"))
+            {
+                return BadRequest(new { error = "RequestType must be either 'Department' or 'Individual'." });
+            }
+
+            if (string.IsNullOrWhiteSpace(recipientId))
+                return BadRequest(new { error = "RecipientId is required." });
+
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+
+            if (sessionToken == null)
+                return Unauthorized(new { error = "Invalid or expired session token." });
+
+            var institutionId = sessionToken.InstitutionId;
+
+            if (requestType == "Department")
+            {
+                if (!int.TryParse(recipientId, out var departmentId) || departmentId <= 0)
+                    return BadRequest(new { error = "RecipientId must be a valid department id." });
+
+                var department = await _context.Departments
+                    .Include(d => d.Branch)
+                    .FirstOrDefaultAsync(d => d.DepartmentId == departmentId);
+
+                if (department == null)
+                    return NotFound(new { error = "Target department not found." });
+
+                if (department.Branch?.InstitutionId != institutionId)
+                    return BadRequest(new { error = "Department does not belong to the institution." });
+
+                var requiredDocs = await _context.DepartmentDocumentTypes
+                    .Where(ddt => ddt.DepartmentId == departmentId)
+                    .Include(ddt => ddt.DocumentType)
+                    .AsNoTracking()
+                    .Select(ddt => new
+                    {
+                        documentTypeId = ddt.DocumentTypeId,
+                        typeName = ddt.DocumentType.TypeName,
+                        description = ddt.DocumentType.Description,
+                        isMandatory = ddt.IsMandatory,
+                        requirementNote = ddt.DocumentType.Description
+                    })
+                    .ToListAsync();
+
+                return Ok(requiredDocs);
+            }
+
+            var targetUser = await ResolveUserAsync(recipientId);
+            if (targetUser == null)
+                return NotFound(new { error = "Target user not found." });
+
+            var userDocumentTypes = await _context.Documents
+                .AsNoTracking()
+                .Where(d => d.UserId == targetUser.Id && d.CurrentStatus != "Deleted")
+                .Include(d => d.DocumentType)
+                .Select(d => new
+                {
+                    documentTypeId = d.DocumentTypeId,
+                    typeName = d.DocumentType.TypeName,
+                    description = d.DocumentType.Description,
+                    isMandatory = false,
+                    requirementNote = d.DocumentType.Description
+                })
+                .DistinctBy(d => d.documentTypeId)
+                .ToListAsync();
+
+            return Ok(userDocumentTypes);
+        }
+
+        /// <summary>
         /// Get pending requests for the current user (for document owners to review)
         /// </summary>
         [HttpGet("document-access-requests/pending")]
@@ -856,6 +1021,40 @@ namespace FourierIT_API.Controllers
                 .ToListAsync();
 
             return Ok(approvedDocuments);
+        }
+
+        /// <summary>
+        /// Returns request counts for an institution session identified by token.
+        /// This is intended for the institution portal (no JWT required).
+        /// </summary>
+        [AllowAnonymous]
+        [HttpGet("institution-access/requests/summary")]
+        public async Task<IActionResult> GetInstitutionAccessRequestSummary([FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest(new { error = "A valid session token is required." });
+
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+
+            if (sessionToken == null)
+                return Unauthorized(new { error = "Invalid or expired session token." });
+
+            var institutionId = sessionToken.InstitutionId;
+
+            var summary = await _context.InstitutionEnquiryRequests
+                .AsNoTracking()
+                .Where(r => r.InstitutionId == institutionId)
+                .GroupBy(r => 1)
+                .Select(g => new
+                {
+                    PendingRequests = g.Count(r => r.Status == "Pending" || r.Status == "Department_Pending"),
+                    ApprovedRequests = g.Count(r => r.Status == "Approved"),
+                    DeniedRequests = g.Count(r => r.Status == "Denied")
+                })
+                .FirstOrDefaultAsync();
+
+            return Ok(summary ?? new { PendingRequests = 0, ApprovedRequests = 0, DeniedRequests = 0 });
         }
 
         private async Task<User?> ResolveUserAsync(string identifier)

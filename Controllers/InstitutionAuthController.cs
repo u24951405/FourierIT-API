@@ -149,54 +149,68 @@ namespace FourierIT_API.Controllers
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
 
+            if (string.IsNullOrWhiteSpace(dto.Otp))
+                return BadRequest(new { error = "OTP is required." });
+
+            if (string.IsNullOrWhiteSpace(dto.AccessToken))
+                return BadRequest(new { error = "Access token is required." });
+
             if (!int.TryParse(dto.InstitutionId, out var institutionId))
                 return BadRequest(new { error = "Invalid institution identifier." });
 
-            var invitation = await _context.InstitutionInvitations
-                .FirstOrDefaultAsync(ii => ii.TokenString == dto.AccessToken && ii.InstitutionId == institutionId);
-
-            if (invitation == null || invitation.IsRevoked || invitation.IsUsed || invitation.TokenExpiryTimeStamp <= DateTimeOffset.UtcNow)
+            try
             {
-                return BadRequest(new { error = "Invalid or expired invitation link." });
+                var invitation = await _context.InstitutionInvitations
+                    .FirstOrDefaultAsync(ii => ii.TokenString == dto.AccessToken && ii.InstitutionId == institutionId);
+
+                if (invitation == null || invitation.IsRevoked || invitation.IsUsed || invitation.TokenExpiryTimeStamp <= DateTimeOffset.UtcNow)
+                {
+                    return BadRequest(new { error = "Invalid or expired invitation link." });
+                }
+
+                if (invitation.OtpExpiryTimeStamp <= DateTimeOffset.UtcNow)
+                {
+                    return BadRequest(new { error = "OTP expired. Please request a new code." });
+                }
+
+                if (string.IsNullOrWhiteSpace(invitation.OtpCodeHash) || !VerifyHash(dto.Otp.Trim(), invitation.OtpCodeHash))
+                {
+                    return BadRequest(new { error = "Invalid OTP." });
+                }
+
+                invitation.IsUsed = true;
+                invitation.IsRevoked = true;
+
+                var sessionToken = GenerateSessionToken();
+                var expiresAt = DateTimeOffset.UtcNow.AddHours(8);
+
+                // Store session token in database
+                var sessionRecord = new InstitutionSessionToken
+                {
+                    InstitutionId = invitation.InstitutionId,
+                    TokenString = sessionToken,
+                    IssuedAt = DateTime.UtcNow,
+                    ExpiresAt = expiresAt.DateTime,
+                    IsRevoked = false
+                };
+                _context.InstitutionSessionTokens.Add(sessionRecord);
+                await _context.SaveChangesAsync();
+
+                var response = new OtpVerifyResponseDto
+                {
+                    Success = true,
+                    SessionToken = sessionToken,
+                    ExpiresAt = expiresAt,
+                    Message = "OTP verified successfully."
+                };
+
+                return Ok(response);
             }
-
-            if (invitation.OtpExpiryTimeStamp <= DateTimeOffset.UtcNow)
+            catch (Exception ex)
             {
-                return BadRequest(new { error = "OTP expired. Please request a new code." });
+                _logger.LogError(ex, "Unhandled exception during OTP verification for institution {InstitutionId}.", dto.InstitutionId);
+                return StatusCode(500, new { error = "An unexpected error occurred while verifying the OTP. Please try again." });
             }
-
-            if (!VerifyHash(dto.Otp.Trim(), invitation.OtpCodeHash))
-            {
-                return BadRequest(new { error = "Invalid OTP." });
-            }
-
-            invitation.IsUsed = true;
-            invitation.IsRevoked = true;
-
-            var sessionToken = GenerateSessionToken();
-            var expiresAt = DateTimeOffset.UtcNow.AddHours(8);
-
-            // Store session token in database
-            var sessionRecord = new InstitutionSessionToken
-            {
-                InstitutionId = invitation.InstitutionId,
-                TokenString = sessionToken,
-                IssuedAt = DateTime.UtcNow,
-                ExpiresAt = expiresAt.DateTime,
-                IsRevoked = false
-            };
-            _context.InstitutionSessionTokens.Add(sessionRecord);
-            await _context.SaveChangesAsync();
-
-            var response = new OtpVerifyResponseDto
-            {
-                Success = true,
-                SessionToken = sessionToken,
-                ExpiresAt = expiresAt,
-                Message = "OTP verified successfully."
-            };
-
-            return Ok(response);
         }
 
         [AllowAnonymous]

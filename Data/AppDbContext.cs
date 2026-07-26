@@ -126,6 +126,16 @@ namespace FourierIT_API.Data
             };
             modelBuilder.Entity<Role>().HasData(Roles);
 
+            modelBuilder.Entity<InstitutionInvitation>()
+                .HasIndex(ii => ii.TokenString)
+                .HasDatabaseName("IX_InstitutionInvitations_TokenString");
+
+            modelBuilder.Entity<InstitutionSessionToken>(entity =>
+            {
+                entity.Property(st => st.TokenString).HasMaxLength(255);
+                entity.HasIndex(st => st.TokenString).HasDatabaseName("IX_InstitutionSessionTokens_TokenString");
+            });
+
             // Seed DocumentTypes - FICA Compliant South African Requirements
             List<DocumentType> documentTypes = new List<DocumentType>
             {

@@ -16,6 +16,7 @@ namespace FourierIT_API.Models
         public Institution Institution { get; set; } = null!;
 
         [Required]
+        [StringLength(255)]
         public string TokenString { get; set; } = string.Empty;
 
         [Required]
