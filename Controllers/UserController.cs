@@ -67,13 +67,47 @@ namespace FourierIT_API.Controllers
                     .FirstOrDefaultAsync(u => u.NormalizedUserName == username.ToUpperInvariant());
             }
 
-            if (user == null) return Unauthorized("Invalid username");
+            if (user == null)
+            {
+                await TryCreateAuditLogAsync(new AuditLog
+                {
+                    UserId = username,
+                    ActionCode = "LOGIN_FAILURE",
+                    TimeStamp = DateTimeOffset.UtcNow,
+                    Description = "Failed login attempt with invalid username.",
+                    TableAffected = "Users",
+                    RecordID = null
+                });
+                return Unauthorized("Invalid username");
+            }
 
             var result = await _signInManager.CheckPasswordSignInAsync(user, loginDto.Password, false);
 
-            if (!result.Succeeded) return Unauthorized("Username not found and/or password incorrect");
+            if (!result.Succeeded)
+            {
+                await TryCreateAuditLogAsync(new AuditLog
+                {
+                    UserId = user.Id,
+                    ActionCode = "LOGIN_FAILURE",
+                    TimeStamp = DateTimeOffset.UtcNow,
+                    Description = "Failed login attempt due to incorrect credentials.",
+                    TableAffected = "Users",
+                    RecordID = null
+                });
+                return Unauthorized("Username not found and/or password incorrect");
+            }
 
             var token = await _tokenService.CreateTokenAsync(user);
+
+            await TryCreateAuditLogAsync(new AuditLog
+            {
+                UserId = user.Id,
+                ActionCode = "LOGIN_SUCCESS",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = "User successfully logged in.",
+                TableAffected = "Users",
+                RecordID = null
+            });
 
             return Ok(
                 new NewUserDto
@@ -186,11 +220,14 @@ namespace FourierIT_API.Controllers
                 return BadRequest(new { error = "Invalid password reset request." });
             }
 
-            var decodedToken = WebUtility.UrlDecode(request.Token);
-            var resetResult = await _userManager.ResetPasswordAsync(user, decodedToken, request.NewPassword);
+            var resetResult = await _userManager.ResetPasswordAsync(user, request.Token, request.NewPassword);
             if (!resetResult.Succeeded)
             {
-                return BadRequest(new { error = "Password reset failed.", details = resetResult.Errors.Select(e => e.Description) });
+                return BadRequest(new
+                {
+                    error = "Password reset failed.",
+                    details = resetResult.Errors.Select(e => e.Description)
+                });
             }
 
             return Ok(new { message = "Your password has been reset successfully." });
@@ -341,6 +378,16 @@ namespace FourierIT_API.Controllers
 
                 var token = await _tokenService.CreateTokenAsync(newUser);
 
+                await TryCreateAuditLogAsync(new AuditLog
+                {
+                    UserId = newUser.Id,
+                    ActionCode = "USER_REGISTERED",
+                    TimeStamp = DateTimeOffset.UtcNow,
+                    Description = "New user registration completed successfully.",
+                    TableAffected = "Users",
+                    RecordID = null
+                });
+
                 return Ok(
                     new NewUserDto
                     {
@@ -409,6 +456,20 @@ namespace FourierIT_API.Controllers
             if (user == null) return false;
             var superUserName = _configuration["SuperAdmin:Username"] ?? "superadmin";
             return string.Equals(user.UserName, superUserName, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private async Task TryCreateAuditLogAsync(AuditLog auditLog)
+        {
+            if (auditLog == null) return;
+
+            try
+            {
+                await _auditLogService.CreateAuditLogAsync(auditLog);
+            }
+            catch
+            {
+                // Swallow audit failures so auth flows are not affected.
+            }
         }
 
         private static string? ValidateEntityIdentificationNumber(int entityTypeId, string verificationNumber)

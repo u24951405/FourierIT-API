@@ -35,6 +35,33 @@ namespace FourierIT_API.Services
             _blobServiceClient = blobServiceClient ?? throw new ArgumentNullException(nameof(blobServiceClient));
         }
 
+        private async Task<string?> GetSqlServerBackupDirectoryAsync()
+        {
+            try
+            {
+                var conn = (SqlConnection)_context.Database.GetDbConnection();
+                await conn.OpenAsync();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"DECLARE @backupdir NVARCHAR(4000); 
+IF (OBJECT_ID('tempdb..#t') IS NOT NULL) DROP TABLE #t; 
+EXEC master.dbo.xp_instance_regread N'HKEY_LOCAL_MACHINE', N'Software\\Microsoft\\MSSQLServer\\MSSQLServer', N'BackupDirectory', @backupdir OUTPUT; 
+SELECT @backupdir as BackupDir;";
+                    var result = await cmd.ExecuteScalarAsync();
+                    if (result != null && result != DBNull.Value)
+                    {
+                        return result.ToString();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to query SQL Server backup directory via xp_instance_regread.");
+            }
+
+            return null;
+        }
+
         // =========================================================================
         // 1. CREATE BACKUP
         // =========================================================================
@@ -97,7 +124,7 @@ namespace FourierIT_API.Services
             {
                 _logger.LogInformation("Starting database backup to local file {FilePath}", tempFilePath);
 
-                string sql = $"BACKUP DATABASE [{dbName}] TO DISK = '{tempFilePath.Replace("'", "''")}' WITH FORMAT, INIT;";
+                string sql = $"BACKUP DATABASE [{dbName}] TO DISK = '{tempFilePath.Replace("'", "''")}' WITH FORMAT, INIT, COMPRESSION, MAXTRANSFERSIZE = 1048576, BUFFERCOUNT = 8;";
                 await _context.Database.ExecuteSqlRawAsync(sql);
 
                 _logger.LogInformation("Database backup finished, uploading to Azure Blob Storage container '{Container}'", containerName);
@@ -146,6 +173,81 @@ namespace FourierIT_API.Services
             }
             catch (Exception ex)
             {
+                _logger.LogWarning(ex, "Initial backup to temp path failed, attempting fallback backup location.");
+
+                // If access denied to the provided path, attempt to backup to the SQL Server default backup directory
+                if (ex.Message != null && ex.Message.Contains("Access is denied", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var defaultBackupDir = await GetSqlServerBackupDirectoryAsync();
+                        if (!string.IsNullOrWhiteSpace(defaultBackupDir))
+                        {
+                            var altFilePath = Path.Combine(defaultBackupDir, fileName);
+                            _logger.LogInformation("Attempting backup to SQL Server default backup directory: {AltPath}", altFilePath);
+
+                            string altSql = $"BACKUP DATABASE [{dbName}] TO DISK = '{altFilePath.Replace("'", "''")}' WITH FORMAT, INIT, COMPRESSION, MAXTRANSFERSIZE = 1048576, BUFFERCOUNT = 8;";
+                            await _context.Database.ExecuteSqlRawAsync(altSql);
+
+                            // try upload from altFilePath
+                            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+                            await containerClient.CreateIfNotExistsAsync();
+
+                            var blobClient = containerClient.GetBlobClient(fileName);
+
+                            try
+                            {
+                                using (var fileStream = File.OpenRead(altFilePath))
+                                {
+                                    await blobClient.UploadAsync(fileStream, overwrite: true);
+                                }
+
+                                string blobUrl = blobClient.Uri.ToString();
+
+                                var backup = new Backup
+                                {
+                                    UserId = string.IsNullOrWhiteSpace(request.UserId) ? null : request.UserId,
+                                    FileName = fileName,
+                                    DateBackedUp = DateTimeOffset.UtcNow,
+                                    IsManualBackup = request.IsManualBackup
+                                };
+
+                                _context.Backups.Add(backup);
+                                await _context.SaveChangesAsync();
+
+                                response.BackupId = backup.BackupId;
+                                response.FilePath = blobUrl;
+                                response.DateBackedUp = backup.DateBackedUp;
+                                response.StatusMessage = "Backup created and uploaded successfully (fallback path).";
+
+                                _logger.LogInformation("Backup (Id: {BackupId}) uploaded to {BlobUrl} from fallback path", backup.BackupId, blobUrl);
+
+                                return response;
+                            }
+                            catch (Exception uploadEx)
+                            {
+                                _logger.LogError(uploadEx, "Failed to upload backup from fallback path. Check that the application has read access to the SQL Server backup folder: {AltPath}", altFilePath);
+                                response.StatusMessage = "Backup created on server, but failed to upload from fallback path. Ensure the application can read the SQL Server backup folder: " + uploadEx.Message;
+                                return response;
+                            }
+                            finally
+                            {
+                                try
+                                {
+                                    if (File.Exists(altFilePath)) File.Delete(altFilePath);
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    catch (Exception fbEx)
+                    {
+                        _logger.LogError(fbEx, "Fallback backup attempt failed.");
+                        response.StatusMessage = "Fallback backup attempt failed: " + fbEx.Message;
+                        return response;
+                    }
+                }
+
                 _logger.LogError(ex, "An error occurred while creating or uploading database backup.");
                 response.StatusMessage = "An error occurred during backup: " + ex.Message;
                 return response;

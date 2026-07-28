@@ -24,10 +24,17 @@ namespace FourierIT_API.Controllers
         /// <returns>List of audit logs.</returns>
         [HttpGet]
         [ProducesResponseType(typeof(IEnumerable<AuditLogDto>), 200)]
-        public async Task<IActionResult> GetAll()
+        public async Task<IActionResult> GetAll(
+            [FromQuery] string? userId,
+            [FromQuery] string? actionCode,
+            [FromQuery] DateTimeOffset? from,
+            [FromQuery] DateTimeOffset? to,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 50,
+            [FromQuery] string? query = null)
         {
-            var logs = await _service.GetAllAuditLogsAsync();
-            return Ok(logs);
+            var pagedResult = await _service.GetAuditLogsPagedAsync(userId, actionCode, from, to, page, pageSize, query);
+            return Ok(new { items = pagedResult.Items, totalCount = pagedResult.TotalCount });
         }
 
         /// <summary>

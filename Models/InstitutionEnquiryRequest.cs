@@ -36,6 +36,11 @@ namespace FourierIT_API.Models
         [StringLength(500)]
         public string PurposeNote { get; set; } = string.Empty;
 
+        public DateTimeOffset? SubmissionDeadline { get; set; }
+
+        [StringLength(150)]
+        public string? ReferenceNumber { get; set; }
+
         public DateTimeOffset RequestDate { get; set; } = DateTimeOffset.UtcNow;
 
         public AccessToken AccessToken { get; set; } = null!;

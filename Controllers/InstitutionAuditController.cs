@@ -1,5 +1,7 @@
 using FourierIT_API.DTOs.Audit;
 using FourierIT_API.DTOs.Institution;
+using FourierIT_API.Interfaces;
+using FourierIT_API.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,10 +12,14 @@ namespace FourierIT_API.Controllers
     public class InstitutionAuditController : ControllerBase
     {
         private readonly ILogger<InstitutionAuditController> _logger;
+        private readonly IAuditLogService _auditLogService;
 
-        public InstitutionAuditController(ILogger<InstitutionAuditController> logger)
+        public InstitutionAuditController(
+            ILogger<InstitutionAuditController> logger,
+            IAuditLogService auditLogService)
         {
             _logger = logger;
+            _auditLogService = auditLogService;
         }
 
         /// <summary>
@@ -22,18 +28,28 @@ namespace FourierIT_API.Controllers
         /// </summary>
         [AllowAnonymous]
         [HttpPost("audit")]
-        public IActionResult LogAuditEvent([FromBody] AuditLogEntry entry)
+        public async Task<IActionResult> LogAuditEvent([FromBody] AuditLogEntry entry)
         {
             if (entry == null)
                 return Ok(); // Accept silently even if null
 
             try
             {
-                // Fire-and-forget: log it and move on
-                // In production, you might queue this to a background service
                 _logger.LogInformation(
                     "Institution portal audit - Action: {ActionType}, User: {UserId}, Institution: {InstitutionId}, Time: {Timestamp}",
                     entry.ActionType, entry.UserId, entry.InstitutionId, entry.Timestamp);
+
+                await _auditLogService.CreateAuditLogAsync(new AuditLog
+                {
+                    UserId = string.IsNullOrWhiteSpace(entry.UserId) ? "portal" : entry.UserId,
+                    ActionCode = entry.ActionType.ToString(),
+                    TimeStamp = DateTimeOffset.TryParse(entry.Timestamp, out var parsed)
+                        ? parsed
+                        : DateTimeOffset.UtcNow,
+                    Description = $"Institution portal audit event {entry.ActionType} for institution {entry.InstitutionId}.",
+                    TableAffected = "InstitutionPortal",
+                    RecordID = null
+                });
             }
             catch (Exception ex)
             {

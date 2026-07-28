@@ -4,6 +4,7 @@ using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
 using FourierIT_API.Services;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -20,17 +21,20 @@ namespace FourierIT_API.Controllers
         private readonly UserManager<User> _userManager;
         private readonly IDocumentService _documentService;
         private readonly DepartmentRequestValidationService _departmentRequestValidationService;
+        private readonly IAuditLogService _auditLogService;
 
         public DocumentAccessRequestsController(
             AppDbContext context,
             UserManager<User> userManager,
             IDocumentService documentService,
-            DepartmentRequestValidationService departmentRequestValidationService)
+            DepartmentRequestValidationService departmentRequestValidationService,
+            IAuditLogService auditLogService)
         {
             _context = context;
             _userManager = userManager;
             _documentService = documentService;
             _departmentRequestValidationService = departmentRequestValidationService;
+            _auditLogService = auditLogService;
         }
 
         /// <summary>
@@ -137,12 +141,31 @@ namespace FourierIT_API.Controllers
                 TargetDepartmentId = targetDepartment?.DepartmentId,
                 TargetUserId = targetUser?.Id,
                 PurposeNote = dto.PurposeNote?.Trim() ?? string.Empty,
+                SubmissionDeadline = dto.SubmissionDeadline,
+                ReferenceNumber = string.IsNullOrWhiteSpace(dto.ReferenceNumber) ? null : dto.ReferenceNumber.Trim(),
                 Status = dto.RequestType == "Department" ? "Department_Pending" : "Pending",
                 RequestDate = DateTimeOffset.UtcNow
             };
 
             _context.InstitutionEnquiryRequests.Add(request);
             await _context.SaveChangesAsync();
+
+            try
+            {
+                await _auditLogService.CreateAuditLogAsync(new AuditLog
+                {
+                    UserId = "institution_portal",
+                    ActionCode = "INSTITUTION_REQUEST_CREATED",
+                    TimeStamp = DateTimeOffset.UtcNow,
+                    Description = $"Institution portal request {request.EnquiryRequestId} created for institution {institutionId}.",
+                    TableAffected = "InstitutionEnquiryRequests",
+                    RecordID = request.EnquiryRequestId
+                });
+            }
+            catch
+            {
+                // Audit failure should not break institution portal request submission.
+            }
 
             // Add requested document types
             foreach (var requestedDocument in dto.RequestedDocuments.DistinctBy(r => r.DocumentTypeId))
@@ -187,8 +210,8 @@ namespace FourierIT_API.Controllers
                 request.TargetDepartmentId,
                 request.TargetUserId,
                 request.Status,
-                submissionDeadline = dto.SubmissionDeadline,
-                referenceNumber = dto.ReferenceNumber?.Trim(),
+                submissionDeadline = request.SubmissionDeadline,
+                referenceNumber = request.ReferenceNumber,
                 request.RequestDate,
                 RequestedDocumentTypeIds = requestedDocumentTypeIds,
                 Message = dto.RequestType == "Department" 
@@ -350,12 +373,31 @@ namespace FourierIT_API.Controllers
                 TargetDepartmentId = targetDepartment?.DepartmentId,
                 TargetUserId = targetUser?.Id,
                 PurposeNote = dto.PurposeNote?.Trim() ?? string.Empty,
+                SubmissionDeadline = dto.SubmissionDeadline,
+                ReferenceNumber = string.IsNullOrWhiteSpace(dto.ReferenceNumber) ? null : dto.ReferenceNumber.Trim(),
                 Status = dto.RequestType == "Department" ? "Department_Pending" : "Pending",
                 RequestDate = DateTimeOffset.UtcNow
             };
 
             _context.InstitutionEnquiryRequests.Add(request);
             await _context.SaveChangesAsync();
+
+            try
+            {
+                await _auditLogService.CreateAuditLogAsync(new AuditLog
+                {
+                    UserId = "institution_portal",
+                    ActionCode = "INSTITUTION_REQUEST_CREATED",
+                    TimeStamp = DateTimeOffset.UtcNow,
+                    Description = $"Institution portal request {request.EnquiryRequestId} created for institution {institutionId}.",
+                    TableAffected = "InstitutionEnquiryRequests",
+                    RecordID = request.EnquiryRequestId
+                });
+            }
+            catch
+            {
+                // Audit failure should not prevent request creation.
+            }
 
             // Add requested document types
             foreach (var requestedDocument in dto.RequestedDocuments.DistinctBy(r => r.DocumentTypeId))
@@ -400,8 +442,8 @@ namespace FourierIT_API.Controllers
                 request.TargetDepartmentId,
                 request.TargetUserId,
                 request.Status,
-                submissionDeadline = dto.SubmissionDeadline,
-                referenceNumber = dto.ReferenceNumber?.Trim(),
+                submissionDeadline = request.SubmissionDeadline,
+                referenceNumber = request.ReferenceNumber,
                 request.RequestDate,
                 RequestedDocumentTypeIds = requestedDocumentTypeIds,
                 Message = dto.RequestType == "Department" 
@@ -445,6 +487,118 @@ namespace FourierIT_API.Controllers
         }
 
         /// <summary>
+        /// Returns the list of requests made by the institution identified by session token.
+        /// Intended for the institution portal to view outgoing requests (both individual and department targets).
+        /// </summary>
+        [AllowAnonymous]
+        [HttpGet("institution-access/requests")]
+        public async Task<IActionResult> GetInstitutionRequests([FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest(new { error = "A valid session token is required." });
+
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+
+            if (sessionToken == null)
+                return Unauthorized(new { error = "Invalid or expired session token." });
+
+            var institutionId = sessionToken.InstitutionId;
+
+            var requests = await _context.InstitutionEnquiryRequests
+                .AsNoTracking()
+                .Include(r => r.Institution)
+                .Include(r => r.TargetDepartment)
+                .Include(r => r.TargetUser)
+                    .ThenInclude(u => u.Profile)
+                .Include(r => r.RequestedDocumentTypes)
+                    .ThenInclude(rdt => rdt.DocumentType)
+                .Where(r => r.InstitutionId == institutionId && (r.Status == "Pending" || r.Status == "Department_Pending"))
+                .OrderByDescending(r => r.RequestDate)
+                .Select(r => new
+                {
+                    r.EnquiryRequestId,
+                    r.InstitutionId,
+                    InstitutionName = r.Institution.InstitutionName,
+                    r.RequestType,
+                    r.TargetUserId,
+                    r.TargetDepartmentId,
+                    DepartmentName = r.TargetDepartment != null ? r.TargetDepartment.DepartmentName : null,
+                    Recipient = r.RequestType == "Department"
+                        ? new { Type = "Department", Name = r.TargetDepartment != null ? r.TargetDepartment.DepartmentName : "-" }
+                        : new { Type = "Individual", Name = r.TargetUser != null ? (string.IsNullOrWhiteSpace(r.TargetUser.Profile.FirstName) && string.IsNullOrWhiteSpace(r.TargetUser.Profile.LastName) ? (r.TargetUser.UserName ?? r.TargetUser.Id) : (r.TargetUser.Profile.FirstName + " " + r.TargetUser.Profile.LastName).Trim()) : (r.TargetUserId ?? "-") },
+                    r.Status,
+                    r.PurposeNote,
+                    r.RequestDate,
+                    Documents = r.RequestedDocumentTypes.Select(d => new
+                    {
+                        d.DocumentTypeId,
+                        DocumentTypeName = d.DocumentType.TypeName,
+                        d.isMandatory
+                    })
+                })
+                .ToListAsync();
+
+            return Ok(requests);
+        }
+
+        /// <summary>
+        /// Revoke an outgoing institution request (institution portal).
+        /// </summary>
+        [AllowAnonymous]
+        [HttpPost("institution-access/requests/{requestId:int}/revoke")]
+        public async Task<IActionResult> RevokeInstitutionRequest([FromRoute] int requestId, [FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest(new { error = "A valid session token is required." });
+
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+
+            if (sessionToken == null)
+                return Unauthorized(new { error = "Invalid or expired session token." });
+
+            var request = await _context.InstitutionEnquiryRequests
+                .FirstOrDefaultAsync(r => r.EnquiryRequestId == requestId);
+
+            if (request == null)
+                return NotFound(new { error = "Request not found." });
+
+            if (request.InstitutionId != sessionToken.InstitutionId)
+                return Forbid();
+
+            if (request.Status != "Pending" && request.Status != "Department_Pending")
+                return Conflict(new { error = "Only pending requests can be revoked." });
+
+            request.Status = "Revoked";
+            request.RespondedAt = DateTime.UtcNow;
+
+            // Revoke any associated access token if present
+            if (request.AccessToken != null)
+                request.AccessToken.IsRevoked = true;
+
+            await _context.SaveChangesAsync();
+
+            try
+            {
+                await _auditLogService.CreateAuditLogAsync(new AuditLog
+                {
+                    UserId = "institution_portal",
+                    ActionCode = "REQUEST_REVOKED",
+                    TimeStamp = DateTimeOffset.UtcNow,
+                    Description = $"Institution revoked request {request.EnquiryRequestId}.",
+                    TableAffected = "InstitutionEnquiryRequests",
+                    RecordID = request.EnquiryRequestId
+                });
+            }
+            catch {
+                // Ignore audit failures
+            }
+
+            return Ok(new { message = "Request revoked.", requestId = request.EnquiryRequestId, status = request.Status });
+        }
+
+        /// <summary>
         /// Return departments for the institution identified by session token.
         /// </summary>
         [AllowAnonymous]
@@ -460,18 +614,26 @@ namespace FourierIT_API.Controllers
             if (sessionToken == null)
                 return Unauthorized(new { error = "Invalid or expired session token." });
 
-            var institutionId = sessionToken.InstitutionId;
-
+            // Return all departments (global), these are created by system/super-admin
             var departments = await _context.Departments
                 .Include(d => d.Branch)
                 .AsNoTracking()
-                .Where(d => d.Branch.InstitutionId == institutionId)
                 .Select(d => new
                 {
                     departmentId = d.DepartmentId,
                     departmentName = d.DepartmentName
                 })
+                .OrderBy(d => d.departmentName)
                 .ToListAsync();
+
+            if (!departments.Any())
+            {
+                return Ok(new
+                {
+                    departments,
+                    warning = "No departments found. Contact administrator to configure departments."
+                });
+            }
 
             return Ok(departments);
         }
@@ -492,35 +654,78 @@ namespace FourierIT_API.Controllers
             if (sessionToken == null)
                 return Unauthorized(new { error = "Invalid or expired session token." });
 
-            var institutionId = sessionToken.InstitutionId;
-
-            var documentOwnerRoleId = await _context.Roles
-                .Where(r => r.NormalizedName == "DOCUMENT OWNER")
-                .Select(r => r.Id)
-                .FirstOrDefaultAsync();
-
-            if (string.IsNullOrWhiteSpace(documentOwnerRoleId))
+            // Return all registered users who have the Document Owner role.
+            // Resolve the role first (by NormalizedName) then match UserRoles by RoleId to avoid navigation/translation edge cases.
+            var docRole = await _context.Roles.FirstOrDefaultAsync(r => r.NormalizedName == "DOCUMENT OWNER");
+            // If exact normalized lookup fails, try more permissive matches to handle unexpected DB values
+            if (docRole == null)
             {
-                return Ok(new object[] { });
+                docRole = await _context.Roles
+                    .FirstOrDefaultAsync(r => r.NormalizedName != null && r.NormalizedName.Contains("DOCUMENT") && r.NormalizedName.Contains("OWNER"));
+            }
+            if (docRole == null)
+            {
+                docRole = await _context.Roles
+                    .FirstOrDefaultAsync(r => r.Name != null && r.Name.Contains("Document") && r.Name.Contains("Owner"));
             }
 
-            var institutionUserIds = _context.InstitutionMembers
-                .Where(im => im.InstitutionId == institutionId)
-                .Select(im => im.UserId);
+            List<object> members;
 
-            var members = await _context.Users
-                .AsNoTracking()
-                .Where(u => _context.UserRoles.Any(ur => ur.UserId == u.Id && ur.RoleId == documentOwnerRoleId)
-                            && (institutionUserIds.Contains(u.Id) ||
-                                (u.Department != null && u.Department.Branch.InstitutionId == institutionId)))
-                .Select(u => new
+            if (docRole != null)
+            {
+                members = await _context.Users
+                    .Include(u => u.Profile)
+                    .Include(u => u.UserRoles)
+                    .Where(u => u.UserRoles.Any(ur => ur.RoleId == docRole.Id))
+                    .Select(u => new
+                    {
+                        userId = u.Id,
+                        userName = u.UserName,
+                        displayName = !string.IsNullOrWhiteSpace(u.Profile.FirstName) || !string.IsNullOrWhiteSpace(u.Profile.LastName)
+                            ? (u.Profile.FirstName + " " + u.Profile.LastName).Trim()
+                            : (string.IsNullOrWhiteSpace(u.UserName) ? u.Id : u.UserName)
+                    })
+                    .Distinct()
+                    .OrderBy(u => u.displayName)
+                    .ToListAsync<object>();
+            }
+            else
+            {
+                // If role not present, leave members empty so we fall back to returning all users below.
+                members = new List<object>();
+            }
+
+            if (!members.Any())
+            {
+                // Fallback: return all users in the system if no document owners are found
+                var allUsers = await _context.Users
+                    .Include(u => u.Profile)
+                    .Select(u => new
+                    {
+                        userId = u.Id,
+                        userName = u.UserName,
+                        displayName = !string.IsNullOrWhiteSpace(u.Profile.FirstName) || !string.IsNullOrWhiteSpace(u.Profile.LastName)
+                            ? (u.Profile.FirstName + " " + u.Profile.LastName).Trim()
+                            : (string.IsNullOrWhiteSpace(u.UserName) ? u.Id : u.UserName)
+                    })
+                    .OrderBy(u => u.displayName)
+                    .ToListAsync();
+                // Provide a small diagnostic hint listing any roles that partially match
+                var roleCandidates = await _context.Roles
+                    .Where(r => (r.Name != null && (r.Name.Contains("Document") || r.Name.Contains("Owner")))
+                                || (r.NormalizedName != null && (r.NormalizedName.Contains("DOCUMENT") || r.NormalizedName.Contains("OWNER"))))
+                    .Select(r => new { r.Id, r.Name, r.NormalizedName })
+                    .ToListAsync();
+
+                var candidateNames = roleCandidates.Select(r => r.Name ?? r.NormalizedName ?? r.Id).ToList();
+                var candidateHint = candidateNames.Any() ? $" Candidates: {string.Join(", ", candidateNames)}" : string.Empty;
+
+                return Ok(new
                 {
-                    userId = u.Id,
-                    userName = u.UserName,
-                    displayName = string.IsNullOrWhiteSpace(u.UserName) ? u.Id : u.UserName
-                })
-                .Distinct()
-                .ToListAsync();
+                    users = allUsers,
+                    warning = "No users with role 'Document Owner' were found. Returning all users as a fallback." + candidateHint
+                });
+            }
 
             return Ok(members);
         }
@@ -561,52 +766,103 @@ namespace FourierIT_API.Controllers
                     return BadRequest(new { error = "RecipientId must be a valid department id." });
 
                 var department = await _context.Departments
-                    .Include(d => d.Branch)
                     .FirstOrDefaultAsync(d => d.DepartmentId == departmentId);
 
                 if (department == null)
                     return NotFound(new { error = "Target department not found." });
 
-                if (department.Branch?.InstitutionId != institutionId)
-                    return BadRequest(new { error = "Department does not belong to the institution." });
-
-                var requiredDocs = await _context.DepartmentDocumentTypes
-                    .Where(ddt => ddt.DepartmentId == departmentId)
-                    .Include(ddt => ddt.DocumentType)
+                // For department requests, show the company-level required documents
+                // (e.g. entity type 'Company' requirements) filtered by what the
+                // department actually supports (DepartmentDocumentTypes).
+                // Return company-level required documents (EntityTypeId == 3).
+                // Previously we filtered these by DepartmentDocumentTypes; the UI
+                // expects the full company requirement set (11..19), so return
+                // the RequiredDocuments for the Company entity type.
+                var requiredDocs = await _context.RequiredDocuments
+                    .Where(rd => rd.EntityTypeId == 3)
+                    .Include(rd => rd.DocumentType)
                     .AsNoTracking()
-                    .Select(ddt => new
+                    .OrderBy(rd => rd.IsMandatory ? 0 : 1)
+                    .ThenBy(rd => rd.DocumentType.TypeName)
+                    .Select(rd => new
                     {
-                        documentTypeId = ddt.DocumentTypeId,
-                        typeName = ddt.DocumentType.TypeName,
-                        description = ddt.DocumentType.Description,
-                        isMandatory = ddt.IsMandatory,
-                        requirementNote = ddt.DocumentType.Description
+                        documentTypeId = rd.DocumentTypeId,
+                        typeName = rd.DocumentType.TypeName,
+                        description = rd.DocumentType.Description,
+                        isMandatory = rd.IsMandatory,
+                        requirementNote = rd.Description ?? rd.DocumentType.Description
                     })
                     .ToListAsync();
 
-                return Ok(requiredDocs);
+                return Ok(new
+                {
+                    documentTypes = requiredDocs
+                });
             }
 
             var targetUser = await ResolveUserAsync(recipientId);
             if (targetUser == null)
                 return NotFound(new { error = "Target user not found." });
 
-            var userDocumentTypes = await _context.Documents
-                .AsNoTracking()
-                .Where(d => d.UserId == targetUser.Id && d.CurrentStatus != "Deleted")
-                .Include(d => d.DocumentType)
-                .Select(d => new
+            var userWithEntityType = await _context.Users
+                .Include(u => u.EntityType)
+                .FirstOrDefaultAsync(u => u.Id == targetUser.Id);
+
+            if (userWithEntityType == null)
+                return NotFound(new { error = "Target user not found." });
+
+            if (!userWithEntityType.EntityTypeId.HasValue)
+            {
+                // If no entity type is assigned, return the user's currently uploaded document types as a fallback.
+                var fallbackDocumentTypes = await _context.Documents
+                    .AsNoTracking()
+                    .Where(d => d.UserId == targetUser.Id && d.CurrentStatus != "Deleted")
+                    .Join(
+                        _context.DocumentTypes,
+                        d => d.DocumentTypeId,
+                        dt => dt.DocumentTypeId,
+                        (d, dt) => new
+                        {
+                            d.DocumentTypeId,
+                            dt.TypeName,
+                            dt.Description
+                        })
+                    .GroupBy(x => x.DocumentTypeId)
+                    .Select(g => new
+                    {
+                        documentTypeId = g.Key,
+                        typeName = g.Select(x => x.TypeName).FirstOrDefault(),
+                        description = g.Select(x => x.Description).FirstOrDefault(),
+                        isMandatory = false,
+                        requirementNote = g.Select(x => x.Description).FirstOrDefault()
+                    })
+                    .OrderBy(x => x.typeName)
+                    .ToListAsync();
+
+                return Ok(new
                 {
-                    documentTypeId = d.DocumentTypeId,
-                    typeName = d.DocumentType.TypeName,
-                    description = d.DocumentType.Description,
-                    isMandatory = false,
-                    requirementNote = d.DocumentType.Description
+                    documentTypes = fallbackDocumentTypes,
+                    warning = "Target user has not selected an entity type. Returning currently uploaded document types as a fallback."
+                });
+            }
+
+            var requiredDocumentTypes = await _context.RequiredDocuments
+                .AsNoTracking()
+                .Where(rd => rd.EntityTypeId == userWithEntityType.EntityTypeId)
+                .Include(rd => rd.DocumentType)
+                .OrderBy(rd => rd.IsMandatory ? 0 : 1)
+                .ThenBy(rd => rd.DocumentType.TypeName)
+                .Select(rd => new
+                {
+                    documentTypeId = rd.DocumentTypeId,
+                    typeName = rd.DocumentType.TypeName,
+                    description = rd.DocumentType.Description,
+                    isMandatory = rd.IsMandatory,
+                    requirementNote = rd.Description ?? rd.DocumentType.Description
                 })
-                .DistinctBy(d => d.documentTypeId)
                 .ToListAsync();
 
-            return Ok(userDocumentTypes);
+            return Ok(new { documentTypes = requiredDocumentTypes });
         }
 
         /// <summary>
@@ -767,6 +1023,16 @@ namespace FourierIT_API.Controllers
 
             await _context.SaveChangesAsync();
 
+            await _auditLogService.CreateAuditLogAsync(new AuditLog
+            {
+                UserId = currentUser.Id,
+                ActionCode = "REQUEST_ROUTED_TO_OWNER",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = $"Request {request.EnquiryRequestId} routed to document owner {targetUser.UserName} by {currentUser.UserName}.",
+                TableAffected = "InstitutionEnquiryRequests",
+                RecordID = request.EnquiryRequestId
+            });
+
             return Ok(new
             {
                 request.EnquiryRequestId,
@@ -846,6 +1112,7 @@ namespace FourierIT_API.Controllers
                 institutionEnquiryRequest = request
             };
 
+
             request.Status = "Approved";
             request.RespondedAt = DateTime.UtcNow;
             request.ApprovedByUserId = currentUser.Id;
@@ -861,11 +1128,22 @@ namespace FourierIT_API.Controllers
                     ApprovedByUserId = currentUser.Id,
                     ApprovedAt = DateTime.UtcNow,
                     ExpiresAt = expiry.UtcDateTime,
+
                     IsRevoked = false
                 });
             }
 
             await _context.SaveChangesAsync();
+
+            await _auditLogService.CreateAuditLogAsync(new AuditLog
+            {
+                UserId = currentUser.Id,
+                ActionCode = "REQUEST_APPROVED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = $"Request {request.EnquiryRequestId} approved by {currentUser.UserName}.",
+                TableAffected = "InstitutionEnquiryRequests",
+                RecordID = request.EnquiryRequestId
+            });
 
             return Ok(new
             {
@@ -911,6 +1189,16 @@ namespace FourierIT_API.Controllers
 
             await _context.SaveChangesAsync();
 
+            await _auditLogService.CreateAuditLogAsync(new AuditLog
+            {
+                UserId = currentUser.Id,
+                ActionCode = "REQUEST_DENIED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = $"Request {request.EnquiryRequestId} denied by {currentUser.UserName}.",
+                TableAffected = "InstitutionEnquiryRequests",
+                RecordID = request.EnquiryRequestId
+            });
+
             return Ok(new { 
                 message = "Request denied.",
                 requestId = request.EnquiryRequestId,
@@ -925,7 +1213,36 @@ namespace FourierIT_API.Controllers
             [FromQuery] string token)
         {
             if (string.IsNullOrWhiteSpace(token))
-                return Unauthorized(new { error = "A valid access token is required." });
+                return Unauthorized(new { error = "A valid access token or institution session token is required." });
+
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+
+            if (sessionToken != null)
+            {
+                var approval = await _context.DocumentAccessApprovals
+                    .Include(daa => daa.Document)
+                    .Include(daa => daa.InstitutionEnquiryRequest)
+                    .ThenInclude(r => r.TargetUser)
+                    .FirstOrDefaultAsync(daa => daa.DocumentId == documentId
+                        && daa.InstitutionEnquiryRequest.InstitutionId == sessionToken.InstitutionId
+                        && daa.InstitutionEnquiryRequest.Status == "Approved"
+                        && !daa.IsRevoked
+                        && (!daa.ExpiresAt.HasValue || daa.ExpiresAt.Value > DateTime.UtcNow));
+
+                if (approval == null)
+                    return Problem(detail: "Document is not approved for this institution or is no longer available.", statusCode: StatusCodes.Status403Forbidden);
+
+                var document = approval.Document;
+                if (document == null)
+                    return NotFound();
+
+                if (document.UserId != approval.InstitutionEnquiryRequest.TargetUserId)
+                    return Problem(detail: "Document ownership does not match the approved request.", statusCode: StatusCodes.Status403Forbidden);
+
+                var fileBytes = await _documentService.DownloadDocumentAsync(documentId, approval.InstitutionEnquiryRequest.TargetUserId);
+                return File(fileBytes, "application/octet-stream", document.FileName);
+            }
 
             var accessToken = await _context.AccessTokens
                 .Include(at => at.institutionEnquiryRequest)
@@ -949,11 +1266,11 @@ namespace FourierIT_API.Controllers
             if (request.Status != "Approved")
                 return Forbid();
 
-            var document = await _context.Documents
+            var documentByToken = await _context.Documents
                 .AsNoTracking()
                 .FirstOrDefaultAsync(d => d.DocumentId == documentId);
 
-            if (document == null)
+            if (documentByToken == null)
                 return NotFound();
 
             var documentApproved = await _context.DocumentAccessApprovals
@@ -965,11 +1282,81 @@ namespace FourierIT_API.Controllers
             if (!documentApproved)
                 return Forbid();
 
-            if (document.UserId != request.TargetUserId)
+            if (documentByToken.UserId != request.TargetUserId)
                 return Forbid();
 
-            var fileBytes = await _documentService.DownloadDocumentAsync(documentId, request.TargetUserId);
-            return File(fileBytes, "application/octet-stream", document.FileName);
+            var fileBytesToken = await _documentService.DownloadDocumentAsync(documentId, request.TargetUserId);
+            return File(fileBytesToken, "application/octet-stream", documentByToken.FileName);
+        }
+
+        [AllowAnonymous]
+        [HttpPost("institution-access/documents/{documentId:int}/flag")]
+        public async Task<IActionResult> FlagApprovedDocument(
+            [FromRoute] int documentId,
+            [FromQuery] string token,
+            [FromBody] FlagApprovedDocumentDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return Problem(detail: "A valid institution session token is required.", statusCode: StatusCodes.Status401Unauthorized);
+
+            if (dto == null || string.IsNullOrWhiteSpace(dto.Reason))
+                return BadRequest(new { error = "Flag reason is required." });
+
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+
+            if (sessionToken == null)
+                return Problem(detail: "Invalid or expired institution session token.", statusCode: StatusCodes.Status401Unauthorized);
+
+            var approval = await _context.DocumentAccessApprovals
+                .Include(daa => daa.InstitutionEnquiryRequest)
+                .FirstOrDefaultAsync(daa => daa.DocumentId == documentId
+                    && daa.InstitutionEnquiryRequest.InstitutionId == sessionToken.InstitutionId
+                    && daa.InstitutionEnquiryRequest.Status == "Approved"
+                    && !daa.IsRevoked
+                    && (!daa.ExpiresAt.HasValue || daa.ExpiresAt.Value > DateTime.UtcNow));
+
+            if (approval == null)
+                return Problem(detail: "Document is not approved for this institution or is no longer available.", statusCode: StatusCodes.Status403Forbidden);
+
+            var flag = new EnquiryFlag
+            {
+                DocumentId = documentId,
+                EnquiryId = approval.EnquiryRequestId,
+                FlagReason = dto.Reason.Trim(),
+                IsResolved = false,
+            };
+
+            _context.EnquiryFlags.Add(flag);
+            await _context.SaveChangesAsync();
+
+            _context.AccessLists.Add(new AccessList
+            {
+                EnquiryRequestId = approval.EnquiryRequestId,
+                DocumentId = documentId,
+                EnquiryId = flag.EnquiryFlagId
+            });
+
+            await _context.SaveChangesAsync();
+
+            try
+            {
+                await _auditLogService.CreateAuditLogAsync(new AuditLog
+                {
+                    UserId = "institution_portal",
+                    ActionCode = "DOCUMENT_FLAGGED",
+                    TimeStamp = DateTimeOffset.UtcNow,
+                    Description = $"Approved document {documentId} was flagged by institution {sessionToken.InstitutionId}. Reason: {flag.FlagReason}",
+                    TableAffected = "EnquiryFlags",
+                    RecordID = flag.EnquiryFlagId
+                });
+            }
+            catch
+            {
+                // Audit failure should not block the user action.
+            }
+
+            return Ok(new { message = "Document flagged and reason submitted." });
         }
 
         [AllowAnonymous]
@@ -977,7 +1364,47 @@ namespace FourierIT_API.Controllers
         public async Task<IActionResult> GetApprovedInstitutionDocuments([FromQuery] string token)
         {
             if (string.IsNullOrWhiteSpace(token))
-                return BadRequest(new { error = "A valid access token is required." });
+                return BadRequest(new { error = "A valid access token or institution session token is required." });
+
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+
+            if (sessionToken != null)
+            {
+                var approvedDocumentList = await _context.DocumentAccessApprovals
+                    .AsNoTracking()
+                    .Include(daa => daa.Document)
+                        .ThenInclude(d => d.DocumentType)
+                    .Include(daa => daa.InstitutionEnquiryRequest)
+                        .ThenInclude(r => r.TargetDepartment)
+                    .Include(daa => daa.InstitutionEnquiryRequest)
+                        .ThenInclude(r => r.TargetUser)
+                            .ThenInclude(u => u.Profile)
+                    .Where(daa => daa.InstitutionEnquiryRequest.InstitutionId == sessionToken.InstitutionId
+                        && daa.InstitutionEnquiryRequest.Status == "Approved"
+                        && !daa.IsRevoked
+                        && (!daa.ExpiresAt.HasValue || daa.ExpiresAt.Value > DateTime.UtcNow))
+                    .Select(daa => new
+                    {
+                        RequestId = daa.EnquiryRequestId,
+                        RequestType = daa.InstitutionEnquiryRequest.RequestType,
+                        RecipientName = daa.InstitutionEnquiryRequest.RequestType == "Department"
+                            ? (daa.InstitutionEnquiryRequest.TargetDepartment != null ? daa.InstitutionEnquiryRequest.TargetDepartment.DepartmentName : "-")
+                            : (daa.InstitutionEnquiryRequest.TargetUser != null
+                                ? ((!string.IsNullOrWhiteSpace(daa.InstitutionEnquiryRequest.TargetUser.Profile.FirstName) || !string.IsNullOrWhiteSpace(daa.InstitutionEnquiryRequest.TargetUser.Profile.LastName))
+                                    ? (daa.InstitutionEnquiryRequest.TargetUser.Profile.FirstName + " " + daa.InstitutionEnquiryRequest.TargetUser.Profile.LastName).Trim()
+                                    : (daa.InstitutionEnquiryRequest.TargetUser.UserName ?? daa.InstitutionEnquiryRequest.TargetUser.Id))
+                                : (daa.InstitutionEnquiryRequest.TargetUserId ?? "-")),
+                        daa.DocumentId,
+                        DocumentName = daa.Document.FileName,
+                        DocumentTypeName = daa.Document.DocumentType.TypeName,
+                        ApprovedAt = daa.ApprovedAt,
+                        ExpiresAt = daa.ExpiresAt
+                    })
+                    .ToListAsync();
+
+                return Ok(approvedDocumentList);
+            }
 
             var accessToken = await _context.AccessTokens
                 .Include(at => at.institutionEnquiryRequest)
@@ -1007,11 +1434,25 @@ namespace FourierIT_API.Controllers
                 .AsNoTracking()
                 .Include(daa => daa.Document)
                     .ThenInclude(d => d.DocumentType)
+                .Include(daa => daa.InstitutionEnquiryRequest)
+                    .ThenInclude(r => r.TargetDepartment)
+                .Include(daa => daa.InstitutionEnquiryRequest)
+                    .ThenInclude(r => r.TargetUser)
+                        .ThenInclude(u => u.Profile)
                 .Where(daa => daa.EnquiryRequestId == request.EnquiryRequestId
                     && !daa.IsRevoked
                     && (!daa.ExpiresAt.HasValue || daa.ExpiresAt.Value > DateTime.UtcNow))
                 .Select(daa => new
                 {
+                    RequestId = daa.EnquiryRequestId,
+                    RequestType = daa.InstitutionEnquiryRequest.RequestType,
+                    RecipientName = daa.InstitutionEnquiryRequest.RequestType == "Department"
+                        ? (daa.InstitutionEnquiryRequest.TargetDepartment != null ? daa.InstitutionEnquiryRequest.TargetDepartment.DepartmentName : "-")
+                        : (daa.InstitutionEnquiryRequest.TargetUser != null
+                            ? ((!string.IsNullOrWhiteSpace(daa.InstitutionEnquiryRequest.TargetUser.Profile.FirstName) || !string.IsNullOrWhiteSpace(daa.InstitutionEnquiryRequest.TargetUser.Profile.LastName))
+                                ? (daa.InstitutionEnquiryRequest.TargetUser.Profile.FirstName + " " + daa.InstitutionEnquiryRequest.TargetUser.Profile.LastName).Trim()
+                                : (daa.InstitutionEnquiryRequest.TargetUser.UserName ?? daa.InstitutionEnquiryRequest.TargetUser.Id))
+                            : (daa.InstitutionEnquiryRequest.TargetUserId ?? "-")),
                     daa.DocumentId,
                     DocumentName = daa.Document.FileName,
                     DocumentTypeName = daa.Document.DocumentType.TypeName,
@@ -1021,6 +1462,55 @@ namespace FourierIT_API.Controllers
                 .ToListAsync();
 
             return Ok(approvedDocuments);
+        }
+
+        /// <summary>
+        /// Returns recent approved and denied institution notifications for the session.
+        /// This powers the institution portal notification bell.
+        /// </summary>
+        [AllowAnonymous]
+        [HttpGet("institution-access/notifications")]
+        public async Task<IActionResult> GetInstitutionNotifications([FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest(new { error = "A valid session token is required." });
+
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+
+            if (sessionToken == null)
+                return Unauthorized(new { error = "Invalid or expired session token." });
+
+            var notifications = await _context.InstitutionEnquiryRequests
+                .AsNoTracking()
+                .Include(r => r.TargetDepartment)
+                .Include(r => r.TargetUser)
+                    .ThenInclude(u => u.Profile)
+                .Where(r => r.InstitutionId == sessionToken.InstitutionId
+                    && (r.Status == "Approved" || r.Status == "Denied")
+                    && r.RespondedAt != null)
+                .OrderByDescending(r => r.RespondedAt)
+                .Take(10)
+                .Select(r => new
+                {
+                    r.EnquiryRequestId,
+                    r.Status,
+                    RequestType = r.RequestType,
+                    RecipientName = r.RequestType == "Department"
+                        ? (r.TargetDepartment != null ? r.TargetDepartment.DepartmentName : "-")
+                        : (r.TargetUser != null
+                            ? ((!string.IsNullOrWhiteSpace(r.TargetUser.Profile.FirstName) || !string.IsNullOrWhiteSpace(r.TargetUser.Profile.LastName))
+                                ? (r.TargetUser.Profile.FirstName + " " + r.TargetUser.Profile.LastName).Trim()
+                                : (r.TargetUser.UserName ?? r.TargetUserId ?? "-"))
+                            : (r.TargetUserId ?? "-")),
+                    Message = r.Status == "Approved"
+                        ? "Your documents were approved and are available for download."
+                        : "Your request was denied. Please contact the compliance team for more information.",
+                    Timestamp = r.RespondedAt
+                })
+                .ToListAsync();
+
+            return Ok(notifications);
         }
 
         /// <summary>
