@@ -116,8 +116,9 @@ builder.Services.AddIdentity<User, Role>(options =>
     options.Password.RequireUppercase = true;
     options.Password.RequireNonAlphanumeric = true;
     options.Password.RequiredLength = 8;
-}).
-AddEntityFrameworkStores<AppDbContext>();
+})
+.AddEntityFrameworkStores<AppDbContext>()
+.AddDefaultTokenProviders();
 
 builder.Services.AddAuthentication(options =>
 {
@@ -267,3 +268,49 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Run();
+
+// Development convenience: ensure the 'Document Owner' role exists and assign to demo users
+// This runs after the application has been built; it is safe to run idempotently.
+using (var scope = app.Services.CreateScope())
+{
+    try
+    {
+        var roleMgr = scope.ServiceProvider.GetRequiredService<RoleManager<Role>>();
+        var userMgr = scope.ServiceProvider.GetRequiredService<UserManager<User>>();
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+
+        var roleName = "Document Owner";
+        if (!await roleMgr.RoleExistsAsync(roleName))
+        {
+            var role = new Role { Name = roleName, NormalizedName = roleName.ToUpperInvariant() };
+            var createRes = await roleMgr.CreateAsync(role);
+            if (!createRes.Succeeded)
+                logger.LogWarning("Failed to create role {Role}: {Errors}", roleName, string.Join(", ", createRes.Errors.Select(e => e.Description)));
+        }
+
+        var demoUsers = new[] { "docowner", "user2" };
+        foreach (var userName in demoUsers)
+        {
+            var user = await userMgr.FindByNameAsync(userName);
+            if (user == null)
+            {
+                logger.LogWarning("Demo user '{User}' not found; skipping role assignment.", userName);
+                continue;
+            }
+
+            if (!await userMgr.IsInRoleAsync(user, roleName))
+            {
+                var addRes = await userMgr.AddToRoleAsync(user, roleName);
+                if (!addRes.Succeeded)
+                    logger.LogWarning("Failed to assign role {Role} to {User}: {Errors}", roleName, userName, string.Join(", ", addRes.Errors.Select(e => e.Description)));
+                else
+                    logger.LogInformation("Assigned role {Role} to {User}", roleName, userName);
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+        logger.LogWarning(ex, "Assigning demo roles encountered an exception.");
+    }
+}
