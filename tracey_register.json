@@ -1,0 +1,14 @@
+{
+  "firstName": "Tracey",
+  "lastName": "Test",
+  "dateOfBirth": "1990-01-01",
+  "phoneNumber": "",
+  "jobTitle": "Tester",
+  "username": "tracey_test",
+  "emailAddress": "tracey_test@fourier.local",
+  "password": "Tr@cey123!",
+  "role": "",
+  "roles": [],
+  "entityTypeId": 3,
+  "entityIdentificationNumber": "REG1234"
+}

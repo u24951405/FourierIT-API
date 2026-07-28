@@ -54,7 +54,9 @@ namespace FourierIT_API.Interfaces
 
         // ===== HISTORY & AUDIT =====
         Task<List<ComplianceHistory>> GetComplianceHistoryAsync(int complianceStatusId, int limit = 50);
+        Task<List<ComplianceHistoryItemDto>> GetComplianceHistoryAsync(string userId, int limit = 50);
         Task<List<ComplianceAuditLog>> GetAuditLogsAsync(int complianceStatusId, int limit = 100);
+        Task<List<ComplianceRuleDto>> GetComplianceRulesAsync();
 
         // ===== BULK OPERATIONS =====
         Task<int> BulkApproveDocumentsAsync(List<int> checkIds, string approvedBy);
@@ -67,6 +69,7 @@ namespace FourierIT_API.Interfaces
         // ===== NOTIFICATIONS =====
         Task<bool> SendNonComplianceNotificationAsync(string userId);
         Task<bool> SendDeadlineReminderAsync(string userId);
+        Task<bool> ProcessExpiredDocumentComplianceAsync();
 
         // ===== UTILITIES =====
         Task<int> CalculateComplianceScoreAsync(string userId);

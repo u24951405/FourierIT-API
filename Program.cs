@@ -99,6 +99,9 @@ builder.Services.AddScoped<FourierIT_API.Interfaces.IBackupService, FourierIT_AP
 
 // Register Daily Backup Service as a Hosted Service
 builder.Services.AddHostedService<DailyBackupService>();
+// Register expired document compliance scheduler
+builder.Services.AddHostedService<ExpiredDocumentComplianceService>();
+
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("EmailSettings"));
 builder.Services.AddScoped<IEmailService, EmailService>();
 

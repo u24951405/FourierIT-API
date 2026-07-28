@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration.UserSecrets;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.Extensions.Logging;
 
 namespace FourierIT_API.Controllers
 {
@@ -21,13 +22,17 @@ namespace FourierIT_API.Controllers
         private readonly IDocumentRepository _documentRepository;
         private readonly UserManager<User> _userManager;
         private readonly AppDbContext _context;
+        private readonly IComplianceService _complianceService;
+        private readonly ILogger<DocumentController> _logger;
 
-        public DocumentController(IDocumentService documentService, IDocumentRepository documentRepository, UserManager<User> userManager, AppDbContext context)
+        public DocumentController(IDocumentService documentService, IDocumentRepository documentRepository, UserManager<User> userManager, AppDbContext context, IComplianceService complianceService, ILogger<DocumentController> logger)
         {
             _documentService = documentService;
             _documentRepository = documentRepository;
             _userManager = userManager;
             _context = context;
+            _complianceService = complianceService;
+            _logger = logger;
         }
 
         //Role helper method
@@ -229,6 +234,14 @@ namespace FourierIT_API.Controllers
                 });
             }
             await _documentRepository.UpdateDocumentAsync(document);
+            try
+            {
+                await _complianceService.CheckUserComplianceAsync(user.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to recalculate compliance after document upload for user {UserId}", user.Id);
+            }
 
             return CreatedAtAction(nameof(GetById), new { id = document.DocumentId }, ToResponseDto(document));
         }
@@ -239,7 +252,7 @@ namespace FourierIT_API.Controllers
             var user = await _userManager.GetUserAsync(User);
             if (user == null) return Unauthorized();
 
-            var docs = await _documentService.GetAccessibleDocumentAsync(user.Id);
+            var docs = await _documentRepository.GetUserDocumentAsync(user.Id);
             return Ok(docs.Select(ToResponseDto));
         }
 
@@ -329,6 +342,14 @@ namespace FourierIT_API.Controllers
             doc.LastModifiedDate = DateTime.UtcNow;
 
             await _documentRepository.UpdateDocumentAsync(doc);
+            try
+            {
+                await _complianceService.CheckUserComplianceAsync(user.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to recalculate compliance after document update for user {UserId}", user.Id);
+            }
             return Ok(ToResponseDto(doc));
         }
 
@@ -343,6 +364,14 @@ namespace FourierIT_API.Controllers
             if (doc.UserId != user.Id) return Forbid();
 
             await _documentRepository.DeleteDocumentAsync(id);
+            try
+            {
+                await _complianceService.CheckUserComplianceAsync(user.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to recalculate compliance after document deletion for user {UserId}", user.Id);
+            }
             return NoContent();
         }
 

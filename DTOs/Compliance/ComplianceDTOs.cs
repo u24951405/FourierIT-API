@@ -89,6 +89,7 @@ namespace FourierIT_API.DTOs.Compliance
         public int Expired { get; set; }
         public int Missing { get; set; }
         public int NotCertified { get; set; }
+        public int PendingReviewDocuments { get; set; }
 
         public int CompliancePercentage { get; set; }
         public decimal ComplianceScore { get; set; }
