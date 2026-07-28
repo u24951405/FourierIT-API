@@ -92,5 +92,6 @@ namespace FourierIT_API.Models
         public ICollection<ComplianceHistory> ComplianceHistories { get; set; } = new List<ComplianceHistory>();
         public ICollection<ComplianceAlert> ComplianceAlerts { get; set; } = new List<ComplianceAlert>();
         public ICollection<ComplianceAuditLog> AuditLogs { get; set; } = new List<ComplianceAuditLog>();
+        public ICollection<ComplianceResult> ComplianceResults { get; set; } = new List<ComplianceResult>();
     }
 }

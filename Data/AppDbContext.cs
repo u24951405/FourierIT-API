@@ -52,6 +52,10 @@ namespace FourierIT_API.Data
         public DbSet<ComplianceHistory> ComplianceHistories { get; set; }
         public DbSet<ComplianceAlert> ComplianceAlerts { get; set; }
         public DbSet<ComplianceAuditLog> ComplianceAuditLogs { get; set; }
+        public DbSet<ComplianceRule> ComplianceRules { get; set; }
+        public DbSet<ComplianceRequirement> ComplianceRequirements { get; set; }
+        public DbSet<ComplianceCheck> ComplianceChecks { get; set; }
+        public DbSet<ComplianceResult> ComplianceResults { get; set; }
 
         // System (Backup, Restore, Auditlog) Db Sets 
         public DbSet<AuditLog> AuditLogs { get; set; }
@@ -627,6 +631,30 @@ namespace FourierIT_API.Data
                 .WithOne(al => al.ComplianceStatus)
                 .HasForeignKey(al => al.ComplianceStatusId)
                 .OnDelete(DeleteBehavior.NoAction);
+
+            modelBuilder.Entity<ComplianceStatus>()
+                .HasMany(cs => cs.ComplianceResults)
+                .WithOne(cr => cr.ComplianceStatus)
+                .HasForeignKey(cr => cr.ComplianceStatusId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<ComplianceRule>()
+                .HasMany(cr => cr.Requirements)
+                .WithOne(r => r.ComplianceRule)
+                .HasForeignKey(r => r.ComplianceRuleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<ComplianceRule>()
+                .HasMany(cr => cr.Checks)
+                .WithOne(c => c.ComplianceRule)
+                .HasForeignKey(c => c.ComplianceRuleId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<ComplianceResult>()
+                .HasMany(cr => cr.Checks)
+                .WithOne(c => c.ComplianceResult)
+                .HasForeignKey(c => c.ComplianceResultId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             // Configure User one-to-one with ComplianceStatus (optional)
             modelBuilder.Entity<User>()

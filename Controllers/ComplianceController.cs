@@ -77,7 +77,7 @@ namespace FourierIT_API.Controllers
             try
             {
                 if (!await UserCanAccessDepartmentAsync(departmentId))
-                    return Forbid("You can only check compliance for your own department.");
+                    return Forbid();
 
                 var status = await _complianceService.CheckDepartmentComplianceAsync(departmentId);
                 return Ok(new { success = true, data = status });
@@ -121,9 +121,10 @@ namespace FourierIT_API.Controllers
             {
                 // Users can only view their own details unless they're Admin
                 var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                if (currentUserId != userId && !User.IsInRole("Admin"))
-                    return Forbid("You can only view your own compliance details");
+                if (currentUserId != userId && !User.IsInRole("Admin") && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
+                    return Forbid();
 
+                await _complianceService.CheckUserComplianceAsync(userId);
                 var details = await _complianceService.GetUserComplianceDetailsAsync(userId);
                 return Ok(new { success = true, data = details });
             }
@@ -144,7 +145,7 @@ namespace FourierIT_API.Controllers
             if (User.IsInRole("Admin"))
                 return true;
 
-            if (!User.IsInRole("Department Admin"))
+            if (!User.IsInRole("Department Admin") && !User.IsInRole("Stakeholder"))
                 return false;
 
             var currentUser = await GetCurrentUserAsync();
@@ -161,7 +162,7 @@ namespace FourierIT_API.Controllers
             try
             {
                 if (!await UserCanAccessDepartmentAsync(departmentId))
-                    return Forbid("You can only view compliance for your own department.");
+                    return Forbid();
 
                 var details = await _complianceService.GetDepartmentUserComplianceAsync(departmentId);
                 return Ok(new { success = true, count = details.Count, data = details });
@@ -198,13 +199,13 @@ namespace FourierIT_API.Controllers
         /// Get department compliance dashboard
         /// </summary>
         [HttpGet("departments/{departmentId}/dashboard")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Roles = "Admin,Department Admin,Stakeholder")]
         public async Task<IActionResult> GetDepartmentDashboard(int departmentId)
         {
             try
             {
                 if (!await UserCanAccessDepartmentAsync(departmentId))
-                    return Forbid("You can only view the dashboard for your own department.");
+                    return Forbid();
 
                 var dashboard = await _complianceService.GetDepartmentDashboardAsync(departmentId);
                 return Ok(new { success = true, data = dashboard });
@@ -247,9 +248,10 @@ namespace FourierIT_API.Controllers
             try
             {
                 var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                if (currentUserId != userId && !User.IsInRole("Admin"))
+                if (currentUserId != userId && !User.IsInRole("Admin") && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
                     return Forbid();
 
+                await _complianceService.CheckUserComplianceAsync(userId);
                 var issues = await _complianceService.GetDocumentIssuesAsync(userId);
                 return Ok(new { success = true, count = issues.Count, data = issues });
             }
@@ -270,9 +272,10 @@ namespace FourierIT_API.Controllers
             try
             {
                 var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                if (currentUserId != userId && !User.IsInRole("Admin"))
+                if (currentUserId != userId && !User.IsInRole("Admin") && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
                     return Forbid();
 
+                await _complianceService.CheckUserComplianceAsync(userId);
                 var missing = await _complianceService.IdentifyMissingDocumentsAsync(userId);
                 return Ok(new { success = true, count = missing.Count, data = missing });
             }
@@ -543,19 +546,34 @@ namespace FourierIT_API.Controllers
         /// Get compliance history for a user
         /// </summary>
         [HttpGet("users/{userId}/history")]
-        [Authorize(Roles = "Admin")]
+        [Authorize]
         public async Task<IActionResult> GetComplianceHistory(string userId, [FromQuery] int limit = 50)
         {
             try
             {
-                // First get the compliance status for this user
-                var details = await _complianceService.GetUserComplianceDetailsAsync(userId);
-                if (string.IsNullOrEmpty(details.UserId))
-                    return NotFound("User compliance history not found");
+                var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (currentUserId != userId && !User.IsInRole("Admin"))
+                    return Forbid();
 
-                // This is simplified - in real implementation we'd need the status ID
-                // For now returning the compliance details which includes history
-                return Ok(new { success = true, data = details });
+                await _complianceService.CheckUserComplianceAsync(userId);
+                var status = await _complianceService.GetComplianceHistoryAsync(userId, limit);
+                return Ok(new { success = true, count = status.Count, data = status });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error: {ex.Message}");
+                return BadRequest(new { success = false, error = ex.Message });
+            }
+        }
+
+        [HttpGet("rules")]
+        [Authorize]
+        public async Task<IActionResult> GetComplianceRules()
+        {
+            try
+            {
+                var rules = await _complianceService.GetComplianceRulesAsync();
+                return Ok(new { success = true, count = rules.Count, data = rules });
             }
             catch (Exception ex)
             {

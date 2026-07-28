@@ -36,6 +36,8 @@ namespace FourierIT_API.Services
 
         public async Task<ComplianceStatus> CheckUserComplianceAsync(string userId, bool runDetailedCheck = true)
         {
+            await SeedDefaultComplianceRulesAsync();
+
             var user = await _userManager.FindByIdAsync(userId) 
                 ?? throw new Exception($"User {userId} not found");
 
@@ -43,6 +45,16 @@ namespace FourierIT_API.Services
                 .Include(cs => cs.DocumentChecks)
                 .FirstOrDefaultAsync(cs => cs.UserId == userId) 
                 ?? new ComplianceStatus { UserId = userId };
+
+            if (status.ComplianceStatusId == 0)
+            {
+                _context.ComplianceStatuses.Add(status);
+                await _context.SaveChangesAsync();
+            }
+
+            var previousStatus = status.OverallStatus;
+            var previousRiskLevel = status.RiskLevel;
+            var previousComplianceScore = status.ComplianceScore;
 
             var requiredDocs = await GetRequiredDocumentsForUserAsync(user);
             var userDocs = await _context.Documents
@@ -59,7 +71,12 @@ namespace FourierIT_API.Services
             status.MissingDocuments = 0;
             status.NotCertifiedDocuments = 0;
             status.PendingReviewDocuments = 0;
-            status.DocumentChecks.Clear();
+
+            if (status.DocumentChecks.Any())
+            {
+                _context.DocumentComplianceChecks.RemoveRange(status.DocumentChecks);
+                status.DocumentChecks.Clear();
+            }
 
             // Check each required document
             foreach (var required in requiredDocs.Where(r => r.IsMandatory))
@@ -92,9 +109,13 @@ namespace FourierIT_API.Services
             }
 
             // Calculate scores
-            status.CompliancePercentage = 
-                (status.CompliantDocuments * 100) / 
-                (status.TotalRequiredDocuments > 0 ? status.TotalRequiredDocuments : 1);
+            status.CompliancePercentage = ComplianceEvaluationEngine.CalculateCompliancePercentage(
+                status.TotalRequiredDocuments,
+                status.CompliantDocuments,
+                status.MissingDocuments,
+                status.ExpiredDocuments,
+                status.NonCompliantDocuments,
+                status.PendingReviewDocuments);
 
             status.ComplianceScore = await CalculateComplianceScoreAsync(userId);
             status.OverallRiskScore = await AssessRiskLevelAsync(userId);
@@ -106,22 +127,20 @@ namespace FourierIT_API.Services
             // Determine overall status
             status.OverallStatus = DetermineOverallStatus(status);
             status.RiskLevel = DetermineRiskLevel(status);
+            await PersistComplianceResultAsync(status);
 
             status.LastChecked = DateTime.UtcNow;
             status.LastUpdated = DateTime.UtcNow;
             status.NextReviewDate = DateTime.UtcNow.AddDays(30);
 
-            // Create audit log
-            await CreateAuditLogAsync(status.ComplianceStatusId, "ComplianceCheck", 
-                $"Compliance check completed: {status.OverallStatus}");
-
             // Save
-            if (status.ComplianceStatusId == 0)
-                _context.ComplianceStatuses.Add(status);
-            else
-                _context.ComplianceStatuses.Update(status);
-
+            _context.ComplianceStatuses.Update(status);
             await _context.SaveChangesAsync();
+
+            await PersistComplianceResultAsync(status);
+            await RecordComplianceHistoryAsync(status, previousStatus, previousRiskLevel, previousComplianceScore, "Automated compliance evaluation");
+            await CreateAuditLogAsync(status.ComplianceStatusId, "ComplianceCheck",
+                $"Compliance check completed: {status.OverallStatus}");
             _logger.LogInformation($"Compliance check for {userId}: {status.OverallStatus}");
 
             // Generate alerts if needed
@@ -154,9 +173,16 @@ namespace FourierIT_API.Services
             deptStatus.TotalRequiredDocuments = userStatuses.Sum(s => s.TotalRequiredDocuments);
             deptStatus.CompliantDocuments = userStatuses.Sum(s => s.CompliantDocuments);
             deptStatus.NonCompliantDocuments = userStatuses.Sum(s => s.NonCompliantDocuments);
-            deptStatus.CompliancePercentage = deptStatus.TotalRequiredDocuments > 0
-                ? (deptStatus.CompliantDocuments * 100) / deptStatus.TotalRequiredDocuments
-                : 0;
+            deptStatus.MissingDocuments = userStatuses.Sum(s => s.MissingDocuments);
+            deptStatus.ExpiredDocuments = userStatuses.Sum(s => s.ExpiredDocuments);
+            deptStatus.PendingReviewDocuments = userStatuses.Sum(s => s.PendingReviewDocuments);
+            deptStatus.CompliancePercentage = ComplianceEvaluationEngine.CalculateCompliancePercentage(
+                deptStatus.TotalRequiredDocuments,
+                deptStatus.CompliantDocuments,
+                deptStatus.MissingDocuments,
+                deptStatus.ExpiredDocuments,
+                deptStatus.NonCompliantDocuments,
+                deptStatus.PendingReviewDocuments);
 
             deptStatus.OverallStatus = DetermineOverallStatus(deptStatus);
 
@@ -213,6 +239,7 @@ namespace FourierIT_API.Services
                 Expired = status.ExpiredDocuments,
                 Missing = status.MissingDocuments,
                 NotCertified = status.NotCertifiedDocuments,
+                PendingReviewDocuments = status.PendingReviewDocuments,
                 CompliancePercentage = status.CompliancePercentage,
                 ComplianceScore = status.ComplianceScore,
                 RiskScore = status.OverallRiskScore,
@@ -743,21 +770,36 @@ namespace FourierIT_API.Services
             var approver = await _userManager.FindByIdAsync(approvedBy)
                 ?? throw new Exception($"Approver {approvedBy} not found");
 
+            var status = await _context.ComplianceStatuses
+                .Include(cs => cs.DocumentChecks)
+                .FirstOrDefaultAsync(cs => cs.ComplianceStatusId == check.ComplianceStatusId);
+
+            if (status == null)
+                throw new Exception($"Compliance status {check.ComplianceStatusId} not found");
+
+            var previousStatus = status.OverallStatus;
+            var previousRiskLevel = status.RiskLevel;
+            var previousComplianceScore = status.ComplianceScore;
+
             check.CheckStatus = "Compliant";
             check.IsManuallyApproved = true;
             check.ManuallyReviewedBy = approvedBy;
             check.ManualReviewDate = DateTime.UtcNow;
 
             _context.DocumentComplianceChecks.Update(check);
-
-            // Update compliance status
-            var status = await _context.ComplianceStatuses.FindAsync(check.ComplianceStatusId);
-            if (status != null)
-            {
-                await UpdateComplianceStatusAsync(status.ComplianceStatusId);
-            }
-
             await _context.SaveChangesAsync();
+
+            await UpdateComplianceStatusAsync(status.ComplianceStatusId);
+
+            var updatedStatus = await _context.ComplianceStatuses
+                .Include(cs => cs.DocumentChecks)
+                .FirstOrDefaultAsync(cs => cs.ComplianceStatusId == status.ComplianceStatusId)
+                ?? status;
+
+            await PersistComplianceResultAsync(updatedStatus);
+            await RecordComplianceHistoryAsync(updatedStatus, previousStatus, previousRiskLevel, previousComplianceScore, "Document manually approved");
+            await CreateAuditLogAsync(updatedStatus.ComplianceStatusId, "DocumentApproved", $"Document compliance approved for check {checkId}");
+            await GenerateAlertsAsync(updatedStatus);
 
             _logger.LogInformation($"Document check {checkId} approved by {approvedBy}");
 
@@ -769,6 +811,17 @@ namespace FourierIT_API.Services
             var check = await _context.DocumentComplianceChecks.FindAsync(checkId)
                 ?? throw new Exception($"Check {checkId} not found");
 
+            var status = await _context.ComplianceStatuses
+                .Include(cs => cs.DocumentChecks)
+                .FirstOrDefaultAsync(cs => cs.ComplianceStatusId == check.ComplianceStatusId);
+
+            if (status == null)
+                throw new Exception($"Compliance status {check.ComplianceStatusId} not found");
+
+            var previousStatus = status.OverallStatus;
+            var previousRiskLevel = status.RiskLevel;
+            var previousComplianceScore = status.ComplianceScore;
+
             check.CheckStatus = "Non-Compliant";
             check.NonComplianceReason = reason;
             check.ManuallyReviewedBy = rejectedBy;
@@ -776,6 +829,20 @@ namespace FourierIT_API.Services
 
             _context.DocumentComplianceChecks.Update(check);
             await _context.SaveChangesAsync();
+
+            await UpdateComplianceStatusAsync(status.ComplianceStatusId);
+
+            var updatedStatus = await _context.ComplianceStatuses
+                .Include(cs => cs.DocumentChecks)
+                .FirstOrDefaultAsync(cs => cs.ComplianceStatusId == status.ComplianceStatusId)
+                ?? status;
+
+            await PersistComplianceResultAsync(updatedStatus);
+            await RecordComplianceHistoryAsync(updatedStatus, previousStatus, previousRiskLevel, previousComplianceScore, "Document manually rejected");
+            await CreateAuditLogAsync(updatedStatus.ComplianceStatusId, "DocumentRejected", $"Document compliance rejected for check {checkId}");
+            await GenerateAlertsAsync(updatedStatus);
+
+            _logger.LogInformation($"Document check {checkId} rejected by {rejectedBy}");
 
             return true;
         }
@@ -913,6 +980,30 @@ namespace FourierIT_API.Services
                 .ToListAsync();
         }
 
+        public async Task<List<ComplianceHistoryItemDto>> GetComplianceHistoryAsync(string userId, int limit = 50)
+        {
+            var status = await _context.ComplianceStatuses
+                .AsNoTracking()
+                .FirstOrDefaultAsync(cs => cs.UserId == userId);
+
+            if (status == null)
+                return new List<ComplianceHistoryItemDto>();
+
+            return await _context.ComplianceHistories
+                .AsNoTracking()
+                .Where(h => h.ComplianceStatusId == status.ComplianceStatusId)
+                .OrderByDescending(h => h.ChangedAt)
+                .Take(limit)
+                .Select(h => new ComplianceHistoryItemDto
+                {
+                    Status = h.NewStatus,
+                    CompliancePercentage = h.NewComplianceScore ?? 0,
+                    ChangeReason = h.ChangeReason,
+                    ChangedAt = h.ChangedAt
+                })
+                .ToListAsync();
+        }
+
         public async Task<List<ComplianceAuditLog>> GetAuditLogsAsync(int complianceStatusId, int limit = 100)
         {
             return await _context.ComplianceAuditLogs
@@ -920,6 +1011,25 @@ namespace FourierIT_API.Services
                 .Where(al => al.ComplianceStatusId == complianceStatusId)
                 .OrderByDescending(al => al.PerformedAt)
                 .Take(limit)
+                .ToListAsync();
+        }
+
+        public async Task<List<ComplianceRuleDto>> GetComplianceRulesAsync()
+        {
+            return await _context.ComplianceRules
+                .AsNoTracking()
+                .Where(r => r.IsActive)
+                .OrderBy(r => r.RuleName)
+                .Select(r => new ComplianceRuleDto
+                {
+                    ComplianceRuleId = r.ComplianceRuleId,
+                    RuleName = r.RuleName,
+                    AppliesTo = r.AppliesTo,
+                    IsMandatory = r.IsMandatory,
+                    ValidationRules = r.ValidationRules,
+                    IsActive = r.IsActive,
+                    Description = r.Description
+                })
                 .ToListAsync();
         }
 
@@ -1013,16 +1123,68 @@ namespace FourierIT_API.Services
                 ?? throw new Exception($"Status {statusId} not found");
 
             status.CompliantDocuments = status.DocumentChecks.Count(c => c.CheckStatus == "Compliant");
+            status.PendingReviewDocuments = status.DocumentChecks.Count(c => c.CheckStatus == "Pending");
             status.NonCompliantDocuments = status.DocumentChecks.Count(c => c.CheckStatus != "Compliant");
-            status.CompliancePercentage = status.TotalRequiredDocuments > 0
-                ? (status.CompliantDocuments * 100) / status.TotalRequiredDocuments
-                : 0;
+            status.ExpiredDocuments = status.DocumentChecks.Count(c => !c.IsExpiryValid);
+            status.NotCertifiedDocuments = status.DocumentChecks.Count(c => !c.IsCertified);
 
+            var user = await _userManager.FindByIdAsync(status.UserId);
+            if (user != null)
+            {
+                var requiredDocs = await GetRequiredDocumentsForUserAsync(user);
+                status.TotalRequiredDocuments = requiredDocs.Count(r => r.IsMandatory);
+            }
+            else
+            {
+                status.TotalRequiredDocuments = 0;
+            }
+
+            var missingDocs = await IdentifyMissingDocumentsAsync(status.UserId);
+            status.MissingDocuments = missingDocs.Count;
+            status.UploadedDocuments = await _context.Documents
+                .CountAsync(d => d.UserId == status.UserId && d.CurrentStatus != "Deleted");
+
+            status.CompliancePercentage = ComplianceEvaluationEngine.CalculateCompliancePercentage(
+                status.TotalRequiredDocuments,
+                status.CompliantDocuments,
+                status.MissingDocuments,
+                status.ExpiredDocuments,
+                status.NonCompliantDocuments,
+                status.PendingReviewDocuments);
+
+            status.ComplianceScore = await CalculateComplianceScoreAsync(status.UserId);
+            status.OverallRiskScore = await AssessRiskLevelAsync(status.UserId);
             status.OverallStatus = DetermineOverallStatus(status);
+            status.RiskLevel = DetermineRiskLevel(status);
+            status.LastChecked = DateTime.UtcNow;
             status.LastUpdated = DateTime.UtcNow;
 
             _context.ComplianceStatuses.Update(status);
             await _context.SaveChangesAsync();
+
+            return true;
+        }
+
+        public async Task<bool> ProcessExpiredDocumentComplianceAsync()
+        {
+            var expiredOwnerIds = await _context.Documents
+                .AsNoTracking()
+                .Where(d => d.CurrentStatus != "Deleted" && d.ExpiryDate <= DateTimeOffset.UtcNow)
+                .Select(d => d.UserId)
+                .Distinct()
+                .ToListAsync();
+
+            foreach (var userId in expiredOwnerIds)
+            {
+                try
+                {
+                    await CheckUserComplianceAsync(userId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to recalculate compliance for expired documents for user {UserId}", userId);
+                }
+            }
 
             return true;
         }
@@ -1073,19 +1235,13 @@ namespace FourierIT_API.Services
 
         private string DetermineOverallStatus(ComplianceStatus status)
         {
-            if (status.MissingDocuments > 0 && status.NonCompliantDocuments == status.TotalRequiredDocuments)
-                return "Non-Compliant";
-
-            if (status.ExpiredDocuments > 0)
-                return "Non-Compliant";
-
-            if (status.NonCompliantDocuments > 0)
-                return status.ExpiredDocuments > 0 ? "Non-Compliant" : "Partial";
-
-            if (status.PendingReviewDocuments > 0)
-                return "Pending";
-
-            return status.CompliantDocuments == status.TotalRequiredDocuments ? "Compliant" : "Partial";
+            return ComplianceEvaluationEngine.ResolveOverallStatus(
+                status.TotalRequiredDocuments,
+                status.MissingDocuments,
+                status.ExpiredDocuments,
+                status.NonCompliantDocuments,
+                status.PendingReviewDocuments,
+                status.CompliantDocuments);
         }
 
         private string DetermineRiskLevel(ComplianceStatus status)
@@ -1177,6 +1333,190 @@ namespace FourierIT_API.Services
             };
         }
 
+        private async Task PersistComplianceResultAsync(ComplianceStatus status)
+        {
+            var latestResult = await _context.ComplianceResults
+                .AsNoTracking()
+                .Where(cr => cr.ComplianceStatusId == status.ComplianceStatusId)
+                .OrderByDescending(cr => cr.CreatedAt)
+                .FirstOrDefaultAsync();
+
+            var result = new ComplianceResult
+            {
+                ComplianceStatusId = status.ComplianceStatusId,
+                Scope = status.DepartmentId.HasValue ? "Department" : "User",
+                TotalRequired = status.TotalRequiredDocuments,
+                MissingDocuments = status.MissingDocuments,
+                ExpiredDocuments = status.ExpiredDocuments,
+                RejectedDocuments = status.NonCompliantDocuments,
+                PendingVerification = status.PendingReviewDocuments,
+                ValidDocuments = status.CompliantDocuments,
+                DuplicateDocuments = 0,
+                CompliancePercentage = status.CompliancePercentage,
+                OverallStatus = status.OverallStatus,
+                Summary = $"{status.CompliantDocuments} valid, {status.MissingDocuments} missing, {status.ExpiredDocuments} expired, {status.PendingReviewDocuments} pending",
+                CreatedAt = DateTime.UtcNow
+            };
+
+            if (latestResult != null &&
+                latestResult.OverallStatus == result.OverallStatus &&
+                latestResult.CompliancePercentage == result.CompliancePercentage &&
+                latestResult.MissingDocuments == result.MissingDocuments &&
+                latestResult.ExpiredDocuments == result.ExpiredDocuments &&
+                latestResult.RejectedDocuments == result.RejectedDocuments &&
+                latestResult.ValidDocuments == result.ValidDocuments)
+            {
+                return;
+            }
+
+            _context.ComplianceResults.Add(result);
+            await _context.SaveChangesAsync();
+        }
+
+        private async Task RecordComplianceHistoryAsync(ComplianceStatus status, string previousStatus, string? previousRiskLevel, decimal? previousComplianceScore, string reason)
+        {
+            if (previousStatus == status.OverallStatus && previousRiskLevel == status.RiskLevel && previousComplianceScore == status.ComplianceScore)
+                return;
+
+            var historyEntry = new ComplianceHistory
+            {
+                ComplianceStatusId = status.ComplianceStatusId,
+                PreviousStatus = previousStatus,
+                NewStatus = status.OverallStatus,
+                PreviousRiskLevel = previousRiskLevel,
+                NewRiskLevel = status.RiskLevel,
+                PreviousComplianceScore = previousComplianceScore is null ? null : (int?)Math.Round(previousComplianceScore.Value),
+                NewComplianceScore = (int?)Math.Round(status.ComplianceScore),
+                ChangeReason = reason,
+                Details = $"Compliance recalculated with {status.CompliantDocuments} compliant documents and {status.MissingDocuments} missing documents.",
+                ChangedAt = DateTime.UtcNow,
+                ChangeSource = "System"
+            };
+
+            _context.ComplianceHistories.Add(historyEntry);
+            await _context.SaveChangesAsync();
+        }
+
+        private async Task SeedDefaultComplianceRulesAsync()
+        {
+            var ownerRuleName = "Document Owner Minimum KYC";
+            var departmentRuleName = "Department Compliance Checklist";
+
+            var existingRules = await _context.ComplianceRules
+                .AsNoTracking()
+                .Where(r => r.RuleName == ownerRuleName || r.RuleName == departmentRuleName)
+                .ToListAsync();
+
+            var ownerRule = existingRules.FirstOrDefault(r => r.RuleName == ownerRuleName);
+            var departmentRule = existingRules.FirstOrDefault(r => r.RuleName == departmentRuleName);
+
+            if (ownerRule == null)
+            {
+                ownerRule = new ComplianceRule
+                {
+                    RuleName = ownerRuleName,
+                    AppliesTo = "DocumentOwner",
+                    IsMandatory = true,
+                    ValidationRules = "Require identity, address, tax number and bank confirmation",
+                    Description = "Required documents for document owners",
+                    IsActive = true
+                };
+                _context.ComplianceRules.Add(ownerRule);
+            }
+
+            if (departmentRule == null)
+            {
+                departmentRule = new ComplianceRule
+                {
+                    RuleName = departmentRuleName,
+                    AppliesTo = "Department",
+                    IsMandatory = true,
+                    ValidationRules = "Require registration, tax clearance, VAT certificate and approval documents",
+                    Description = "Required documents for departments",
+                    IsActive = true
+                };
+                _context.ComplianceRules.Add(departmentRule);
+            }
+
+            if (_context.ChangeTracker.HasChanges())
+                await _context.SaveChangesAsync();
+
+            var requirementChecks = new List<ComplianceRequirement>();
+            if (!await _context.ComplianceRequirements.AnyAsync(r => r.ComplianceRuleId == ownerRule.ComplianceRuleId && r.RequirementName == "Identity document"))
+            {
+                requirementChecks.Add(new ComplianceRequirement
+                {
+                    ComplianceRuleId = ownerRule.ComplianceRuleId,
+                    RequirementName = "Identity document",
+                    Description = "Valid photo ID is required",
+                    IsMandatory = true
+                });
+            }
+
+            if (!await _context.ComplianceRequirements.AnyAsync(r => r.ComplianceRuleId == ownerRule.ComplianceRuleId && r.RequirementName == "Proof of address"))
+            {
+                requirementChecks.Add(new ComplianceRequirement
+                {
+                    ComplianceRuleId = ownerRule.ComplianceRuleId,
+                    RequirementName = "Proof of address",
+                    Description = "Recent proof of address is required",
+                    IsMandatory = true
+                });
+            }
+
+            if (!await _context.ComplianceRequirements.AnyAsync(r => r.ComplianceRuleId == departmentRule.ComplianceRuleId && r.RequirementName == "Department registration"))
+            {
+                requirementChecks.Add(new ComplianceRequirement
+                {
+                    ComplianceRuleId = departmentRule.ComplianceRuleId,
+                    RequirementName = "Department registration",
+                    Description = "Department registration documents are required",
+                    IsMandatory = true
+                });
+            }
+
+            if (!await _context.ComplianceRequirements.AnyAsync(r => r.ComplianceRuleId == departmentRule.ComplianceRuleId && r.RequirementName == "Tax clearance"))
+            {
+                requirementChecks.Add(new ComplianceRequirement
+                {
+                    ComplianceRuleId = departmentRule.ComplianceRuleId,
+                    RequirementName = "Tax clearance",
+                    Description = "Tax clearance is required",
+                    IsMandatory = true
+                });
+            }
+
+            var complianceChecks = new List<ComplianceCheck>();
+            if (!await _context.ComplianceChecks.AnyAsync(c => c.ComplianceRuleId == ownerRule.ComplianceRuleId && c.Notes == "Identity document verification pending"))
+            {
+                complianceChecks.Add(new ComplianceCheck
+                {
+                    ComplianceRuleId = ownerRule.ComplianceRuleId,
+                    CheckStatus = "Pending",
+                    Notes = "Identity document verification pending"
+                });
+            }
+
+            if (!await _context.ComplianceChecks.AnyAsync(c => c.ComplianceRuleId == departmentRule.ComplianceRuleId && c.Notes == "Department compliance verification pending"))
+            {
+                complianceChecks.Add(new ComplianceCheck
+                {
+                    ComplianceRuleId = departmentRule.ComplianceRuleId,
+                    CheckStatus = "Pending",
+                    Notes = "Department compliance verification pending"
+                });
+            }
+
+            if (requirementChecks.Any())
+                _context.ComplianceRequirements.AddRange(requirementChecks);
+
+            if (complianceChecks.Any())
+                _context.ComplianceChecks.AddRange(complianceChecks);
+
+            if (_context.ChangeTracker.HasChanges())
+                await _context.SaveChangesAsync();
+        }
+
         private async Task GenerateAlertsAsync(ComplianceStatus status)
         {
             var existingAlerts = await _context.ComplianceAlerts
@@ -1197,6 +1537,27 @@ namespace FourierIT_API.Services
                         UserId = status.UserId,
                         DueDate = DateTime.UtcNow.AddDays(3),
                         RequiredAction = "Renew expired documents",
+                        ActionRequiredFromUser = true
+                    };
+
+                    await CreateAlertAsync(alert);
+                }
+            }
+
+            var expiringSoonCount = status.DocumentChecks.Count(dc => dc.IsExpiryValid && dc.DaysUntilExpiry.HasValue && dc.DaysUntilExpiry.Value <= 30);
+            if (expiringSoonCount > 0)
+            {
+                if (!existingAlerts.Any(a => a.AlertType == "ExpiringSoon"))
+                {
+                    var alert = new ComplianceAlert
+                    {
+                        ComplianceStatusId = status.ComplianceStatusId,
+                        AlertType = "ExpiringSoon",
+                        Severity = "High",
+                        AlertMessage = $"{expiringSoonCount} document(s) expire soon",
+                        UserId = status.UserId,
+                        DueDate = DateTime.UtcNow.AddDays(7),
+                        RequiredAction = "Renew expiring documents soon",
                         ActionRequiredFromUser = true
                     };
 
@@ -1249,12 +1610,25 @@ namespace FourierIT_API.Services
 
         private async Task CreateAuditLogAsync(int complianceStatusId, string actionType, string description)
         {
+            var performingUserId = (await _context.ComplianceStatuses
+                .AsNoTracking()
+                .FirstOrDefaultAsync(cs => cs.ComplianceStatusId == complianceStatusId))?.UserId;
+
+            if (string.IsNullOrWhiteSpace(performingUserId))
+            {
+                var admin = await _userManager.FindByNameAsync("superadmin");
+                if (admin != null)
+                    performingUserId = admin.Id;
+                else
+                    performingUserId = (await _userManager.Users.AsNoTracking().FirstOrDefaultAsync())?.Id;
+            }
+
             var log = new ComplianceAuditLog
             {
                 ComplianceStatusId = complianceStatusId,
                 ActionType = actionType,
                 ActionDescription = description,
-                PerformedBy = "System",
+                PerformedBy = performingUserId ?? string.Empty,
                 PerformedAt = DateTime.UtcNow,
                 IsSuccessful = true
             };
