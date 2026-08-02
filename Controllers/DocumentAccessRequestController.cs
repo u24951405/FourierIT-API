@@ -875,12 +875,24 @@ namespace FourierIT_API.Controllers
             if (currentUser == null)
                 return Unauthorized();
 
-            var requests = await _context.InstitutionEnquiryRequests
+            var isSuperAdmin = await _userManager.IsInRoleAsync(currentUser, "Super Admin");
+
+            var requestsQuery = _context.InstitutionEnquiryRequests
                 .AsNoTracking()
                 .Include(r => r.Institution)
+                .Include(r => r.TargetUser)
+                    .ThenInclude(u => u.Profile)
+                .Include(r => r.TargetDepartment)
                 .Include(r => r.RequestedDocumentTypes)
                     .ThenInclude(rdt => rdt.DocumentType)
-                .Where(r => r.TargetUserId == currentUser.Id && r.Status == "Pending")
+                .Where(r => r.Status == "Pending");
+
+            if (!isSuperAdmin)
+            {
+                requestsQuery = requestsQuery.Where(r => r.TargetUserId == currentUser.Id);
+            }
+
+            var requests = await requestsQuery
                 .OrderByDescending(r => r.RequestDate)
                 .Select(r => new
                 {
@@ -888,6 +900,14 @@ namespace FourierIT_API.Controllers
                     r.InstitutionId,
                     InstitutionName = r.Institution.InstitutionName,
                     r.TargetUserId,
+                    SenderName = r.Institution.InstitutionName,
+                    SenderType = "Institution",
+                    RecipientName = r.RequestType == "Department"
+                        ? (r.TargetDepartment != null ? r.TargetDepartment.DepartmentName : "-")
+                        : (!string.IsNullOrWhiteSpace(r.TargetUser!.Profile!.FirstName) || !string.IsNullOrWhiteSpace(r.TargetUser.Profile.LastName)
+                            ? (r.TargetUser.Profile.FirstName + " " + r.TargetUser.Profile.LastName).Trim()
+                            : (string.IsNullOrWhiteSpace(r.TargetUser.UserName) ? r.TargetUser.Id : r.TargetUser.UserName)),
+                    RecipientType = r.RequestType == "Department" ? "Department" : "Individual",
                     r.Status,
                     r.PurposeNote,
                     r.RequestDate,
@@ -915,25 +935,35 @@ namespace FourierIT_API.Controllers
             if (currentUser == null)
                 return Unauthorized();
 
-            // Find departments where current user is admin
+            var isSuperAdmin = await _userManager.IsInRoleAsync(currentUser, "Super Admin");
+            var isDepartmentAdmin = await _userManager.IsInRoleAsync(currentUser, "Department Admin");
+
+            if (!isSuperAdmin && !isDepartmentAdmin)
+                return Forbid();
+
             var userDepartments = await _context.Users
                 .Where(u => u.Id == currentUser.Id)
                 .Include(u => u.Department)
                 .Select(u => u.Department!.DepartmentId)
                 .ToListAsync();
 
-            if (!userDepartments.Any())
-                return Ok(new object[] { }); // No departments to manage
-
-            var requests = await _context.InstitutionEnquiryRequests
+            var requestsQuery = _context.InstitutionEnquiryRequests
                 .AsNoTracking()
                 .Include(r => r.Institution)
                 .Include(r => r.TargetDepartment)
                 .Include(r => r.RequestedDocumentTypes)
                     .ThenInclude(rdt => rdt.DocumentType)
-                .Where(r => r.RequestType == "Department" && 
-                           r.Status == "Department_Pending" &&
-                           userDepartments.Contains(r.TargetDepartmentId!.Value))
+                .Where(r => r.RequestType == "Department" && r.Status == "Department_Pending");
+
+            if (!isSuperAdmin)
+            {
+                if (!userDepartments.Any())
+                    return Ok(new object[] { }); // No departments to manage
+
+                requestsQuery = requestsQuery.Where(r => userDepartments.Contains(r.TargetDepartmentId!.Value));
+            }
+
+            var requests = await requestsQuery
                 .OrderByDescending(r => r.RequestDate)
                 .Select(r => new
                 {
@@ -942,6 +972,10 @@ namespace FourierIT_API.Controllers
                     InstitutionName = r.Institution.InstitutionName,
                     r.TargetDepartmentId,
                     DepartmentName = r.TargetDepartment!.DepartmentName,
+                    SenderName = r.Institution.InstitutionName,
+                    SenderType = "Institution",
+                    RecipientName = r.TargetDepartment != null ? r.TargetDepartment.DepartmentName : "-",
+                    RecipientType = "Department",
                     r.Status,
                     r.PurposeNote,
                     r.RequestDate,

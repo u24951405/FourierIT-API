@@ -12,6 +12,7 @@ using Microsoft.EntityFrameworkCore.Design;
 using Microsoft.EntityFrameworkCore.SqlServer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -39,12 +40,15 @@ builder.Services.AddCors(options =>
     });
 });
 
-builder.Services.AddDbContext<AppDbContext>(options =>
+var maxRetryCount = builder.Environment.IsDevelopment() ? 2 : 5;
+var maxRetryDelaySeconds = builder.Environment.IsDevelopment() ? 5 : 30;
+
+builder.Services.AddDbContextPool<AppDbContext>(options =>
     options.UseSqlServer(
         builder.Configuration.GetConnectionString("DefaultConnection"),
         sqlOptions => sqlOptions.EnableRetryOnFailure(
-            maxRetryCount: 5,
-            maxRetryDelay: TimeSpan.FromSeconds(30),
+            maxRetryCount: maxRetryCount,
+            maxRetryDelay: TimeSpan.FromSeconds(maxRetryDelaySeconds),
             errorNumbersToAdd: null)
     ));
 
@@ -146,6 +150,12 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("SuperAdminOnly", policy =>
+        policy.RequireClaim("superadmin", "true"));
+});
+
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<DepartmentRequestValidationService>();
 // Register SuperAdmin authorization handler so the seeded Super Admin user bypasses role-based checks
@@ -166,19 +176,35 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
-// Note: Automatic migration and seeding for development.
-using (var scope = app.Services.CreateScope())
+// Startup database initialization is intentionally configurable to avoid
+// expensive startup delays on every API run.
+var runDbInit = builder.Configuration.GetValue("StartupTasks:RunDatabaseInitialization", builder.Environment.IsDevelopment());
+var runDevSeed = builder.Configuration.GetValue("StartupTasks:RunDevSeed", builder.Environment.IsDevelopment());
+
+if (runDbInit)
 {
+    using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.SetCommandTimeout(300);
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    var startupTimer = Stopwatch.StartNew();
+
+    db.Database.SetCommandTimeout(120);
 
     try
     {
-        await db.Database.MigrateAsync();
+        var pending = await db.Database.GetPendingMigrationsAsync();
+        if (pending.Any())
+        {
+            logger.LogInformation("Applying {Count} pending migrations...", pending.Count());
+            await db.Database.MigrateAsync();
+        }
+        else
+        {
+            logger.LogInformation("No pending EF migrations.");
+        }
     }
     catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number == 1801)
     {
-        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
         logger.LogWarning(ex, "Database '{Database}' already exists. Skipping creation.", db.Database.GetDbConnection().Database);
     }
 
@@ -208,12 +234,17 @@ using (var scope = app.Services.CreateScope())
     }
     catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number == -2)
     {
-        var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-        logger.LogWarning(ex, "Database index/column migration timed out after {Timeout}s. The app will continue, but database tuning may be required.", 300);
+        logger.LogWarning(ex, "Database index/column migration timed out after {Timeout}s. The app will continue, but database tuning may be required.", 120);
     }
 
-    await DevLookupSeed.EnsureBranchesExistAsync(db);
-    await DevLookupSeed.EnsureDepartmentsAndRequirementsAsync(db);
+    if (runDevSeed)
+    {
+        await DevLookupSeed.EnsureBranchesExistAsync(db);
+        await DevLookupSeed.EnsureDepartmentsAndRequirementsAsync(db);
+    }
+
+    startupTimer.Stop();
+    logger.LogInformation("Startup database initialization completed in {ElapsedMs} ms.", startupTimer.ElapsedMilliseconds);
 }
 
 // Ensure the seeded Super Admin user exists on startup (best-effort).

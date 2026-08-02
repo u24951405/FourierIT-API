@@ -61,16 +61,9 @@ namespace FourierIT_API.Controllers
                 if (department == null)
                     return NotFound(new { error = "Assigned department not found." });
 
-                var companyRequiredDocumentTypeIds = await _context.RequiredDocuments
-                    .Where(rd => rd.EntityTypeId == 3)
-                    .Select(rd => rd.DocumentTypeId)
-                    .ToListAsync();
-
-                var departmentComplianceDocumentTypeIds = new[] { 20, 21, 22 };
-
                 var departmentRequiredDocs = department.DepartmentDocumentTypes
-                    .Where(ddt => companyRequiredDocumentTypeIds.Contains(ddt.DocumentTypeId)
-                        || departmentComplianceDocumentTypeIds.Contains(ddt.DocumentTypeId))
+                    .OrderBy(ddt => ddt.IsMandatory ? 0 : 1)
+                    .ThenBy(ddt => ddt.DocumentType.TypeName)
                     .ToList();
 
                 var departmentUserDocs = await documentQuery
@@ -252,8 +245,20 @@ namespace FourierIT_API.Controllers
             var user = await _userManager.GetUserAsync(User);
             if (user == null) return Unauthorized();
 
-            var docs = await _documentRepository.GetUserDocumentAsync(user.Id);
-            return Ok(docs.Select(ToResponseDto));
+            var isSuperAdmin = await _userManager.IsInRoleAsync(user, "Super Admin");
+            if (isSuperAdmin)
+            {
+                var superAdminDocs = await _context.Documents
+                    .Include(d => d.DocumentType)
+                    .Where(d => d.CurrentStatus != "Deleted")
+                    .OrderByDescending(d => d.UploadedDate)
+                    .ToListAsync();
+
+                return Ok(superAdminDocs.Select(ToResponseDto));
+            }
+
+            var userDocs = await _documentRepository.GetUserDocumentAsync(user.Id);
+            return Ok(userDocs.Select(ToResponseDto));
         }
 
         [HttpGet("{id}")]
@@ -453,13 +458,7 @@ namespace FourierIT_API.Controllers
                 if (department == null)
                     return NotFound(new { error = "Assigned department not found." });
 
-                var companyRequiredDocumentTypeIds = await _context.RequiredDocuments
-                    .Where(rd => rd.EntityTypeId == 3)
-                    .Select(rd => rd.DocumentTypeId)
-                    .ToListAsync();
-
                 var departmentDocumentTypes = department.DepartmentDocumentTypes
-                    .Where(ddt => companyRequiredDocumentTypeIds.Contains(ddt.DocumentTypeId))
                     .OrderBy(ddt => ddt.IsMandatory ? 0 : 1)
                     .ThenBy(ddt => ddt.DocumentType.TypeName)
                     .Select(ddt => new

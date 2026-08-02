@@ -89,10 +89,7 @@ namespace FourierIT_API.Data
             foreach (var department in departments)
             {
                 var exists = await db.Departments.AnyAsync(d => d.DepartmentName == department.DepartmentName, ct);
-                if (!exists)
-                {
-                    db.Departments.Add(department);
-                }
+                if (!exists) db.Departments.Add(department);
             }
 
             await db.SaveChangesAsync(ct);
@@ -101,6 +98,17 @@ namespace FourierIT_API.Data
             var allDocumentTypeIds = documentTypes.Select(dt => dt.DocumentTypeId).ToHashSet();
 
             var departmentLookup = await db.Departments.AsNoTracking().ToListAsync(ct);
+            var departmentIds = departmentLookup.Select(d => d.DepartmentId).ToList();
+            var existingPairs = await db.DepartmentDocumentTypes
+                .AsNoTracking()
+                .Where(ddt => departmentIds.Contains(ddt.DepartmentId))
+                .Select(ddt => new { ddt.DepartmentId, ddt.DocumentTypeId })
+                .ToListAsync(ct);
+
+            var existingPairSet = existingPairs
+                .Select(p => $"{p.DepartmentId}:{p.DocumentTypeId}")
+                .ToHashSet();
+
             var requirements = new List<DepartmentDocumentType>();
 
             foreach (var department in departmentLookup)
@@ -115,10 +123,14 @@ namespace FourierIT_API.Data
                     _ => Array.Empty<int>()
                 };
 
-                foreach (var docTypeId in requiredIds.Where(allDocumentTypeIds.Contains))
+                var departmentDocTypeIds = requiredIds
+                    .Where(docTypeId => docTypeId >= 11 && docTypeId <= 19)
+                    .Where(allDocumentTypeIds.Contains);
+
+                foreach (var docTypeId in departmentDocTypeIds)
                 {
-                    var exists = await db.DepartmentDocumentTypes.AnyAsync(ddt => ddt.DepartmentId == department.DepartmentId && ddt.DocumentTypeId == docTypeId, ct);
-                    if (!exists)
+                    var key = $"{department.DepartmentId}:{docTypeId}";
+                    if (!existingPairSet.Contains(key))
                     {
                         requirements.Add(new DepartmentDocumentType
                         {
@@ -127,6 +139,7 @@ namespace FourierIT_API.Data
                             IsMandatory = true,
                             CreatedAt = DateTimeOffset.UtcNow
                         });
+                        existingPairSet.Add(key);
                     }
                 }
             }
@@ -140,31 +153,51 @@ namespace FourierIT_API.Data
 
         private static async Task EnsureFinancialInstitutionTypesAsync(AppDbContext db, CancellationToken ct)
         {
+            var existingNames = await db.InstitutionTypes
+                .AsNoTracking()
+                .Select(t => t.InstitutionTypeName)
+                .ToListAsync(ct);
+
+            var existingSet = existingNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var typesToAdd = new List<InstitutionType>();
+
             foreach (var name in FinancialInstitutionTypeNames)
             {
-                var exists = await db.InstitutionTypes.AnyAsync(t => t.InstitutionTypeName == name, ct);
-                if (!exists)
-                    db.InstitutionTypes.Add(new InstitutionType { InstitutionTypeName = name });
+                if (!existingSet.Contains(name))
+                {
+                    typesToAdd.Add(new InstitutionType { InstitutionTypeName = name });
+                    existingSet.Add(name);
+                }
             }
 
-            await db.SaveChangesAsync(ct);
+            if (typesToAdd.Count > 0)
+            {
+                db.InstitutionTypes.AddRange(typesToAdd);
+                await db.SaveChangesAsync(ct);
+            }
         }
 
         private static async Task EnsureSampleInstitutionsAsync(AppDbContext db, CancellationToken ct)
         {
+            var existingInstitutionNames = await db.Institutions
+                .AsNoTracking()
+                .Select(i => i.InstitutionName)
+                .ToListAsync(ct);
+
+            var existingInstitutionSet = existingInstitutionNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var typeMap = await db.InstitutionTypes
+                .AsNoTracking()
+                .ToDictionaryAsync(t => t.InstitutionTypeName, t => t.InstitutionTypeId, ct);
+
             var institutionsToAdd = new List<Institution>();
 
             foreach (var (name, domain, regNumber, typeName) in SampleInstitutions)
             {
-                if (await db.Institutions.AnyAsync(i => i.InstitutionName == name, ct))
+                if (existingInstitutionSet.Contains(name))
                     continue;
 
-                var institutionType = await db.InstitutionTypes
-                    .Where(t => t.InstitutionTypeName == typeName)
-                    .Select(t => new { t.InstitutionTypeId })
-                    .FirstOrDefaultAsync(ct);
-
-                if (institutionType == null)
+                if (!typeMap.TryGetValue(typeName, out var institutionTypeId))
                     continue;
 
                 institutionsToAdd.Add(new Institution
@@ -172,8 +205,9 @@ namespace FourierIT_API.Data
                     InstitutionName = name,
                     VerifiedDomain = domain,
                     RegNumber = regNumber,
-                    TypeId = institutionType.InstitutionTypeId
+                    TypeId = institutionTypeId
                 });
+                existingInstitutionSet.Add(name);
             }
 
             if (institutionsToAdd.Count > 0)
@@ -229,12 +263,26 @@ namespace FourierIT_API.Data
                 ("Centurion", "Centurion"),
             };
 
+            var existingBranchNames = await db.Branches
+                .AsNoTracking()
+                .Select(b => b.BranchName)
+                .ToListAsync(ct);
+
+            var existingSet = existingBranchNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var toAdd = new List<Branch>();
+
             foreach (var (name, city) in defs)
             {
-                if (await db.Branches.AnyAsync(b => b.BranchName == name, ct))
-                    continue;
+                if (!existingSet.Contains(name))
+                {
+                    toAdd.Add(new Branch { BranchName = name, City = city, InstitutionId = institutionId });
+                    existingSet.Add(name);
+                }
+            }
 
-                db.Branches.Add(new Branch { BranchName = name, City = city, InstitutionId = institutionId });
+            if (toAdd.Count > 0)
+            {
+                db.Branches.AddRange(toAdd);
                 await db.SaveChangesAsync(ct);
             }
         }
