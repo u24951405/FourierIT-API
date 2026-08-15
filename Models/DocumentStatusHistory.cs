@@ -9,8 +9,8 @@ namespace FourierIT_API.Models
         public int StatusHistoryId { get; set; }
 
         [ForeignKey("Document")]
-        public int DocumentId { get; set; }
-        public Document Document { get; set; } = null!;
+        public int? DocumentId { get; set; }
+        public Document? Document { get; set; }
 
         [Required]
         [StringLength(20)]

@@ -24,14 +24,73 @@ namespace FourierIT_API.Repositories
 
         public async Task<Document?> DeleteDocumentAsync(int id)
         {
-            var doc = await _context.Documents.FirstOrDefaultAsync(d => d.DocumentId == id);
-            if (doc == null) return null;
-            _context.Documents.Remove(doc);
-            await _context.SaveChangesAsync();
-            return doc;
+            var strategy = _context.Database.CreateExecutionStrategy();
+
+            return await strategy.ExecuteAsync(async () =>
+            {
+                await using var transaction = await _context.Database.BeginTransactionAsync();
+
+                var doc = await _context.Documents.FirstOrDefaultAsync(d => d.DocumentId == id);
+                if (doc == null) return null;
+
+                var documentBlobs = await _context.DocumentBlobs
+                    .Include(db => db.BlobHistories)
+                    .Where(db => db.DocumentId == id)
+                    .ToListAsync();
+
+                var certificationDetails = await _context.CertificationDetails
+                    .Where(cd => cd.DocumentId == id)
+                    .ToListAsync();
+
+                var accessLists = await _context.AccessLists
+                    .Where(al => al.DocumentId == id)
+                    .ToListAsync();
+
+                var statusHistories = await _context.DocumentStatusHistories
+                    .Where(dsh => dsh.DocumentId == id)
+                    .ToListAsync();
+
+                var complianceChecks = await _context.DocumentComplianceChecks
+                    .Where(dc => dc.DocumentId == id)
+                    .ToListAsync();
+
+                var accessLogs = await _context.DocumentAccessLogs
+                    .Where(dal => dal.DocumentId == id)
+                    .ToListAsync();
+
+                var complianceAlerts = await _context.ComplianceAlerts
+                    .Where(ca => ca.DocumentId == id)
+                    .ToListAsync();
+
+                var complianceAuditLogs = await _context.ComplianceAuditLogs
+                    .Where(cal => cal.DocumentId == id)
+                    .ToListAsync();
+
+                foreach (var history in statusHistories)
+                    history.DocumentId = null;
+
+                foreach (var check in complianceChecks)
+                    check.DocumentId = null;
+
+                _context.BlobHistories.RemoveRange(documentBlobs.SelectMany(db => db.BlobHistories));
+                _context.DocumentBlobs.RemoveRange(documentBlobs);
+                _context.CertificationDetails.RemoveRange(certificationDetails);
+                _context.AccessLists.RemoveRange(accessLists);
+                _context.DocumentAccessLogs.RemoveRange(accessLogs);
+                _context.ComplianceAlerts.RemoveRange(complianceAlerts);
+                _context.ComplianceAuditLogs.RemoveRange(complianceAuditLogs);
+
+                await _context.SaveChangesAsync();
+
+                _context.Documents.Remove(doc);
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return doc;
+            });
         }
 
-        public async Task<Document> GetDocumentByIdAsync(int id)
+        public async Task<Document?> GetDocumentByIdAsync(int id)
         {
             return await _context.Documents
             .Include(d => d.SharedWith)

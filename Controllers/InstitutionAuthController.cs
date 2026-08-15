@@ -39,30 +39,22 @@ namespace FourierIT_API.Controllers
             if (institution == null)
                 return NotFound(new { error = "Institution not found." });
 
-            var existingInvitation = await _context.InstitutionInvitations
-                .Where(ii => ii.InstitutionId == dto.InstitutionId && !ii.IsRevoked)
-                .OrderByDescending(ii => ii.CreatedAt)
-                .FirstOrDefaultAsync();
-
-            if (existingInvitation != null)
-            {
-                existingInvitation.IsRevoked = true;
-            }
+            // Do not revoke prior invitations. Access links are permanent and any previously issued token
+            // should remain valid until manually revoked or a new token is explicitly requested.
 
             var tokenString = GenerateTokenString();
-            var otpCode = GenerateOtpCode();
             var now = DateTimeOffset.UtcNow;
             var invitation = new InstitutionInvitation
             {
                 InstitutionId = dto.InstitutionId,
                 Email = dto.Email.Trim(),
                 TokenString = tokenString,
-                OtpCodeHash = HashValue(otpCode),
-                TokenExpiryTimeStamp = now.AddHours(48),
-                OtpExpiryTimeStamp = now.AddMinutes(10),
+                OtpCodeHash = string.Empty,
+                TokenExpiryTimeStamp = DateTimeOffset.MaxValue,
+                OtpExpiryTimeStamp = now,
                 IsRevoked = false,
                 IsUsed = false,
-                OtpSendCount = 1,
+                OtpSendCount = 0,
                 CreatedAt = now
             };
 
@@ -75,8 +67,8 @@ namespace FourierIT_API.Controllers
             try
             {
                 await _emailService.SendInvitationEmailAsync(invitation.Email, institution.InstitutionName, accessLink, invitation.TokenExpiryTimeStamp);
-                _logger.LogInformation("Institution invitation email sent for institution {InstitutionId}. Email={Email}, token={Token}, otp={Otp}",
-                    dto.InstitutionId, invitation.Email, supportedToken, otpCode);
+                _logger.LogInformation("Institution invitation email sent for institution {InstitutionId}. Email={Email}, token={Token}",
+                    dto.InstitutionId, invitation.Email, supportedToken);
             }
             catch (Exception ex)
             {
@@ -103,15 +95,14 @@ namespace FourierIT_API.Controllers
                 .Include(ii => ii.Institution)
                 .FirstOrDefaultAsync(ii => ii.TokenString == dto.AccessToken);
 
-            if (invitation == null || invitation.IsRevoked || invitation.IsUsed || invitation.TokenExpiryTimeStamp <= DateTimeOffset.UtcNow)
+            if (invitation == null)
             {
-                if (invitation != null && !invitation.IsRevoked && invitation.TokenExpiryTimeStamp <= DateTimeOffset.UtcNow)
-                {
-                    invitation.IsRevoked = true;
-                    await _context.SaveChangesAsync();
-                }
-
                 return Ok(new TokenValidationResponseDto { Valid = false });
+            }
+
+            if (invitation.IsUsed)
+            {
+                return BadRequest(new { error = "This invitation has already been used." });
             }
 
             var otpCode = GenerateOtpCode();
@@ -163,9 +154,14 @@ namespace FourierIT_API.Controllers
                 var invitation = await _context.InstitutionInvitations
                     .FirstOrDefaultAsync(ii => ii.TokenString == dto.AccessToken && ii.InstitutionId == institutionId);
 
-                if (invitation == null || invitation.IsRevoked || invitation.IsUsed || invitation.TokenExpiryTimeStamp <= DateTimeOffset.UtcNow)
+                if (invitation == null)
                 {
-                    return BadRequest(new { error = "Invalid or expired invitation link." });
+                    return BadRequest(new { error = "Invalid invitation link." });
+                }
+
+                if (invitation.IsUsed)
+                {
+                    return BadRequest(new { error = "This invitation has already been used." });
                 }
 
                 if (invitation.OtpExpiryTimeStamp <= DateTimeOffset.UtcNow)
@@ -179,7 +175,8 @@ namespace FourierIT_API.Controllers
                 }
 
                 invitation.IsUsed = true;
-                invitation.IsRevoked = true;
+                invitation.OtpCodeHash = string.Empty;
+                invitation.OtpExpiryTimeStamp = DateTimeOffset.UtcNow;
 
                 var sessionToken = GenerateSessionToken();
                 var expiresAt = DateTimeOffset.UtcNow.AddHours(8);
@@ -226,9 +223,14 @@ namespace FourierIT_API.Controllers
             var invitation = await _context.InstitutionInvitations
                 .FirstOrDefaultAsync(ii => ii.TokenString == dto.AccessToken && ii.InstitutionId == institutionId);
 
-            if (invitation == null || invitation.IsRevoked || invitation.IsUsed || invitation.TokenExpiryTimeStamp <= DateTimeOffset.UtcNow)
+            if (invitation == null)
             {
-                return BadRequest(new { error = "Invalid or expired invitation link." });
+                return BadRequest(new { error = "Invalid invitation link." });
+            }
+
+            if (invitation.IsUsed)
+            {
+                return BadRequest(new { error = "This invitation has already been used." });
             }
 
             var otpCode = GenerateOtpCode();
@@ -263,37 +265,46 @@ namespace FourierIT_API.Controllers
                 return BadRequest(new { error = "Invalid institution identifier." });
 
             var existingInvitation = await _context.InstitutionInvitations
-                .Where(ii => ii.InstitutionId == institutionId && !ii.IsRevoked)
+                .Include(ii => ii.Institution)
+                .Where(ii => ii.InstitutionId == institutionId)
                 .OrderByDescending(ii => ii.CreatedAt)
                 .FirstOrDefaultAsync();
 
             if (existingInvitation == null)
                 return BadRequest(new { error = "No active invitation found for this institution." });
 
-            existingInvitation.IsRevoked = true;
-
+            // Keep existing invitations valid. New tokens are additional permanent invite links.
             var tokenString = GenerateTokenString();
-            var otpCode = GenerateOtpCode();
             var now = DateTimeOffset.UtcNow;
             var newInvitation = new InstitutionInvitation
             {
                 InstitutionId = existingInvitation.InstitutionId,
                 Email = existingInvitation.Email,
                 TokenString = tokenString,
-                OtpCodeHash = HashValue(otpCode),
-                TokenExpiryTimeStamp = now.AddHours(48),
-                OtpExpiryTimeStamp = now.AddMinutes(10),
+                OtpCodeHash = string.Empty,
+                TokenExpiryTimeStamp = DateTimeOffset.MaxValue,
+                OtpExpiryTimeStamp = now,
                 IsRevoked = false,
                 IsUsed = false,
-                OtpSendCount = 1,
+                OtpSendCount = 0,
                 CreatedAt = now
             };
 
             _context.InstitutionInvitations.Add(newInvitation);
             await _context.SaveChangesAsync();
 
-            _logger.LogInformation("New institution invitation token created for institution {InstitutionId}. Email={Email}, token={Token}, otp={Otp}",
-                existingInvitation.InstitutionId, existingInvitation.Email, tokenString, otpCode);
+            var accessLink = BuildAccessLink(tokenString);
+            try
+            {
+                await _emailService.SendInvitationEmailAsync(newInvitation.Email, existingInvitation.Institution?.InstitutionName ?? string.Empty, accessLink, newInvitation.TokenExpiryTimeStamp);
+                _logger.LogInformation("New institution invitation email sent for institution {InstitutionId}. Email={Email}, token={Token}",
+                    existingInvitation.InstitutionId, newInvitation.Email, tokenString);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to send new institution invitation email for institution {InstitutionId} to {Email}.", existingInvitation.InstitutionId, newInvitation.Email);
+                return StatusCode(500, new { error = "New invitation created but email delivery failed. Please verify SMTP configuration and recipient email." });
+            }
 
             return Ok(new { AccessToken = tokenString });
         }

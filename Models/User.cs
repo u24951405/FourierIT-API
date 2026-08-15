@@ -1,5 +1,4 @@
 ﻿using System.ComponentModel.DataAnnotations;
-using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.AspNetCore.Identity;
 
@@ -53,6 +52,10 @@ namespace FourierIT_API.Models
 
         [MaxLength(100)]
         public string EntityIdentificationNumber { get; set; } = string.Empty;
+
+        public bool EmailVerified { get; set; } = false;
+        public string? EmailVerificationCodeHash { get; set; }
+        public DateTimeOffset? EmailVerificationExpiry { get; set; }
 
         // Many-to-one relationship with Department (a user belongs to a department)
         public int? DepartmentId { get; set; }

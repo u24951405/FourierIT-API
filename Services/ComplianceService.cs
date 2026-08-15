@@ -255,8 +255,8 @@ namespace FourierIT_API.Services
                 .Select(dc => new DocumentComplianceIssueDto
                 {
                     DocumentId = dc.DocumentId,
-                    DocumentName = dc.Document.FileName,
-                    DocumentType = dc.Document.DocumentType.TypeName,
+                    DocumentName = dc.Document?.FileName ?? "Deleted Document",
+                    DocumentType = dc.Document?.DocumentType?.TypeName ?? "Deleted",
                     Status = dc.CheckStatus,
                     Issue = dc.NonComplianceReason,
                     QualityScore = dc.QualityScore,
@@ -613,8 +613,8 @@ namespace FourierIT_API.Services
                 .Select(dc => new DocumentComplianceIssueDto
                 {
                     DocumentId = dc.DocumentId,
-                    DocumentName = dc.Document.FileName,
-                    DocumentType = dc.Document.DocumentType.TypeName,
+                    DocumentName = dc.Document != null ? dc.Document.FileName : "Deleted Document",
+                    DocumentType = dc.Document != null && dc.Document.DocumentType != null ? dc.Document.DocumentType.TypeName : "Deleted",
                     Status = dc.CheckStatus,
                     Issue = dc.NonComplianceReason,
                     QualityScore = dc.QualityScore,

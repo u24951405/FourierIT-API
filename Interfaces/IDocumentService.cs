@@ -6,7 +6,5 @@ namespace FourierIT_API.Interfaces
     {
         Task<Document> UploadDocumentAsync(string userId, string fileName, byte[] fileData, int documentTypeId);
         Task<byte[]> DownloadDocumentAsync(int documentId, string userId);
-        Task<bool> ShareDocumentAsync(int documentId, string grantToUserId, AccessLevel accessLevel, string ownerUserId);
-        Task<List<Document>> GetAccessibleDocumentAsync(string userId);
     }
 }

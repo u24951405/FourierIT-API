@@ -11,7 +11,7 @@ namespace FourierIT_API.Models
         public EntityType EntityType { get; set; } = null!;
 
         public int DocumentTypeId { get; set; }
-        public DocumentType DocumentType { get; set; }
+        public DocumentType DocumentType { get; set; } = null!;
 
         public bool IsMandatory { get; set; } = true;
         public string? Description { get; set; }

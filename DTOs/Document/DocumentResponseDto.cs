@@ -11,6 +11,7 @@
         public long FileSizeBytes { get; set; }
         public DateTime UploadedDate { get; set; }
         public DateTime? LastModifiedDate { get; set; }
+        public int DocumentTypeId { get; set; }
         public string DocumentTypeName { get; set; } = string.Empty;
     }
 }

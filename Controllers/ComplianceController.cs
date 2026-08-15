@@ -344,6 +344,11 @@ namespace FourierIT_API.Controllers
             try
             {
                 var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (string.IsNullOrWhiteSpace(currentUserId))
+                {
+                    return Unauthorized(new { error = "Unable to determine current user." });
+                }
+
                 var result = await _complianceService.AcknowledgeAlertAsync(alertId, currentUserId, request.AcknowledgmentNotes);
 
                 return Ok(new { success = result, message = "Alert acknowledged" });
@@ -365,6 +370,11 @@ namespace FourierIT_API.Controllers
             try
             {
                 var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (string.IsNullOrWhiteSpace(currentUserId))
+                {
+                    return Unauthorized(new { error = "Unable to determine current user." });
+                }
+
                 var result = await _complianceService.ResolveAlertAsync(alertId, currentUserId, request.ResolutionNotes);
 
                 return Ok(new { success = result, message = "Alert resolved" });
@@ -388,6 +398,11 @@ namespace FourierIT_API.Controllers
             try
             {
                 var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (string.IsNullOrWhiteSpace(currentUserId))
+                {
+                    return Unauthorized(new { error = "Unable to determine current user." });
+                }
+
                 var result = await _complianceService.ApproveDocumentComplianceAsync(checkId, currentUserId, request.ApprovalNotes);
 
                 return Ok(new { success = result, message = "Document compliance approved" });
@@ -409,6 +424,11 @@ namespace FourierIT_API.Controllers
             try
             {
                 var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (string.IsNullOrWhiteSpace(currentUserId))
+                {
+                    return Unauthorized(new { error = "Unable to determine current user." });
+                }
+
                 var result = await _complianceService.RejectDocumentComplianceAsync(checkId, currentUserId, request.ApprovalNotes);
 
                 return Ok(new { success = result, message = "Document compliance rejected" });
@@ -430,6 +450,11 @@ namespace FourierIT_API.Controllers
             try
             {
                 var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (string.IsNullOrWhiteSpace(currentUserId))
+                {
+                    return Unauthorized(new { error = "Unable to determine current user." });
+                }
+
                 var count = await _complianceService.BulkApproveDocumentsAsync(checkIds, currentUserId);
 
                 return Ok(new { success = true, approved = count });

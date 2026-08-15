@@ -66,9 +66,10 @@ public class DocumentControllerTests
         var documentServiceMock = new Mock<FourierIT_API.Interfaces.IDocumentService>();
         var documentRepositoryMock = new Mock<FourierIT_API.Interfaces.IDocumentRepository>();
         var complianceServiceMock = new Mock<FourierIT_API.Interfaces.IComplianceService>();
+        var auditLogServiceMock = new Mock<FourierIT_API.Interfaces.IAuditLogService>();
         var loggerMock = new Mock<ILogger<DocumentController>>();
 
-        var controller = new DocumentController(documentServiceMock.Object, documentRepositoryMock.Object, userManagerMock.Object, context, complianceServiceMock.Object, loggerMock.Object);
+        var controller = new DocumentController(documentServiceMock.Object, documentRepositoryMock.Object, userManagerMock.Object, context, complianceServiceMock.Object, auditLogServiceMock.Object, loggerMock.Object);
         controller.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = new System.Security.Claims.ClaimsPrincipal() }
@@ -96,6 +97,160 @@ public class DocumentControllerTests
 
         Assert.Contains("Certificate of Incorporation", documentTypeNames);
         Assert.Contains("Bank Statement", documentTypeNames);
+    }
+
+    [Fact]
+    public async Task Delete_WhenDocumentHasAccessApprovals_ReturnsConflictWithApprovals()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(databaseName: $"DocumentControllerTests_DeleteConflict_{Guid.NewGuid():N}")
+            .Options;
+
+        await using var context = new AppDbContext(options);
+        context.Database.EnsureDeleted();
+        context.Database.EnsureCreated();
+
+        var user = new User { Id = "owner-1", UserName = "owner@test.com" };
+        var document = new Document { DocumentId = 100, FileName = "report.pdf", UserId = user.Id, DocumentTypeId = 1, ExpiryDate = DateTimeOffset.UtcNow.AddYears(1), CurrentStatus = "Active", FileSizeBytes = 1234, EncryptionAlgorithm = "AES-256", IsEncrypted = true, IsCertified = false };
+        var institution = new Institution { InstitutionId = 500, InstitutionName = "Test Bank" };
+        var enquiryRequest = new InstitutionEnquiryRequest { EnquiryRequestId = 700, InstitutionId = institution.InstitutionId, Institution = institution, TargetUserId = user.Id, Status = "Approved" };
+        var approval = new DocumentAccessApproval { ApprovalId = 800, DocumentId = document.DocumentId, Document = document, EnquiryRequestId = enquiryRequest.EnquiryRequestId, InstitutionEnquiryRequest = enquiryRequest, ApprovedByUserId = user.Id, ApprovedByUser = user, ApprovedAt = DateTime.UtcNow, IsRevoked = false };
+
+        context.Users.Add(user);
+        context.Documents.Add(document);
+        context.Institutions.Add(institution);
+        context.InstitutionEnquiryRequests.Add(enquiryRequest);
+        context.DocumentAccessApprovals.Add(approval);
+        await context.SaveChangesAsync();
+
+        var userStore = new Mock<IUserStore<User>>();
+        var userManagerMock = new Mock<UserManager<User>>(MockBehavior.Loose,
+            userStore.Object, Options.Create(new IdentityOptions()), new PasswordHasher<User>(),
+            Array.Empty<IUserValidator<User>>(), Array.Empty<IPasswordValidator<User>>(),
+            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null, NullLogger<UserManager<User>>.Instance);
+        userManagerMock.Setup(x => x.GetUserAsync(It.IsAny<System.Security.Claims.ClaimsPrincipal>()))
+            .ReturnsAsync(user);
+
+        var documentServiceMock = new Mock<FourierIT_API.Interfaces.IDocumentService>();
+        var documentRepositoryMock = new Mock<FourierIT_API.Interfaces.IDocumentRepository>();
+        documentRepositoryMock.Setup(x => x.GetDocumentByIdAsync(document.DocumentId)).ReturnsAsync(document);
+        documentRepositoryMock.Setup(x => x.DeleteDocumentAsync(document.DocumentId)).ReturnsAsync(document);
+
+        var complianceServiceMock = new Mock<FourierIT_API.Interfaces.IComplianceService>();
+        var auditLogServiceMock = new Mock<FourierIT_API.Interfaces.IAuditLogService>();
+        var loggerMock = new Mock<ILogger<DocumentController>>();
+
+        var controller = new DocumentController(documentServiceMock.Object, documentRepositoryMock.Object, userManagerMock.Object, context, complianceServiceMock.Object, auditLogServiceMock.Object, loggerMock.Object);
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = new System.Security.Claims.ClaimsPrincipal() }
+        };
+
+        var result = await controller.Delete(document.DocumentId);
+
+        Assert.IsType<ConflictObjectResult>(result);
+        var conflictResult = result as ConflictObjectResult;
+        Assert.NotNull(conflictResult?.Value);
+
+        var response = conflictResult!.Value;
+        var messageProperty = response.GetType().GetProperty("message");
+        var approvalsProperty = response.GetType().GetProperty("approvals");
+
+        Assert.NotNull(messageProperty);
+        Assert.NotNull(approvalsProperty);
+
+        var message = messageProperty.GetValue(response) as string;
+        var approvals = approvalsProperty.GetValue(response) as IEnumerable<object>;
+
+        Assert.Equal("Document cannot be deleted while access approvals exist.", message);
+        Assert.NotNull(approvals);
+        Assert.Single(approvals!);
+    }
+
+    [Fact]
+    public async Task GetRequiredDocumentsStatus_WhenActiveRequestExists_ReturnsRequestedDocumentChecklist()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(databaseName: $"DocumentControllerTests_ActiveRequestRequiredDocs_{Guid.NewGuid():N}")
+            .Options;
+
+        await using var context = new AppDbContext(options);
+        context.Database.EnsureDeleted();
+        context.Database.EnsureCreated();
+
+        var user = new User { Id = "owner-2", UserName = "owner2@test.com" };
+        var documentTypeRequested = new DocumentType { DocumentTypeId = 200, TypeName = "Utility Bill" };
+        var documentTypeUnrequested = new DocumentType { DocumentTypeId = 201, TypeName = "Passport" };
+        var institution = new Institution { InstitutionId = 501, InstitutionName = "Test Bank" };
+        var request = new InstitutionEnquiryRequest
+        {
+            EnquiryRequestId = 701,
+            InstitutionId = institution.InstitutionId,
+            Institution = institution,
+            TargetUserId = user.Id,
+            Status = "Pending",
+            PurposeNote = "Request documents"
+        };
+
+        context.Users.Add(user);
+        context.DocumentTypes.AddRange(documentTypeRequested, documentTypeUnrequested);
+        context.Institutions.Add(institution);
+        context.InstitutionEnquiryRequests.Add(request);
+        context.InstitutionRequestedDocumentTypes.Add(new InstitutionRequestedDocumentType
+        {
+            EnquiryRequestId = request.EnquiryRequestId,
+            InstitutionEnquiryRequest = request,
+            DocumentTypeId = documentTypeRequested.DocumentTypeId,
+            DocumentType = documentTypeRequested,
+            FICARuleId = 1,
+            isMandatory = true
+        });
+        await context.SaveChangesAsync();
+
+        var userStore = new Mock<IUserStore<User>>();
+        var userManagerMock = new Mock<UserManager<User>>(MockBehavior.Loose,
+            userStore.Object, Options.Create(new IdentityOptions()), new PasswordHasher<User>(),
+            Array.Empty<IUserValidator<User>>(), Array.Empty<IPasswordValidator<User>>(),
+            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null, NullLogger<UserManager<User>>.Instance);
+        userManagerMock.Setup(x => x.GetUserAsync(It.IsAny<System.Security.Claims.ClaimsPrincipal>()))
+            .ReturnsAsync(user);
+        userManagerMock.Setup(x => x.IsInRoleAsync(user, "Department Admin"))
+            .ReturnsAsync(false);
+
+        var documentServiceMock = new Mock<FourierIT_API.Interfaces.IDocumentService>();
+        var documentRepositoryMock = new Mock<FourierIT_API.Interfaces.IDocumentRepository>();
+        var complianceServiceMock = new Mock<FourierIT_API.Interfaces.IComplianceService>();
+        var auditLogServiceMock = new Mock<FourierIT_API.Interfaces.IAuditLogService>();
+        var loggerMock = new Mock<ILogger<DocumentController>>();
+
+        var controller = new DocumentController(documentServiceMock.Object, documentRepositoryMock.Object, userManagerMock.Object, context, complianceServiceMock.Object, auditLogServiceMock.Object, loggerMock.Object);
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = new System.Security.Claims.ClaimsPrincipal() }
+        };
+
+        var result = await controller.GetRequiredDocumentsStatus();
+
+        Assert.IsType<OkObjectResult>(result);
+        var okResult = result as OkObjectResult;
+        Assert.NotNull(okResult?.Value);
+
+        var response = okResult!.Value;
+        var documentsProperty = response.GetType().GetProperty("Documents");
+        Assert.NotNull(documentsProperty);
+
+        var documents = documentsProperty!.GetValue(response) as IEnumerable<object>;
+        Assert.NotNull(documents);
+
+        var docList = documents!.ToList();
+        Assert.Single(docList);
+
+        var firstDocument = docList.Single();
+        var documentTypeName = firstDocument.GetType().GetProperty("DocumentTypeName")?.GetValue(firstDocument)?.ToString();
+        var isUploaded = (bool?)firstDocument.GetType().GetProperty("IsUploaded")?.GetValue(firstDocument);
+
+        Assert.Equal("Utility Bill", documentTypeName);
+        Assert.False(isUploaded.GetValueOrDefault());
     }
 
     [Fact]
@@ -136,9 +291,10 @@ public class DocumentControllerTests
         var documentServiceMock = new Mock<FourierIT_API.Interfaces.IDocumentService>();
         var documentRepositoryMock = new Mock<FourierIT_API.Interfaces.IDocumentRepository>();
         var complianceServiceMock = new Mock<FourierIT_API.Interfaces.IComplianceService>();
+        var auditLogServiceMock = new Mock<FourierIT_API.Interfaces.IAuditLogService>();
         var loggerMock = new Mock<ILogger<DocumentController>>();
 
-        var controller = new DocumentController(documentServiceMock.Object, documentRepositoryMock.Object, userManagerMock.Object, context, complianceServiceMock.Object, loggerMock.Object);
+        var controller = new DocumentController(documentServiceMock.Object, documentRepositoryMock.Object, userManagerMock.Object, context, complianceServiceMock.Object, auditLogServiceMock.Object, loggerMock.Object);
         controller.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = new System.Security.Claims.ClaimsPrincipal() }

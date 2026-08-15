@@ -17,7 +17,8 @@ namespace FourierIT_API.Service
         public TokenService(IConfiguration config, UserManager<User> userManager)
         {
             _config = config;
-            _key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["JWT:SigningKey"]));
+            var signingKey = _config["JWT:SigningKey"] ?? throw new System.InvalidOperationException("JWT:SigningKey is required.");
+            _key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey));
             _userManager = userManager;
         }
         public async Task<string> CreateTokenAsync(User user)

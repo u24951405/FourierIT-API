@@ -515,31 +515,36 @@ namespace FourierIT_API.Controllers
                     .ThenInclude(rdt => rdt.DocumentType)
                 .Where(r => r.InstitutionId == institutionId && (r.Status == "Pending" || r.Status == "Department_Pending"))
                 .OrderByDescending(r => r.RequestDate)
-                .Select(r => new
-                {
-                    r.EnquiryRequestId,
-                    r.InstitutionId,
-                    InstitutionName = r.Institution.InstitutionName,
-                    r.RequestType,
-                    r.TargetUserId,
-                    r.TargetDepartmentId,
-                    DepartmentName = r.TargetDepartment != null ? r.TargetDepartment.DepartmentName : null,
-                    Recipient = r.RequestType == "Department"
-                        ? new { Type = "Department", Name = r.TargetDepartment != null ? r.TargetDepartment.DepartmentName : "-" }
-                        : new { Type = "Individual", Name = r.TargetUser != null ? (string.IsNullOrWhiteSpace(r.TargetUser.Profile.FirstName) && string.IsNullOrWhiteSpace(r.TargetUser.Profile.LastName) ? (r.TargetUser.UserName ?? r.TargetUser.Id) : (r.TargetUser.Profile.FirstName + " " + r.TargetUser.Profile.LastName).Trim()) : (r.TargetUserId ?? "-") },
-                    r.Status,
-                    r.PurposeNote,
-                    r.RequestDate,
-                    Documents = r.RequestedDocumentTypes.Select(d => new
-                    {
-                        d.DocumentTypeId,
-                        DocumentTypeName = d.DocumentType.TypeName,
-                        d.isMandatory
-                    })
-                })
                 .ToListAsync();
 
-            return Ok(requests);
+            var requestStatuses = new Dictionary<int, (bool IsComplete, int MissingCount)>();
+            foreach (var request in requests)
+            {
+                var checklist = await ComputeInstitutionRequestChecklistAsync(request);
+                requestStatuses[request.EnquiryRequestId] = (checklist.IsComplete, checklist.MissingCount);
+            }
+
+            return Ok(requests.Select(r => new
+            {
+                r.EnquiryRequestId,
+                r.InstitutionId,
+                InstitutionName = r.Institution.InstitutionName,
+                r.RequestType,
+                Recipient = r.RequestType == "Department"
+                    ? new { Type = "Department", Name = r.TargetDepartment?.DepartmentName ?? "-" }
+                    : new { Type = "Individual", Name = r.TargetUser != null ? (string.IsNullOrWhiteSpace(r.TargetUser.Profile.FirstName) && string.IsNullOrWhiteSpace(r.TargetUser.Profile.LastName) ? (r.TargetUser.UserName ?? r.TargetUser.Id) : (r.TargetUser.Profile.FirstName + " " + r.TargetUser.Profile.LastName).Trim()) : (r.TargetUserId ?? "-") },
+                r.Status,
+                r.PurposeNote,
+                r.RequestDate,
+                Documents = r.RequestedDocumentTypes.Select(d => new
+                {
+                    d.DocumentTypeId,
+                    DocumentTypeName = d.DocumentType.TypeName,
+                    d.isMandatory
+                }),
+                IsComplete = requestStatuses[r.EnquiryRequestId].IsComplete,
+                MissingCount = requestStatuses[r.EnquiryRequestId].MissingCount
+            }).ToList());
         }
 
         /// <summary>
@@ -573,7 +578,6 @@ namespace FourierIT_API.Controllers
             request.Status = "Revoked";
             request.RespondedAt = DateTime.UtcNow;
 
-            // Revoke any associated access token if present
             if (request.AccessToken != null)
                 request.AccessToken.IsRevoked = true;
 
@@ -591,11 +595,134 @@ namespace FourierIT_API.Controllers
                     RecordID = request.EnquiryRequestId
                 });
             }
-            catch {
+            catch
+            {
                 // Ignore audit failures
             }
 
             return Ok(new { message = "Request revoked.", requestId = request.EnquiryRequestId, status = request.Status });
+        }
+
+        [AllowAnonymous]
+        [HttpGet("institution-access/requests/{requestId:int}/checklist")]
+        public async Task<IActionResult> GetInstitutionRequestChecklist([FromRoute] int requestId, [FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token))
+                return BadRequest(new { error = "A valid session token is required." });
+
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+
+            if (sessionToken == null)
+                return Unauthorized(new { error = "Invalid or expired session token." });
+
+            var request = await _context.InstitutionEnquiryRequests
+                .AsNoTracking()
+                .Include(r => r.TargetDepartment)
+                .Include(r => r.TargetUser)
+                    .ThenInclude(u => u.Profile)
+                .Include(r => r.RequestedDocumentTypes)
+                    .ThenInclude(rdt => rdt.DocumentType)
+                .FirstOrDefaultAsync(r => r.EnquiryRequestId == requestId && r.InstitutionId == sessionToken.InstitutionId);
+
+            if (request == null)
+                return NotFound(new { error = "Request not found." });
+
+            var checklist = await ComputeInstitutionRequestChecklistAsync(request);
+
+            return Ok(new
+            {
+                request.EnquiryRequestId,
+                request.RequestType,
+                request.Status,
+                Recipient = request.RequestType == "Department"
+                    ? new { Type = "Department", Name = request.TargetDepartment?.DepartmentName ?? "-" }
+                    : new { Type = "Individual", Name = request.TargetUser != null ? (string.IsNullOrWhiteSpace(request.TargetUser.Profile.FirstName) && string.IsNullOrWhiteSpace(request.TargetUser.Profile.LastName) ? (request.TargetUser.UserName ?? request.TargetUser.Id) : (request.TargetUser.Profile.FirstName + " " + request.TargetUser.Profile.LastName).Trim()) : (request.TargetUserId ?? "-") },
+                checklist.IsComplete,
+                checklist.MissingCount,
+                checklist.RequestedDocumentStatuses
+            });
+        }
+
+        private async Task<(bool IsComplete, int MissingCount, object RequestedDocumentStatuses)> ComputeInstitutionRequestChecklistAsync(InstitutionEnquiryRequest request)
+        {
+            var requestedDocumentTypeIds = request.RequestedDocumentTypes
+                .Select(rdt => rdt.DocumentTypeId)
+                .Distinct()
+                .ToList();
+
+            var documentGroups = new List<(int DocumentTypeId, string DocumentTypeName, bool IsMandatory, List<(string CurrentStatus, int DocumentId)> Documents)>();
+
+            if (request.RequestType == "Individual" && !string.IsNullOrWhiteSpace(request.TargetUserId))
+            {
+                var userDocuments = await _context.Documents
+                    .AsNoTracking()
+                    .Where(d => d.UserId == request.TargetUserId && d.CurrentStatus != "Deleted" && requestedDocumentTypeIds.Contains(d.DocumentTypeId))
+                    .Select(d => new { d.DocumentTypeId, d.CurrentStatus, d.DocumentId })
+                    .ToListAsync();
+
+                foreach (var requested in request.RequestedDocumentTypes)
+                {
+                    var docs = userDocuments
+                        .Where(d => d.DocumentTypeId == requested.DocumentTypeId)
+                        .Select(d => (d.CurrentStatus, d.DocumentId))
+                        .ToList();
+
+                    documentGroups.Add((requested.DocumentTypeId, requested.DocumentType.TypeName, requested.isMandatory, docs));
+                }
+            }
+            else if (request.RequestType == "Department" && request.TargetDepartmentId.HasValue)
+            {
+                var departmentUsers = await _context.Users
+                    .AsNoTracking()
+                    .Where(u => u.DepartmentId == request.TargetDepartmentId.Value)
+                    .Select(u => u.Id)
+                    .ToListAsync();
+
+                var departmentDocuments = await _context.Documents
+                    .AsNoTracking()
+                    .Where(d => departmentUsers.Contains(d.UserId) && d.CurrentStatus != "Deleted" && requestedDocumentTypeIds.Contains(d.DocumentTypeId))
+                    .Select(d => new { d.DocumentTypeId, d.CurrentStatus, d.DocumentId })
+                    .ToListAsync();
+
+                foreach (var requested in request.RequestedDocumentTypes)
+                {
+                    var docs = departmentDocuments
+                        .Where(d => d.DocumentTypeId == requested.DocumentTypeId)
+                        .Select(d => (d.CurrentStatus, d.DocumentId))
+                        .ToList();
+
+                    documentGroups.Add((requested.DocumentTypeId, requested.DocumentType.TypeName, requested.isMandatory, docs));
+                }
+            }
+            else
+            {
+                foreach (var requested in request.RequestedDocumentTypes)
+                {
+                    documentGroups.Add((requested.DocumentTypeId, requested.DocumentType.TypeName, requested.isMandatory, new List<(string, int)>()));
+                }
+            }
+
+            var requestedDocumentStatuses = documentGroups.Select(group =>
+            {
+                var hasNonRejected = group.Documents.Any(d => !string.Equals(d.CurrentStatus, "Rejected", StringComparison.OrdinalIgnoreCase));
+                var hasRejectedOnly = group.Documents.Any() && !hasNonRejected;
+                var state = hasNonRejected ? "Uploaded" : hasRejectedOnly ? "Rejected" : "Missing";
+                return new
+                {
+                    group.DocumentTypeId,
+                    group.DocumentTypeName,
+                    group.IsMandatory,
+                    State = state,
+                    IsUploaded = state == "Uploaded",
+                    IsRejected = state == "Rejected",
+                    UploadCount = group.Documents.Count
+                };
+            }).ToList();
+
+            var missingCount = requestedDocumentStatuses.Count(s => s.State != "Uploaded");
+            var isComplete = requestedDocumentStatuses.All(s => s.State == "Uploaded");
+            return (isComplete, missingCount, requestedDocumentStatuses);
         }
 
         /// <summary>

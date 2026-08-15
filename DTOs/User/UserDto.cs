@@ -34,4 +34,14 @@ namespace FourierIT_API.DTOs.User
         public string Role { get; set; } = string.Empty;
         public List<string> Roles { get; set; } = new List<string>();
     }
+
+    public class VerifyRegistrationOtpRequestDto
+    {
+        [Required]
+        [EmailAddress]
+        public string EmailAddress { get; set; } = string.Empty;
+
+        [Required]
+        public string Otp { get; set; } = string.Empty;
+    }
 }

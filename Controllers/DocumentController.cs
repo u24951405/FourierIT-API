@@ -23,15 +23,17 @@ namespace FourierIT_API.Controllers
         private readonly UserManager<User> _userManager;
         private readonly AppDbContext _context;
         private readonly IComplianceService _complianceService;
+        private readonly IAuditLogService _auditLogService;
         private readonly ILogger<DocumentController> _logger;
 
-        public DocumentController(IDocumentService documentService, IDocumentRepository documentRepository, UserManager<User> userManager, AppDbContext context, IComplianceService complianceService, ILogger<DocumentController> logger)
+        public DocumentController(IDocumentService documentService, IDocumentRepository documentRepository, UserManager<User> userManager, AppDbContext context, IComplianceService complianceService, IAuditLogService auditLogService, ILogger<DocumentController> logger)
         {
             _documentService = documentService;
             _documentRepository = documentRepository;
             _userManager = userManager;
             _context = context;
             _complianceService = complianceService;
+            _auditLogService = auditLogService;
             _logger = logger;
         }
 
@@ -43,13 +45,55 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpGet("api/users/me/documents/required")]
-        public async Task<IActionResult> GetRequiredDocumentsStatus([FromQuery] int? entityTypeId) //? makes the parameter optional
+        public async Task<IActionResult> GetRequiredDocumentsStatus([FromQuery] int? entityTypeId = null) //? makes the parameter optional
         {
             var user = await _userManager.GetUserAsync(User);
             if (user == null) return Unauthorized();
 
             bool isDepartmentAdmin = await _userManager.IsInRoleAsync(user, "Department Admin");
             var documentQuery = _context.Documents.Where(d => d.UserId == user.Id && d.CurrentStatus != "Deleted");
+
+            var activeRequestedDocuments = await GetActiveRequestedDocumentTypesAsync(user);
+            if (activeRequestedDocuments.Any())
+            {
+                var requestedDocumentTypeIds = activeRequestedDocuments.Select(rd => rd.DocumentTypeId).Distinct().ToList();
+                var requestedUserDocs = await documentQuery
+                    .Where(d => requestedDocumentTypeIds.Contains(d.DocumentTypeId))
+                    .ToListAsync();
+
+                var requestedResult = activeRequestedDocuments
+                    .OrderBy(rd => rd.DocumentTypeName)
+                    .ThenBy(rd => rd.IsMandatory ? 0 : 1)
+                    .Select(rd =>
+                    {
+                        var docs = requestedUserDocs.Where(d => d.DocumentTypeId == rd.DocumentTypeId).ToList();
+                        var hasNonRejected = docs.Any(d => !string.Equals(d.CurrentStatus, "Rejected", StringComparison.OrdinalIgnoreCase));
+                        var hasRejectedOnly = docs.Any() && !hasNonRejected;
+                        var isUploaded = hasNonRejected;
+
+                        return new
+                        {
+                            rd.DocumentTypeId,
+                            DocumentTypeName = rd.DocumentTypeName,
+                            rd.IsMandatory,
+                            Description = rd.DocumentTypeDescription,
+                            IsUploaded = isUploaded,
+                            UploadCount = docs.Count
+                        };
+                    })
+                    .ToList();
+
+                var missingCount = requestedResult.Count(r => !r.IsUploaded);
+                var isComplete = requestedResult.All(r => r.IsUploaded);
+
+                return Ok(new
+                {
+                    EntityType = "Requested Documents",
+                    IsComplete = isComplete,
+                    MissingCount = missingCount,
+                    Documents = requestedResult
+                });
+            }
 
             if (isDepartmentAdmin && user.DepartmentId.HasValue)
             {
@@ -68,7 +112,11 @@ namespace FourierIT_API.Controllers
 
                 var departmentUserDocs = await documentQuery
                     .GroupBy(d => d.DocumentTypeId)
-                    .Select(g => new { DocumentTypeId = g.Key, count = g.Count() })
+                    .Select(g => new
+                    {
+                        DocumentTypeId = g.Key,
+                        count = g.Count()
+                    })
                     .ToDictionaryAsync(x => x.DocumentTypeId, x => x.count);
 
                 var departmentResult = departmentRequiredDocs.Select(rd => new
@@ -154,27 +202,102 @@ namespace FourierIT_API.Controllers
             });
         }
 
+        private async Task<List<(int DocumentTypeId, string DocumentTypeName, bool IsMandatory, string? DocumentTypeDescription)>> GetActiveRequestedDocumentTypesAsync(User user)
+        {
+            var userRequestTypes = _context.InstitutionRequestedDocumentTypes
+                .Include(irdt => irdt.DocumentType)
+                .Where(irdt => irdt.InstitutionEnquiryRequest.Status == "Pending"
+                    && irdt.InstitutionEnquiryRequest.TargetUserId == user.Id);
+
+            var departmentRequestTypes = user.DepartmentId.HasValue
+                ? _context.InstitutionRequestedDocumentTypes
+                    .Include(irdt => irdt.DocumentType)
+                    .Where(irdt => irdt.InstitutionEnquiryRequest.Status == "Department_Pending"
+                        && irdt.InstitutionEnquiryRequest.TargetDepartmentId == user.DepartmentId.Value)
+                : _context.InstitutionRequestedDocumentTypes
+                    .Include(irdt => irdt.DocumentType)
+                    .Where(irdt => false);
+
+            var requestedTypes = await userRequestTypes.Concat(departmentRequestTypes).ToListAsync();
+
+            return requestedTypes
+                .GroupBy(irdt => irdt.DocumentTypeId)
+                .Select(g => (
+                    DocumentTypeId: g.Key,
+                    DocumentTypeName: g.First().DocumentType.TypeName,
+                    IsMandatory: g.Any(irdt => irdt.isMandatory),
+                    DocumentTypeDescription: g.First().DocumentType.Description
+                ))
+                .ToList();
+        }
+
+        private async Task<List<int>> GetActiveRequestedDocumentTypeIdsAsync(User user)
+        {
+            var activeRequestedDocumentTypes = await GetActiveRequestedDocumentTypesAsync(user);
+            return activeRequestedDocumentTypes.Select(r => r.DocumentTypeId).Distinct().ToList();
+        }
+
+        private async Task<(bool IsValid, string? ErrorMessage)> ValidateDocumentTypeForUserContextAsync(User user, int documentTypeId, int? entityTypeId)
+        {
+            var activeRequestDocumentTypeIds = await GetActiveRequestedDocumentTypeIdsAsync(user);
+            if (activeRequestDocumentTypeIds.Any())
+            {
+                if (!activeRequestDocumentTypeIds.Contains(documentTypeId))
+                {
+                    return (false, "The specified document type is not requested by an active institution request.");
+                }
+                return (true, null);
+            }
+
+            if (!entityTypeId.HasValue)
+            {
+                return (false, "Please select an entity type first.");
+            }
+
+            var entityType = await _context.EntityTypes
+                .Include(et => et.RequiredDocuments)
+                .FirstOrDefaultAsync(et => et.EntityTypeId == entityTypeId.Value);
+            if (entityType == null)
+            {
+                return (false, "Invalid entity type selected.");
+            }
+
+            var allowedForEntity = entityType.RequiredDocuments.Any(rd => rd.DocumentTypeId == documentTypeId);
+            if (!allowedForEntity)
+            {
+                return (false, "The specified document type is not required/allowed for the selected entity type.");
+            }
+
+            return (true, null);
+        }
+
         [HttpPost("upload")]
         public async Task<IActionResult> Upload([FromForm] UploadDocumentDto dto)
         {
             var user = await _userManager.GetUserAsync(User);
             if (user == null) return Unauthorized();
 
-            // Determine effective entity: DTO override (user explicitly selected at upload) or user's saved EntityTypeId
+            var activeRequestDocumentTypeIds = await GetActiveRequestedDocumentTypeIdsAsync(user);
+            var hasActiveRequestContext = activeRequestDocumentTypeIds.Any();
+
+            EntityType? entityType = null;
             int? effectiveEntityTypeId = dto.EntityTypeId ?? user.EntityTypeId;
 
-            if (effectiveEntityTypeId == null)
+            if (effectiveEntityTypeId.HasValue)
+            {
+                entityType = await _context.EntityTypes
+                    .Include(et => et.RequiredDocuments)
+                    .FirstOrDefaultAsync(et => et.EntityTypeId == effectiveEntityTypeId.Value);
+
+                if (entityType == null)
+                {
+                    return BadRequest(new { error = "Invalid entity type selected." });
+                }
+            }
+            else if (!hasActiveRequestContext)
             {
                 return BadRequest(new { error = "Please select an entity type first." });
             }
-
-            // Validate entity exists and load its required documents
-            var entityType = await _context.EntityTypes
-                .Include(et => et.RequiredDocuments)
-                .FirstOrDefaultAsync(et => et.EntityTypeId == effectiveEntityTypeId.Value);
-
-            if (entityType == null)
-                return BadRequest(new { error = "Invalid entity type selected." });
 
             // Prevent duplicate uploads of the same document type for the same user
             var existingUpload = await _context.Documents
@@ -186,12 +309,10 @@ namespace FourierIT_API.Controllers
             {
                 return BadRequest(new { error = "You have already uploaded this document type. Please choose a different type or update the existing document." });
             }
-
-            // Ensure the uploaded document type is allowed/required for the selected entity
-            var allowedForEntity = entityType.RequiredDocuments.Any(rd => rd.DocumentTypeId == dto.DocumentTypeId);
-            if (!allowedForEntity)
+            var validationResult = await ValidateDocumentTypeForUserContextAsync(user, dto.DocumentTypeId, effectiveEntityTypeId);
+            if (!validationResult.IsValid)
             {
-                return BadRequest(new { error = "The specified document type is not required/allowed for the selected entity type." });
+                return BadRequest(new { error = validationResult.ErrorMessage });
             }
 
             // If user had no saved entity (registered with both roles) and supplied one now, persist it to their account
@@ -209,8 +330,19 @@ namespace FourierIT_API.Controllers
             await dto.File.CopyToAsync(ms);
             var fileBytes = ms.ToArray();
 
-            // Upload (DocumentService expects documentTypeId, not entityTypeId)
-            var document = await _documentService.UploadDocumentAsync(user.Id, dto.File.FileName, fileBytes, dto.DocumentTypeId);
+            Document document;
+            try
+            {
+                document = await _documentService.UploadDocumentAsync(user.Id, dto.File.FileName, fileBytes, dto.DocumentTypeId);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
 
             document.DocumentTypeId = dto.DocumentTypeId;
             document.IsCertified = dto.IsCertified;
@@ -271,15 +403,44 @@ namespace FourierIT_API.Controllers
             if (doc == null) return NotFound();
 
 
-            //Allow if: Owner, shared with user or admin/viewer role
+            // Allow if: owner or admin/viewer role
             var isAdminViewer = await IsAdminOrViewerRole(user);
-            if (doc.UserId != user.Id && !doc.SharedWith.Any(s => s.GrantedToUserId == user.Id) && !isAdminViewer)
+            if (doc.UserId != user.Id && !isAdminViewer)
                 return Forbid();
 
             return Ok(ToResponseDto(doc));
         }
 
-        [HttpGet("{id}/download")]
+        [HttpGet("{id}/access")]
+        public async Task<IActionResult> GetDocumentAccess(int id)
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+
+            var document = await _documentRepository.GetDocumentByIdAsync(id);
+            if (document == null) return NotFound();
+            if (document.UserId != user.Id) return Forbid();
+
+            var accessApprovals = await _context.DocumentAccessApprovals
+                .Include(daa => daa.InstitutionEnquiryRequest)
+                    .ThenInclude(ier => ier.Institution)
+                .Include(daa => daa.ApprovedByUser)
+                .Where(daa => daa.DocumentId == id)
+                .ToListAsync();
+
+            var response = accessApprovals.Select(daa => new DocumentAccessApprovalDto
+            {
+                ApprovalId = daa.ApprovalId,
+                InstitutionId = daa.InstitutionEnquiryRequest.InstitutionId,
+                InstitutionName = daa.InstitutionEnquiryRequest.Institution.InstitutionName,
+                ApprovedByUserName = daa.ApprovedByUser?.UserName ?? string.Empty,
+                ApprovedAt = daa.ApprovedAt
+            });
+
+            return Ok(response);
+        }
+
+        [HttpDelete("{id}/access/{approvalId}")]
         public async Task<IActionResult> Download(int id)
         {
             var user = await _userManager.GetUserAsync(User);
@@ -290,9 +451,9 @@ namespace FourierIT_API.Controllers
                 var doc = await _documentRepository.GetDocumentByIdAsync(id);
                 if (doc == null) return NotFound();
 
-                //check access: owner, shared, or admin/viewer
+                //check access: owner or admin/viewer
                 var isAdminViewer = await IsAdminOrViewerRole(user);
-                if (doc.UserId != user.Id && !doc.SharedWith.Any(s => s.GrantedToUserId == user.Id) && !isAdminViewer)
+                if (doc.UserId != user.Id && !isAdminViewer)
                     throw new UnauthorizedAccessException("No access to this document");
 
                 var fileBytes = await _documentService.DownloadDocumentAsync(id, doc.User.Id); // decrypt using owner's key context
@@ -335,8 +496,20 @@ namespace FourierIT_API.Controllers
                 await dto.File.CopyToAsync(ms);
                 var fileBytes = ms.ToArray();
 
-                // Pass dto.DocumentTypeId here to fix the CS7036 error
-                var updated = await _documentService.UploadDocumentAsync(user.Id, dto.File.FileName, fileBytes, dto.DocumentTypeId);
+                Document updated;
+                try
+                {
+                    updated = await _documentService.UploadDocumentAsync(user.Id, dto.File.FileName, fileBytes, dto.DocumentTypeId);
+                }
+                catch (ArgumentException ex)
+                {
+                    return BadRequest(new { error = ex.Message });
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return BadRequest(new { error = ex.Message });
+                }
+
                 doc.DocumentBlob = updated.DocumentBlob;
                 doc.FileName = dto.File.FileName;
                 doc.FileSizeBytes = fileBytes.Length;
@@ -345,6 +518,12 @@ namespace FourierIT_API.Controllers
             doc.DocumentTypeId = dto.DocumentTypeId;
             doc.IsCertified = dto.IsCertified;
             doc.LastModifiedDate = DateTime.UtcNow;
+
+            var updateValidation = await ValidateDocumentTypeForUserContextAsync(user, dto.DocumentTypeId, dto.EntityTypeId ?? user.EntityTypeId);
+            if (!updateValidation.IsValid)
+            {
+                return BadRequest(new { error = updateValidation.ErrorMessage });
+            }
 
             await _documentRepository.UpdateDocumentAsync(doc);
             try
@@ -355,6 +534,17 @@ namespace FourierIT_API.Controllers
             {
                 _logger.LogError(ex, "Failed to recalculate compliance after document update for user {UserId}", user.Id);
             }
+
+            await TryCreateAuditLogAsync(new AuditLog
+            {
+                UserId = user.Id,
+                ActionCode = "DOCUMENT_UPDATED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = $"Document {doc.DocumentId} updated by owner.",
+                TableAffected = "Documents",
+                RecordID = doc.DocumentId
+            });
+
             return Ok(ToResponseDto(doc));
         }
 
@@ -368,7 +558,41 @@ namespace FourierIT_API.Controllers
             if (doc == null) return NotFound();
             if (doc.UserId != user.Id) return Forbid();
 
+            var accessApprovals = await _context.DocumentAccessApprovals
+                .Include(daa => daa.InstitutionEnquiryRequest)
+                    .ThenInclude(ier => ier.Institution)
+                .Include(daa => daa.ApprovedByUser)
+                .Where(daa => daa.DocumentId == id)
+                .ToListAsync();
+
+            if (accessApprovals.Any())
+            {
+                return Conflict(new
+                {
+                    message = "Document cannot be deleted while access approvals exist.",
+                    approvals = accessApprovals.Select(daa => new
+                    {
+                        approvalId = daa.ApprovalId,
+                        institutionId = daa.InstitutionEnquiryRequest.InstitutionId,
+                        institutionName = daa.InstitutionEnquiryRequest.Institution.InstitutionName,
+                        approvedByUserName = daa.ApprovedByUser?.UserName ?? string.Empty,
+                        approvedAt = daa.ApprovedAt
+                    })
+                });
+            }
+
             await _documentRepository.DeleteDocumentAsync(id);
+
+            await TryCreateAuditLogAsync(new AuditLog
+            {
+                UserId = user.Id,
+                ActionCode = "DOCUMENT_DELETED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = $"Document {doc.DocumentId} deleted by owner.",
+                TableAffected = "Documents",
+                RecordID = doc.DocumentId
+            });
+
             try
             {
                 await _complianceService.CheckUserComplianceAsync(user.Id);
@@ -378,21 +602,6 @@ namespace FourierIT_API.Controllers
                 _logger.LogError(ex, "Failed to recalculate compliance after document deletion for user {UserId}", user.Id);
             }
             return NoContent();
-        }
-
-        [HttpPost("{id}/share")]
-        public async Task<IActionResult> Share(int id, [FromBody] ShareDocumentDto dto)
-        {
-            var user = await _userManager.GetUserAsync(User);
-            if (user == null) return Unauthorized();
-
-            var success = await _documentService.ShareDocumentAsync(id, dto.GrantToUserId, dto.AccessLevel, user.Id);
-            if (!success)
-                // Provide clearer error details instead of a generic Forbid response
-                // Most likely reasons: target user not found, or current user not document owner, or doc not found
-                return BadRequest(new { error = "Share failed. Ensure document exists, you are the owner, and the target user identifier (id, username or email) is valid."});
-
-            return Ok(new { message = "Document shared successfully."});
         }
 
         //Admin/compliance/stakeholder endpoint to view all users and their documents
@@ -438,8 +647,23 @@ namespace FourierIT_API.Controllers
             FileSizeBytes = doc.FileSizeBytes,
             UploadedDate = doc.UploadedDate,
             LastModifiedDate = doc.LastModifiedDate,
+            DocumentTypeId = doc.DocumentTypeId,
             DocumentTypeName = doc.DocumentType?.TypeName ?? string.Empty
         };
+
+        private async Task TryCreateAuditLogAsync(AuditLog auditLog)
+        {
+            if (auditLog == null) return;
+
+            try
+            {
+                await _auditLogService.CreateAuditLogAsync(auditLog);
+            }
+            catch
+            {
+                // Do not fail the user action if audit logging is unavailable.
+            }
+        }
 
         [HttpGet("api/users/me/document-types")]
         public async Task<IActionResult> GetDocumentTypesForMyEntity()

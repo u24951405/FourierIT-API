@@ -13,6 +13,7 @@ using System.Linq.Expressions;
 using System.Net;
 using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
+using System.Security.Cryptography;
 
 namespace FourierIT_API.Controllers
 {
@@ -95,6 +96,20 @@ namespace FourierIT_API.Controllers
                     RecordID = null
                 });
                 return Unauthorized("Username not found and/or password incorrect");
+            }
+
+            if (!string.Equals(user.AccountStatus, "Active", StringComparison.OrdinalIgnoreCase))
+            {
+                await TryCreateAuditLogAsync(new AuditLog
+                {
+                    UserId = user.Id,
+                    ActionCode = "LOGIN_FAILURE",
+                    TimeStamp = DateTimeOffset.UtcNow,
+                    Description = "Blocked login for account that is awaiting email verification.",
+                    TableAffected = "Users",
+                    RecordID = null
+                });
+                return Unauthorized("Please verify your email address before signing in.");
             }
 
             var token = await _tokenService.CreateTokenAsync(user);
@@ -338,12 +353,19 @@ namespace FourierIT_API.Controllers
                     }
                 }
 
+                var otpCode = GenerateOtpCode();
+                var otpExpiry = DateTimeOffset.UtcNow.AddMinutes(15);
+                var otpHash = HashOtpCode(otpCode);
+
                 var newUser = new User
                 {
                     UserName = userDto.Username?.ToLower(),
                     Email = userDto.EmailAddress?.Trim(),
                     PhoneNumber = userDto.PhoneNumber,
-                    AccountStatus = "Active",
+                    AccountStatus = "PendingVerification",
+                    EmailVerified = false,
+                    EmailVerificationCodeHash = otpHash,
+                    EmailVerificationExpiry = otpExpiry,
                     EntityTypeId = userDto.EntityTypeId,
                     EntityIdentificationNumber = verificationNumber ?? string.Empty
                 };
@@ -376,31 +398,120 @@ namespace FourierIT_API.Controllers
                 _context.Profiles.Add(profile);
                 await _context.SaveChangesAsync();
 
-                var token = await _tokenService.CreateTokenAsync(newUser);
+                try
+                {
+                    await _emailService.SendOtpEmailAsync(newUser.Email ?? string.Empty, "DocuVault", otpCode, otpExpiry);
+                }
+                catch
+                {
+                    await _userManager.DeleteAsync(newUser);
+                    throw;
+                }
 
                 await TryCreateAuditLogAsync(new AuditLog
                 {
                     UserId = newUser.Id,
-                    ActionCode = "USER_REGISTERED",
+                    ActionCode = "USER_REGISTERED_PENDING_VERIFICATION",
                     TimeStamp = DateTimeOffset.UtcNow,
-                    Description = "New user registration completed successfully.",
+                    Description = "New user registration created and awaiting email verification.",
                     TableAffected = "Users",
                     RecordID = null
                 });
 
-                return Ok(
-                    new NewUserDto
-                    {
-                        UserName = newUser.UserName ?? string.Empty,
-                        Email = newUser.Email ?? string.Empty,
-                        Token = token
-                    }
-                );
+                return Ok(new
+                {
+                    message = "We sent a verification code to your email. Enter it to complete registration.",
+                    email = newUser.Email ?? string.Empty,
+                    requiresVerification = true
+                });
             }
             catch (Exception ex)
             {
                 return Problem(detail: ex.Message, title: "Registration failed", statusCode: StatusCodes.Status500InternalServerError);
             }
+        }
+
+        [AllowAnonymous]
+        [HttpPost("verify-registration-otp")]
+        public async Task<IActionResult> VerifyRegistrationOtp([FromBody] VerifyRegistrationOtpRequestDto request)
+        {
+            if (!ModelState.IsValid) return BadRequest(ModelState);
+
+            var email = request.EmailAddress?.Trim() ?? string.Empty;
+            var user = await _userManager.FindByEmailAsync(email);
+            if (user == null)
+            {
+                return BadRequest(new { error = "We could not find a pending registration for this email address." });
+            }
+
+            if (user.EmailVerified)
+            {
+                return Ok(new { message = "This account has already been verified." });
+            }
+
+            if (user.EmailVerificationExpiry is null || user.EmailVerificationExpiry.Value.UtcDateTime < DateTime.UtcNow)
+            {
+                return BadRequest(new { error = "The verification code has expired. Please register again." });
+            }
+
+            if (!VerifyOtpCode(request.Otp, user.EmailVerificationCodeHash, user))
+            {
+                return BadRequest(new { error = "The verification code is invalid." });
+            }
+
+            user.EmailVerified = true;
+            user.AccountStatus = "Active";
+            user.EmailVerificationCodeHash = null;
+            user.EmailVerificationExpiry = null;
+
+            var updateResult = await _userManager.UpdateAsync(user);
+            if (!updateResult.Succeeded)
+            {
+                return StatusCode(StatusCodes.Status500InternalServerError, updateResult.Errors);
+            }
+
+            var token = await _tokenService.CreateTokenAsync(user);
+
+            await TryCreateAuditLogAsync(new AuditLog
+            {
+                UserId = user.Id,
+                ActionCode = "USER_EMAIL_VERIFIED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = "User email verification completed successfully.",
+                TableAffected = "Users",
+                RecordID = null
+            });
+
+            return Ok(new
+            {
+                message = "Email verified successfully. You can now sign in.",
+                token
+            });
+        }
+
+        private static string GenerateOtpCode()
+        {
+            var randomBytes = RandomNumberGenerator.GetBytes(4);
+            var value = BitConverter.ToInt32(randomBytes, 0);
+            var normalized = Math.Abs(value % 1000000);
+            return normalized.ToString("D6");
+        }
+
+        private static string HashOtpCode(string otpCode)
+        {
+            var passwordHasher = new PasswordHasher<User>();
+            return passwordHasher.HashPassword(new User(), otpCode);
+        }
+
+        private static bool VerifyOtpCode(string otpCode, string? storedHash, User user)
+        {
+            if (string.IsNullOrWhiteSpace(otpCode) || string.IsNullOrWhiteSpace(storedHash))
+            {
+                return false;
+            }
+
+            var passwordHasher = new PasswordHasher<User>();
+            return passwordHasher.VerifyHashedPassword(user, storedHash, otpCode) == PasswordVerificationResult.Success;
         }
 
         [AllowAnonymous]
@@ -529,10 +640,18 @@ namespace FourierIT_API.Controllers
             return Ok(new { message = "User and profile updated." });
         }
 
-        [Authorize(Roles = "Department Admin")]
+        [Authorize]
         [HttpDelete("profile/{profileId}")]
         public async Task<IActionResult> DeleteManagedUser([FromRoute] int profileId)
         {
+            var currentUser = await _userManager.GetUserAsync(User);
+            if (currentUser == null) return Unauthorized();
+
+            var currentUserIsSuperAdmin = IsSuperAdminUser(currentUser);
+            var currentUserIsDepartmentAdmin = await _userManager.IsInRoleAsync(currentUser, "Department Admin");
+            if (!currentUserIsSuperAdmin && !currentUserIsDepartmentAdmin)
+                return Forbid();
+
             var profile = await _context.Profiles.Include(p => p.User).FirstOrDefaultAsync(p => p.ProfileId == profileId);
             if (profile == null) return NotFound(new { error = "Profile not found." });
 
@@ -540,11 +659,64 @@ namespace FourierIT_API.Controllers
             if (user == null) return NotFound(new { error = "User not found for the profile." });
             if (IsSuperAdminUser(user)) return BadRequest(new { error = "The Super Admin account cannot be deleted." });
 
+            await DeleteUserRelatedRecordsAsync(user);
+
             _context.Profiles.Remove(profile);
             await _context.SaveChangesAsync();
 
             var deleteUserResult = await _userManager.DeleteAsync(user);
             if (!deleteUserResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, deleteUserResult.Errors);
+
+            await TryCreateAuditLogAsync(new AuditLog
+            {
+                UserId = currentUser.Id,
+                ActionCode = "USER_DELETED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = $"User {user.Id} and related records deleted by {(currentUserIsSuperAdmin ? "Super Admin" : "Department Admin")}",
+                TableAffected = "Users",
+                RecordID = int.TryParse(user.Id, out var parsedId) ? parsedId : (int?)null
+            });
+
+            return NoContent();
+        }
+
+        [Authorize]
+        [HttpDelete("by-user/{userId}")]
+        public async Task<IActionResult> DeleteUserById([FromRoute] string userId)
+        {
+            var currentUser = await _userManager.GetUserAsync(User);
+            if (currentUser == null) return Unauthorized();
+
+            var currentUserIsSuperAdmin = IsSuperAdminUser(currentUser);
+            var currentUserIsDepartmentAdmin = await _userManager.IsInRoleAsync(currentUser, "Department Admin");
+            if (!currentUserIsSuperAdmin && !currentUserIsDepartmentAdmin)
+                return Forbid();
+
+            var user = await _userManager.FindByIdAsync(userId);
+            if (user == null) return NotFound(new { error = "User not found." });
+            if (IsSuperAdminUser(user)) return BadRequest(new { error = "The Super Admin account cannot be deleted." });
+
+            await DeleteUserRelatedRecordsAsync(user);
+
+            var profile = await _context.Profiles.FirstOrDefaultAsync(p => p.UserId == user.Id);
+            if (profile != null)
+            {
+                _context.Profiles.Remove(profile);
+                await _context.SaveChangesAsync();
+            }
+
+            var deleteUserResult = await _userManager.DeleteAsync(user);
+            if (!deleteUserResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, deleteUserResult.Errors);
+
+            await TryCreateAuditLogAsync(new AuditLog
+            {
+                UserId = currentUser.Id,
+                ActionCode = "USER_DELETED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = $"User {user.Id} and related records deleted by {(currentUserIsSuperAdmin ? "Super Admin" : "Department Admin")}",
+                TableAffected = "Users",
+                RecordID = int.TryParse(user.Id, out var parsedId) ? parsedId : (int?)null
+            });
 
             return NoContent();
         }
@@ -587,6 +759,98 @@ namespace FourierIT_API.Controllers
             }
 
             return Ok(userDtos);
+        }
+
+        private async Task DeleteUserRelatedRecordsAsync(User user)
+        {
+            // Delete related document access, compliance, and audit records for the user.
+            var documents = await _context.Documents
+                .Include(d => d.DocumentBlob)
+                .Include(d => d.CertificationDetails)
+                .Include(d => d.DocumentStatusHistories)
+                .Include(d => d.AccessLists)
+                .Include(d => d.SharedWith)
+                .Include(d => d.AccessLogs)
+                .Where(d => d.UserId == user.Id)
+                .ToListAsync();
+
+            foreach (var document in documents)
+            {
+                _context.DocumentAccessLogs.RemoveRange(document.AccessLogs);
+                _context.DocumentAccesses.RemoveRange(document.SharedWith);
+                _context.AccessLists.RemoveRange(document.AccessLists);
+                _context.DocumentStatusHistories.RemoveRange(document.DocumentStatusHistories);
+                _context.CertificationDetails.RemoveRange(document.CertificationDetails);
+                if (document.DocumentBlob != null)
+                {
+                    _context.BlobHistories.RemoveRange(document.DocumentBlob.BlobHistories);
+                    _context.DocumentBlobs.Remove(document.DocumentBlob);
+                }
+                _context.Documents.Remove(document);
+            }
+
+            var documentAccessApprovals = await _context.DocumentAccessApprovals
+                .Where(daa => daa.ApprovedByUserId == user.Id)
+                .ToListAsync();
+            _context.DocumentAccessApprovals.RemoveRange(documentAccessApprovals);
+
+            var institutionEnquiryRequests = await _context.InstitutionEnquiryRequests
+                .Where(ier => ier.TargetUserId == user.Id)
+                .ToListAsync();
+            _context.InstitutionEnquiryRequests.RemoveRange(institutionEnquiryRequests);
+
+            var documentAccesses = await _context.DocumentAccesses
+                .Where(da => da.GrantedToUserId == user.Id)
+                .ToListAsync();
+            _context.DocumentAccesses.RemoveRange(documentAccesses);
+
+            var documentAccessLogs = await _context.DocumentAccessLogs
+                .Where(dal => dal.AccessedByUserId == user.Id)
+                .ToListAsync();
+            _context.DocumentAccessLogs.RemoveRange(documentAccessLogs);
+
+            var userSecurityQuestions = await _context.UserSecurityQuestions
+                .Where(usq => usq.UserId == user.Id)
+                .ToListAsync();
+            _context.UserSecurityQuestions.RemoveRange(userSecurityQuestions);
+
+            var userNotifications = await _context.UserNotifications
+                .Where(un => un.UserId == user.Id)
+                .ToListAsync();
+            _context.UserNotifications.RemoveRange(userNotifications);
+
+            var clientEnlistments = await _context.ClientEnlistments
+                .Where(ce => ce.UserId == user.Id)
+                .ToListAsync();
+            _context.ClientEnlistments.RemoveRange(clientEnlistments);
+
+            var accessToken = await _context.AccessTokens
+                .FirstOrDefaultAsync(at => at.UserId == user.Id);
+            if (accessToken != null)
+            {
+                _context.AccessTokens.Remove(accessToken);
+            }
+
+            var enquiryComment = await _context.EnquiryComments
+                .FirstOrDefaultAsync(ec => ec.UserId == user.Id);
+            if (enquiryComment != null)
+            {
+                _context.EnquiryComments.Remove(enquiryComment);
+            }
+
+            var complianceStatus = await _context.ComplianceStatuses
+                .FirstOrDefaultAsync(cs => cs.UserId == user.Id);
+            if (complianceStatus != null)
+            {
+                _context.DocumentComplianceChecks.RemoveRange(_context.DocumentComplianceChecks.Where(dc => dc.ComplianceStatusId == complianceStatus.ComplianceStatusId));
+                _context.ComplianceResults.RemoveRange(_context.ComplianceResults.Where(cr => cr.ComplianceStatusId == complianceStatus.ComplianceStatusId));
+                _context.ComplianceHistories.RemoveRange(_context.ComplianceHistories.Where(ch => ch.ComplianceStatusId == complianceStatus.ComplianceStatusId));
+                _context.ComplianceAlerts.RemoveRange(_context.ComplianceAlerts.Where(ca => ca.UserId == user.Id));
+                _context.ComplianceAuditLogs.RemoveRange(_context.ComplianceAuditLogs.Where(al => al.PerformedBy == user.Id));
+                _context.ComplianceStatuses.Remove(complianceStatus);
+            }
+
+            await _context.SaveChangesAsync();
         }
 
         /// <summary>

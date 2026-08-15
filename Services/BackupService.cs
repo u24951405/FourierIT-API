@@ -76,7 +76,7 @@ SELECT @backupdir as BackupDir;";
                 DateBackedUp = DateTimeOffset.UtcNow
             };
 
-            string containerName = _configuration["AzureBlobStorage:ContainerName"];
+            string? containerName = _configuration["AzureBlobStorage:ContainerName"];
             if (string.IsNullOrWhiteSpace(containerName))
             {
                 const string msg = "Azure Blob Storage container name is not configured.";
@@ -312,7 +312,16 @@ SELECT @backupdir as BackupDir;";
                 await blobClient.DownloadToAsync(tempFilePath);
                 _logger.LogInformation("Download complete for backup id {BackupId}", backupId);
 
-                var currentConnectionString = _context.Database.GetDbConnection().ConnectionString;
+                string? currentConnectionString = _context.Database.GetDbConnection().ConnectionString;
+                if (string.IsNullOrWhiteSpace(currentConnectionString))
+                {
+                    return new RestoreResponseDto
+                    {
+                        Success = false,
+                        Message = "Could not determine target database connection string.",
+                        RestoredAt = DateTimeOffset.UtcNow
+                    };
+                }
                 var builder = new SqlConnectionStringBuilder(currentConnectionString);
                 var targetDbName = builder.InitialCatalog;
 

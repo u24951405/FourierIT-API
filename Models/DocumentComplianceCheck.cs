@@ -13,8 +13,8 @@ namespace FourierIT_API.Models
         public int CheckId { get; set; }
 
         [ForeignKey("Document")]
-        public int DocumentId { get; set; }
-        public Document Document { get; set; } = null!;
+        public int? DocumentId { get; set; }
+        public Document? Document { get; set; }
 
         [ForeignKey("ComplianceStatus")]
         public int ComplianceStatusId { get; set; }

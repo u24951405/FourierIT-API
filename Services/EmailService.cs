@@ -158,7 +158,7 @@ namespace FourierIT_API.Services
             var message = new MailMessage
             {
                 From = new MailAddress(_settings.FromAddress, _settings.FromDisplayName),
-                Subject = "Your DocuVault verification code",
+                Subject = "Your secure DocuVault verification code",
                 Body = BuildOtpEmailHtmlBody(institutionName, otpCode, expiresAt),
                 IsBodyHtml = true,
                 BodyEncoding = Encoding.UTF8,
@@ -189,12 +189,16 @@ namespace FourierIT_API.Services
 
         private static string BuildEmailPlainTextBody(string institutionName, string accessLink, DateTimeOffset expiresAt)
         {
+            var expiryText = expiresAt == DateTimeOffset.MaxValue
+                ? "This access link does not expire."
+                : $"This link expires on {expiresAt:yyyy-MM-dd HH:mm} UTC, so please access it promptly.";
+
             return $"Hello,\n\n" +
                    $"You have been invited to securely access DocuVault on behalf of {institutionName}.\n\n" +
                    "Please open the secure access portal below and follow the instructions to complete your login: \n" +
                    $"{accessLink}\n\n" +
-                   $"This link expires on {expiresAt:yyyy-MM-dd HH:mm} UTC, so please access it promptly.\n\n" +
-                   "After opening the link, a one-time verification code (OTP) will be sent to this email address.\n\n" +
+                   $"{expiryText}\n\n" +
+                   "This invitation email contains ONLY the secure access link. The one-time verification code (OTP) will be generated and sent separately to this email address after the link is opened.\n\n" +
                    "If you did not request this invitation, you may safely ignore this message or contact your administrator.\n\n" +
                    "Thank you,\n" +
                    "M5CS | DocuVault Security Team\n";
@@ -216,9 +220,9 @@ namespace FourierIT_API.Services
                    $"<p style=\"margin:0 0 32px;text-align:center;\"><a href=\"{accessLink}\" style=\"display:inline-flex;align-items:center;justify-content:center;padding:14px 26px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:12px;font-weight:700;box-shadow:0 12px 30px rgba(37,99,235,0.18);\">Open Secure Access Portal</a></p>" +
                    $"<div style=\"padding:24px;background:#f8fafc;border-radius:18px;border:1px solid #e2e8f0;margin-bottom:32px;\">" +
                    $"<p style=\"margin:0 0 12px;font-size:14px;font-weight:700;color:#0f172a;\">Link expiry</p>" +
-                   $"<p style=\"margin:0;font-size:15px;color:#475569;\">This link expires on <strong>{expiresAt:yyyy-MM-dd HH:mm} UTC</strong>. Please open it before then.</p>" +
+                   $"<p style=\"margin:0;font-size:15px;color:#475569;\">{(expiresAt == DateTimeOffset.MaxValue ? "This access link does not expire." : $"This link expires on <strong>{expiresAt:yyyy-MM-dd HH:mm} UTC</strong>. Please open it before then.")}</p>" +
                    "</div>" +
-                   $"<p style=\"margin:0 0 18px;font-size:15px;color:#475569;\">After opening the link, a one-time verification code (OTP) will be sent to this email address for secure authentication.</p>" +
+                   $"<p style=\"margin:0 0 18px;font-size:15px;color:#475569;\">This invitation email contains ONLY your secure access link. The one-time verification code (OTP) will be generated and sent separately to this email address after the link is opened.</p>" +
                    $"<p style=\"margin:0;font-size:15px;color:#475569;\">If you did not request this invitation, please ignore this message or contact your administrator immediately.</p>" +
                    "</div>" +
                    "<div style=\"padding:24px 40px 32px;border-top:1px solid #e2e8f0;background:#fff;display:flex;align-items:center;gap:16px;\">" +
@@ -239,6 +243,7 @@ namespace FourierIT_API.Services
         {
             return $"Hello,\n\n" +
                    $"You have opened your DocuVault access link for {institutionName}.\n\n" +
+                   "This email contains your follow-up verification code for secure login.\n\n" +
                    $"Your one-time verification code is: {otpCode}\n\n" +
                    $"This code will expire on {expiresAt:yyyy-MM-dd HH:mm} UTC.\n\n" +
                    "Do not share this code with anyone.\n\n" +
@@ -256,10 +261,10 @@ namespace FourierIT_API.Services
                    "<div style=\"padding:32px 40px;background:#0f172a;color:#f8fafc;text-align:center;\">" +
                    $"<img src=\"data:image/svg+xml;base64,{logoData}\" alt=\"M5CS logo\" width=60 height=60 style=\"display:block;margin:0 auto 18px;\" />" +
                    "<p style=\"margin:0;font-size:14px;letter-spacing:0.16em;color:#94a3b8;text-transform:uppercase;\">Verification code</p>" +
-                   "<h1 style=\"margin:16px 0 0;font-size:30px;font-weight:700;line-height:1.1;\">Your DocuVault OTP code</h1>" +
+                   "<h1 style=\"margin:16px 0 0;font-size:30px;font-weight:700;line-height:1.1;\">Your DocuVault verification code</h1>" +
                    "</div>" +
                    "<div style=\"padding:32px 40px;\">" +
-                   $"<p style=\"margin:0 0 24px;font-size:16px;color:#334155;\">Hello,<br/>You have opened your secure DocuVault access portal for <strong>{institutionName}</strong>. Use the verification code below to continue.</p>" +
+                   $"<p style=\"margin:0 0 24px;font-size:16px;color:#334155;\">Hello,<br/>You have opened your secure DocuVault access portal for <strong>{institutionName}</strong>. This email contains your follow-up verification code for secure login.</p>" +
                    $"<div style=\"padding:26px 24px;background:#eff6ff;border-radius:18px;border:1px solid #dbeafe;text-align:center;margin-bottom:32px;\">" +
                    $"<p style=\"margin:0;font-size:32px;font-weight:800;color:#0f172a;letter-spacing:0.16em;\">{otpCode}</p>" +
                    $"<p style=\"margin:8px 0 0;font-size:14px;color:#475569;\">This code expires on {expiresAt:yyyy-MM-dd HH:mm} UTC.</p>" +

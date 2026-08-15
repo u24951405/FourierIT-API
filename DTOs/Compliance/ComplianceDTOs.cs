@@ -115,7 +115,7 @@ namespace FourierIT_API.DTOs.Compliance
     /// </summary>
     public class DocumentComplianceIssueDto
     {
-        public int DocumentId { get; set; }
+        public int? DocumentId { get; set; }
         public string DocumentName { get; set; } = string.Empty;
         public string DocumentType { get; set; } = string.Empty;
 

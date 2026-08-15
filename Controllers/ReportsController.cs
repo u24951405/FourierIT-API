@@ -200,9 +200,27 @@ namespace FourierIT_API.Controllers
             int? institutionId,
             string? complianceStatus)
         {
+            var docOwnerRole = await _context.Roles
+                .AsNoTracking()
+                .FirstOrDefaultAsync(r => r.NormalizedName == "DOCUMENT OWNER"
+                    || (r.Name != null && r.Name.ToUpper() == "DOCUMENT OWNER"));
+
+            if (docOwnerRole == null)
+            {
+                docOwnerRole = await _context.Roles
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(r => (r.NormalizedName != null && r.NormalizedName.Contains("DOCUMENT") && r.NormalizedName.Contains("OWNER"))
+                        || (r.Name != null && r.Name.Contains("Document") && r.Name.Contains("Owner")));
+            }
+
+            if (docOwnerRole == null)
+            {
+                return new List<DocumentOwnerComplianceReportRowDto>();
+            }
+
             var ownerUserIds = await _context.UserRoles
                 .AsNoTracking()
-                .Where(ur => ur.Role.NormalizedName == "DOCUMENT OWNER")
+                .Where(ur => ur.RoleId == docOwnerRole.Id)
                 .Select(ur => ur.UserId)
                 .Distinct()
                 .ToListAsync();
@@ -218,8 +236,8 @@ namespace FourierIT_API.Controllers
                 .Select(u => new
                 {
                     u.Id,
-                    FirstName = u.Profile.FirstName,
-                    LastName = u.Profile.LastName,
+                    FirstName = u.Profile != null ? u.Profile.FirstName : string.Empty,
+                    LastName = u.Profile != null ? u.Profile.LastName : string.Empty,
                     Email = u.Email ?? string.Empty,
                     DepartmentId = u.DepartmentId,
                     DepartmentName = u.Department != null ? u.Department.DepartmentName : string.Empty,
@@ -812,9 +830,10 @@ namespace FourierIT_API.Controllers
                 .Include(d => d.User)
                 .ThenInclude(u => u.Profile)
                 .Include(d => d.DocumentType)
-                .Include(d => d.User.Department)
-                .ThenInclude(dep => dep.Branch)
-                .ThenInclude(b => b.Institution)
+                .Include(d => d.User)
+                .ThenInclude(u => u.Department)
+                .ThenInclude(dep => dep!.Branch)
+                .ThenInclude(b => b!.Institution)
                 .Where(d => d.CurrentStatus != "Deleted");
 
             if (departmentId.HasValue)
@@ -832,7 +851,7 @@ namespace FourierIT_API.Controllers
                 {
                     Owner = d.User.Profile != null
                         ? (d.User.Profile.FirstName + " " + d.User.Profile.LastName).Trim()
-                        : d.User.Email,
+                        : (d.User.Email ?? d.User.UserName ?? d.User.Id),
                     Department = d.User.Department != null ? d.User.Department.DepartmentName : "Unknown",
                     DocumentType = d.DocumentType.TypeName,
                     ExpiryDate = d.ExpiryDate,

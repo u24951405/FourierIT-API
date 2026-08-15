@@ -82,7 +82,7 @@ namespace FourierIT_API.Data
         public DbSet<UserNotification> UserNotifications { get; set; }
         public DbSet<Notification> Notifications { get; set; }
         public DbSet<InstitutionMembers> InstitutionMembers { get; set; }
-        public DbSet<UserRole> UserRoles { get; set; }
+        public new DbSet<UserRole> UserRoles { get; set; }
         public DbSet<PEPList> PEPLists { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -575,12 +575,12 @@ namespace FourierIT_API.Data
                 .HasForeignKey(nh => nh.NotificationId);
 
             // Configure DocumentAccess relationships (Secure Vault)
-            // Use NO_ACTION to avoid multiple cascade paths
+            // Use CASCADE to delete orphaned grants when document is deleted
             modelBuilder.Entity<DocumentAccess>()
                 .HasOne(da => da.Document)
                 .WithMany(d => d.SharedWith)
                 .HasForeignKey(da => da.DocumentId)
-                .OnDelete(DeleteBehavior.NoAction);
+                .OnDelete(DeleteBehavior.Cascade);
 
             modelBuilder.Entity<DocumentAccess>()
                 .HasOne(da => da.GrantedToUser)

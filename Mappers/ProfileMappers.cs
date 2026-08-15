@@ -10,7 +10,8 @@ namespace FourierIT_API.Mappers
         {
             // Pick the first role assigned to the user (if any)
             var roleNames = profileModel?.User?.UserRoles?
-                .Select(ur => ur?.Role?.Name)
+                .Where(ur => ur?.Role?.Name != null)
+                .Select(ur => ur!.Role!.Name!)
                 .Where(n => !string.IsNullOrWhiteSpace(n))
                 .ToList() ?? new List<string>();
 

@@ -10,8 +10,8 @@ namespace FourierIT_API.DTOs.User
         public DateOnly DateOfBirth { get; set; } = new DateOnly();
         public string PhoneNumber { get; set; } = string.Empty;
         public string JobTitle { get; set; } = string.Empty;
-        public string UserName { get; set; }
-        public string Email { get; set; }
-        public string Token { get; set; }
+        public string UserName { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
+        public string Token { get; set; } = string.Empty;
     }
 }
