@@ -91,7 +91,7 @@ public class UserControllerRegistrationOtpTests
         var configuration = new ConfigurationBuilder().AddInMemoryCollection().Build();
         var auditLogService = new Mock<IAuditLogService>();
         var emailService = new Mock<IEmailService>();
-        emailService.Setup(x => x.SendOtpEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTimeOffset>()))
+        emailService.Setup(x => x.SendUserRegistrationOtpEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTimeOffset>()))
             .Returns(Task.CompletedTask);
 
         var controller = new UserController(

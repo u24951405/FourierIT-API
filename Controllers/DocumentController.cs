@@ -440,7 +440,46 @@ namespace FourierIT_API.Controllers
             return Ok(response);
         }
 
-        [HttpDelete("{id}/access/{approvalId}")]
+        [HttpGet("{id}/preview")]
+        public async Task<IActionResult> Preview(int id)
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+
+            try
+            {
+                var doc = await _documentRepository.GetDocumentByIdAsync(id);
+                if (doc == null) return NotFound();
+
+                var isAdminViewer = await IsAdminOrViewerRole(user);
+                if (doc.UserId != user.Id && !isAdminViewer)
+                    throw new UnauthorizedAccessException("No access to this document");
+
+                var fileBytes = await _documentService.DownloadDocumentAsync(id, doc.User.Id);
+
+                doc.LastAccessedDate = DateTime.UtcNow;
+                await _documentRepository.UpdateDocumentAsync(doc);
+
+                _context.DocumentAccessLogs.Add(new DocumentAccessLog
+                {
+                    DocumentId = id,
+                    AccessedByUserId = user.Id,
+                    ActionType = isAdminViewer ? "AdminPreview" : "Preview",
+                    AccessDateTime = DateTime.UtcNow,
+                    IPAddress = HttpContext.Connection.RemoteIpAddress?.ToString() ?? string.Empty,
+                    UserAgent = Request.Headers.UserAgent.ToString()
+                });
+                await _context.SaveChangesAsync();
+
+                return File(fileBytes, GetMimeType(doc.FileName));
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Forbid(ex.Message);
+            }
+        }
+
+        [HttpGet("{id}/download")]
         public async Task<IActionResult> Download(int id)
         {
             var user = await _userManager.GetUserAsync(User);
@@ -472,12 +511,47 @@ namespace FourierIT_API.Controllers
                 });
                 await _context.SaveChangesAsync();
 
-                return File(fileBytes, "application/octet-stream", doc.FileName);
+                Response.Headers.ContentDisposition = $"attachment; filename=\"{doc.FileName}\"";
+                return File(fileBytes, GetMimeType(doc.FileName));
             }
             catch (UnauthorizedAccessException ex)
             {
                 return Forbid(ex.Message);
             }
+        }
+
+        [HttpDelete("{id}/access/{approvalId}")]
+        public async Task<IActionResult> RevokeDocumentAccess(int id, int approvalId)
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+
+            var doc = await _documentRepository.GetDocumentByIdAsync(id);
+            if (doc == null) return NotFound();
+
+            // Only the document owner can revoke access
+            if (doc.UserId != user.Id) return Forbid();
+
+            var approval = await _context.DocumentAccessApprovals
+                .FirstOrDefaultAsync(daa => daa.ApprovalId == approvalId && daa.DocumentId == id);
+
+            if (approval == null) return NotFound(new { error = "Access approval not found." });
+
+            approval.IsRevoked = true;
+            approval.RevokedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            await TryCreateAuditLogAsync(new AuditLog
+            {
+                UserId = user.Id,
+                ActionCode = "DOCUMENT_ACCESS_REVOKED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = $"Document {id} access approval {approvalId} revoked by owner.",
+                TableAffected = "DocumentAccessApprovals",
+                RecordID = approvalId
+            });
+
+            return NoContent();
         }
 
         [HttpPut("{id}")]
@@ -602,6 +676,29 @@ namespace FourierIT_API.Controllers
                 _logger.LogError(ex, "Failed to recalculate compliance after document deletion for user {UserId}", user.Id);
             }
             return NoContent();
+        }
+
+        private static string GetMimeType(string fileName)
+        {
+            var extension = Path.GetExtension(fileName ?? string.Empty).ToLowerInvariant();
+
+            return extension switch
+            {
+                ".pdf" => "application/pdf",
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".gif" => "image/gif",
+                ".tif" or ".tiff" => "image/tiff",
+                ".txt" => "text/plain",
+                ".csv" => "text/csv",
+                ".doc" => "application/msword",
+                ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                ".xls" => "application/vnd.ms-excel",
+                ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ".ppt" => "application/vnd.ms-powerpoint",
+                ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                _ => "application/octet-stream"
+            };
         }
 
         //Admin/compliance/stakeholder endpoint to view all users and their documents

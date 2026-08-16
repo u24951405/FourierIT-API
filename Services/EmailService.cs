@@ -147,7 +147,7 @@ namespace FourierIT_API.Services
                    "</body></html>";
         }
 
-        public async Task SendOtpEmailAsync(string toEmail, string institutionName, string otpCode, DateTimeOffset expiresAt)
+        public async Task SendUserRegistrationOtpEmailAsync(string toEmail, string otpCode, DateTimeOffset expiresAt)
         {
             if (string.IsNullOrWhiteSpace(_settings.Host))
                 throw new InvalidOperationException("SMTP host is not configured.");
@@ -158,8 +158,8 @@ namespace FourierIT_API.Services
             var message = new MailMessage
             {
                 From = new MailAddress(_settings.FromAddress, _settings.FromDisplayName),
-                Subject = "Your secure DocuVault verification code",
-                Body = BuildOtpEmailHtmlBody(institutionName, otpCode, expiresAt),
+                Subject = "Welcome to DocuVault — verify your email",
+                Body = BuildUserRegistrationOtpEmailHtmlBody(otpCode, expiresAt),
                 IsBodyHtml = true,
                 BodyEncoding = Encoding.UTF8,
                 SubjectEncoding = Encoding.UTF8,
@@ -170,7 +170,7 @@ namespace FourierIT_API.Services
             message.Headers.Add("X-MSMail-Priority", "High");
 
             message.To.Add(toEmail);
-            message.AlternateViews.Add(AlternateView.CreateAlternateViewFromString(BuildOtpEmailPlainTextBody(institutionName, otpCode, expiresAt), null, "text/plain"));
+            message.AlternateViews.Add(AlternateView.CreateAlternateViewFromString(BuildUserRegistrationOtpEmailPlainTextBody(otpCode, expiresAt), null, "text/plain"));
 
             using var client = new SmtpClient(_settings.Host, _settings.Port)
             {
@@ -185,6 +185,51 @@ namespace FourierIT_API.Services
             }
 
             await client.SendMailAsync(message);
+        }
+
+        public async Task SendInstitutionOtpEmailAsync(string toEmail, string institutionName, string otpCode, DateTimeOffset expiresAt)
+        {
+            if (string.IsNullOrWhiteSpace(_settings.Host))
+                throw new InvalidOperationException("SMTP host is not configured.");
+
+            if (string.IsNullOrWhiteSpace(toEmail))
+                throw new ArgumentException("Recipient email address is required.", nameof(toEmail));
+
+            var message = new MailMessage
+            {
+                From = new MailAddress(_settings.FromAddress, _settings.FromDisplayName),
+                Subject = "Your institution portal access code",
+                Body = BuildInstitutionOtpEmailHtmlBody(institutionName, otpCode, expiresAt),
+                IsBodyHtml = true,
+                BodyEncoding = Encoding.UTF8,
+                SubjectEncoding = Encoding.UTF8,
+                Priority = MailPriority.High
+            };
+            message.Headers.Add("X-Priority", "1");
+            message.Headers.Add("Importance", "High");
+            message.Headers.Add("X-MSMail-Priority", "High");
+
+            message.To.Add(toEmail);
+            message.AlternateViews.Add(AlternateView.CreateAlternateViewFromString(BuildInstitutionOtpEmailPlainTextBody(institutionName, otpCode, expiresAt), null, "text/plain"));
+
+            using var client = new SmtpClient(_settings.Host, _settings.Port)
+            {
+                UseDefaultCredentials = false,
+                EnableSsl = _settings.EnableSsl,
+                DeliveryMethod = SmtpDeliveryMethod.Network
+            };
+
+            if (!string.IsNullOrWhiteSpace(_settings.Username))
+            {
+                client.Credentials = new NetworkCredential(_settings.Username, _settings.Password);
+            }
+
+            await client.SendMailAsync(message);
+        }
+
+        public async Task SendOtpEmailAsync(string toEmail, string institutionName, string otpCode, DateTimeOffset expiresAt)
+        {
+            await SendInstitutionOtpEmailAsync(toEmail, institutionName, otpCode, expiresAt);
         }
 
         private static string BuildEmailPlainTextBody(string institutionName, string accessLink, DateTimeOffset expiresAt)
@@ -239,20 +284,18 @@ namespace FourierIT_API.Services
                    "</body></html>";
         }
 
-        private static string BuildOtpEmailPlainTextBody(string institutionName, string otpCode, DateTimeOffset expiresAt)
+        private static string BuildUserRegistrationOtpEmailPlainTextBody(string otpCode, DateTimeOffset expiresAt)
         {
-            return $"Hello,\n\n" +
-                   $"You have opened your DocuVault access link for {institutionName}.\n\n" +
-                   "This email contains your follow-up verification code for secure login.\n\n" +
-                   $"Your one-time verification code is: {otpCode}\n\n" +
+            return $"Welcome to DocuVault!\n\n" +
+                   "We’re glad you’re joining us. To complete your registration and verify your email, please use the code below.\n\n" +
+                   $"Your verification code is: {otpCode}\n\n" +
                    $"This code will expire on {expiresAt:yyyy-MM-dd HH:mm} UTC.\n\n" +
-                   "Do not share this code with anyone.\n\n" +
-                   "If you did not request this code, please contact your administrator immediately.\n\n" +
+                   "If you did not create this account, please ignore this message and contact support.\n\n" +
                    "Thank you,\n" +
                    "M5CS | DocuVault Security Team\n";
         }
 
-        private static string BuildOtpEmailHtmlBody(string institutionName, string otpCode, DateTimeOffset expiresAt)
+        private static string BuildUserRegistrationOtpEmailHtmlBody(string otpCode, DateTimeOffset expiresAt)
         {
             var logoData = GetInlineLogoSvgBase64();
             return $"<html><body style=\"font-family:Segoe UI,Arial,sans-serif;color:#111827;background:#f3f4f6;margin:0;padding:0;\">" +
@@ -260,17 +303,63 @@ namespace FourierIT_API.Services
                    "<div style=\"background:#ffffff;border-radius:24px;box-shadow:0 24px 80px rgba(15,23,42,0.08);overflow:hidden;\">" +
                    "<div style=\"padding:32px 40px;background:#0f172a;color:#f8fafc;text-align:center;\">" +
                    $"<img src=\"data:image/svg+xml;base64,{logoData}\" alt=\"M5CS logo\" width=60 height=60 style=\"display:block;margin:0 auto 18px;\" />" +
-                   "<p style=\"margin:0;font-size:14px;letter-spacing:0.16em;color:#94a3b8;text-transform:uppercase;\">Verification code</p>" +
-                   "<h1 style=\"margin:16px 0 0;font-size:30px;font-weight:700;line-height:1.1;\">Your DocuVault verification code</h1>" +
+                   "<p style=\"margin:0;font-size:14px;letter-spacing:0.16em;color:#94a3b8;text-transform:uppercase;\">Welcome</p>" +
+                   "<h1 style=\"margin:16px 0 0;font-size:30px;font-weight:700;line-height:1.1;\">Verify your email to complete registration</h1>" +
                    "</div>" +
                    "<div style=\"padding:32px 40px;\">" +
-                   $"<p style=\"margin:0 0 24px;font-size:16px;color:#334155;\">Hello,<br/>You have opened your secure DocuVault access portal for <strong>{institutionName}</strong>. This email contains your follow-up verification code for secure login.</p>" +
+                   "<p style=\"margin:0 0 24px;font-size:16px;color:#334155;\">Hello,<br/>Welcome to DocuVault. Please verify your email address to complete your account registration and activate your profile.</p>" +
                    $"<div style=\"padding:26px 24px;background:#eff6ff;border-radius:18px;border:1px solid #dbeafe;text-align:center;margin-bottom:32px;\">" +
                    $"<p style=\"margin:0;font-size:32px;font-weight:800;color:#0f172a;letter-spacing:0.16em;\">{otpCode}</p>" +
                    $"<p style=\"margin:8px 0 0;font-size:14px;color:#475569;\">This code expires on {expiresAt:yyyy-MM-dd HH:mm} UTC.</p>" +
                    "</div>" +
-                   $"<p style=\"margin:0 0 18px;font-size:15px;color:#475569;\">Do not share this code with anyone else.</p>" +
-                   $"<p style=\"margin:0;font-size:15px;color:#475569;\">If you did not request this access, contact your administrator immediately.</p>" +
+                   "<p style=\"margin:0 0 18px;font-size:15px;color:#475569;\">Use this one-time code to verify your email address.</p>" +
+                   "<p style=\"margin:0;font-size:15px;color:#475569;\">If you did not create this account, please ignore this message or contact support.</p>" +
+                   "</div>" +
+                   "<div style=\"padding:24px 40px 32px;border-top:1px solid #e2e8f0;background:#fff;display:flex;align-items:center;gap:16px;\">" +
+                   $"<div style=\"width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,#2563eb,#22c55e);display:flex;align-items:center;justify-content:center;\">" +
+                   $"<span style=\"font-size:20px;font-weight:800;color:#ffffff;font-family:Segoe UI,Arial,sans-serif;\">M5</span>" +
+                   "</div>" +
+                   "<div>" +
+                   $"<p style=\"margin:0;font-size:15px;font-weight:700;color:#0f172a;\">M5CS</p>" +
+                   $"<p style=\"margin:4px 0 0;font-size:13px;color:#64748b;\">Secure document exchange for institutions.</p>" +
+                   "</div>" +
+                   "</div>" +
+                   "</div>" +
+                   "</body></html>";
+        }
+
+        private static string BuildInstitutionOtpEmailPlainTextBody(string institutionName, string otpCode, DateTimeOffset expiresAt)
+        {
+            return $"Hello,\n\n" +
+                   $"You are attempting to access the {institutionName} institution portal.\n\n" +
+                   "Use the one-time access code below to continue.\n\n" +
+                   $"Your institution portal access code is: {otpCode}\n\n" +
+                   $"This code will expire on {expiresAt:yyyy-MM-dd HH:mm} UTC.\n\n" +
+                   "Do not share this code with anyone.\n\n" +
+                   "If you did not request this access code, please contact your administrator immediately.\n\n" +
+                   "Thank you,\n" +
+                   "M5CS | DocuVault Security Team\n";
+        }
+
+        private static string BuildInstitutionOtpEmailHtmlBody(string institutionName, string otpCode, DateTimeOffset expiresAt)
+        {
+            var logoData = GetInlineLogoSvgBase64();
+            return $"<html><body style=\"font-family:Segoe UI,Arial,sans-serif;color:#111827;background:#f3f4f6;margin:0;padding:0;\">" +
+                   "<div style=\"max-width:680px;margin:0 auto;padding:32px 16px;\">" +
+                   "<div style=\"background:#ffffff;border-radius:24px;box-shadow:0 24px 80px rgba(15,23,42,0.08);overflow:hidden;\">" +
+                   "<div style=\"padding:32px 40px;background:#0f172a;color:#f8fafc;text-align:center;\">" +
+                   $"<img src=\"data:image/svg+xml;base64,{logoData}\" alt=\"M5CS logo\" width=60 height=60 style=\"display:block;margin:0 auto 18px;\" />" +
+                   "<p style=\"margin:0;font-size:14px;letter-spacing:0.16em;color:#94a3b8;text-transform:uppercase;\">Institution access</p>" +
+                   "<h1 style=\"margin:16px 0 0;font-size:30px;font-weight:700;line-height:1.1;\">Your institution portal access code</h1>" +
+                   "</div>" +
+                   "<div style=\"padding:32px 40px;\">" +
+                   $"<p style=\"margin:0 0 24px;font-size:16px;color:#334155;\">Hello,<br/>You are requesting access to the <strong>{institutionName}</strong> institution portal. Use the one-time code below to continue securely.</p>" +
+                   $"<div style=\"padding:26px 24px;background:#eff6ff;border-radius:18px;border:1px solid #dbeafe;text-align:center;margin-bottom:32px;\">" +
+                   $"<p style=\"margin:0;font-size:32px;font-weight:800;color:#0f172a;letter-spacing:0.16em;\">{otpCode}</p>" +
+                   $"<p style=\"margin:8px 0 0;font-size:14px;color:#475569;\">This code expires on {expiresAt:yyyy-MM-dd HH:mm} UTC.</p>" +
+                   "</div>" +
+                   "<p style=\"margin:0 0 18px;font-size:15px;color:#475569;\">Do not share this code with anyone else.</p>" +
+                   "<p style=\"margin:0;font-size:15px;color:#475569;\">If you did not request this access code, contact your institution administrator immediately.</p>" +
                    "</div>" +
                    "<div style=\"padding:24px 40px 32px;border-top:1px solid #e2e8f0;background:#fff;display:flex;align-items:center;gap:16px;\">" +
                    $"<div style=\"width:56px;height:56px;border-radius:16px;background:linear-gradient(135deg,#2563eb,#22c55e);display:flex;align-items:center;justify-content:center;\">" +

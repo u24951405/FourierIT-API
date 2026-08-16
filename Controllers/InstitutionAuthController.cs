@@ -113,7 +113,7 @@ namespace FourierIT_API.Controllers
 
             try
             {
-                await _emailService.SendOtpEmailAsync(invitation.Email, invitation.Institution.InstitutionName, otpCode, invitation.OtpExpiryTimeStamp);
+                await _emailService.SendInstitutionOtpEmailAsync(invitation.Email, invitation.Institution.InstitutionName, otpCode, invitation.OtpExpiryTimeStamp);
                 _logger.LogInformation("OTP sent for institution invitation {InvitationId}. Email={Email}, otp={Otp}",
                     invitation.InvitationId, invitation.Email, otpCode);
             }
@@ -241,7 +241,7 @@ namespace FourierIT_API.Controllers
 
             try
             {
-                await _emailService.SendOtpEmailAsync(invitation.Email, invitation.Institution?.InstitutionName ?? string.Empty, otpCode, invitation.OtpExpiryTimeStamp);
+                await _emailService.SendInstitutionOtpEmailAsync(invitation.Email, invitation.Institution?.InstitutionName ?? string.Empty, otpCode, invitation.OtpExpiryTimeStamp);
                 _logger.LogInformation("OTP resent for institution invitation {InvitationId}. Email={Email}, otp={Otp}",
                     invitation.InvitationId, invitation.Email, otpCode);
             }

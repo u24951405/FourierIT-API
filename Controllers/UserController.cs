@@ -400,7 +400,7 @@ namespace FourierIT_API.Controllers
 
                 try
                 {
-                    await _emailService.SendOtpEmailAsync(newUser.Email ?? string.Empty, "DocuVault", otpCode, otpExpiry);
+                    await _emailService.SendUserRegistrationOtpEmailAsync(newUser.Email ?? string.Empty, otpCode, otpExpiry);
                 }
                 catch
                 {

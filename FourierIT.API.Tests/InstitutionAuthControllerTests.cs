@@ -63,7 +63,7 @@ public class InstitutionAuthControllerTests
         string? capturedOtp = null;
         var emailServiceMock = new Mock<IEmailService>();
         emailServiceMock
-            .Setup(x => x.SendOtpEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTimeOffset>()))
+            .Setup(x => x.SendInstitutionOtpEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTimeOffset>()))
             .Callback<string, string, string, DateTimeOffset>((_, _, otp, _) => capturedOtp = otp)
             .Returns(Task.CompletedTask);
 
