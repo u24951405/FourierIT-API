@@ -30,6 +30,7 @@ namespace FourierIT_API.Controllers
         private readonly IConfiguration _configuration;
         private readonly IAuditLogService _auditLogService;
         private readonly IEmailService _emailService;
+        private readonly IFileScanService _fileScanService;
 
         public UserController(
             UserManager<User> userManager,
@@ -40,7 +41,8 @@ namespace FourierIT_API.Controllers
             IEntityVerificationService entityVerificationService,
             IConfiguration configuration,
             IAuditLogService auditLogService,
-            IEmailService emailService)
+            IEmailService emailService,
+            IFileScanService fileScanService)
         {
             _userManager = userManager;
             _tokenService = tokenService;
@@ -51,6 +53,7 @@ namespace FourierIT_API.Controllers
             _configuration = configuration;
             _auditLogService = auditLogService;
             _emailService = emailService;
+            _fileScanService = fileScanService;
         }
 
         [AllowAnonymous]
@@ -143,7 +146,10 @@ namespace FourierIT_API.Controllers
                 return Unauthorized(new { error = "Invalid token." });
 
             var roles = (await _userManager.GetRolesAsync(user)).ToList();
-            var profile = await _context.Profiles.AsNoTracking().FirstOrDefaultAsync(p => p.UserId == user.Id);
+            var profile = await _context.Profiles
+                .AsNoTracking()
+                .Include(p => p.ProfileImageBlob)
+                .FirstOrDefaultAsync(p => p.UserId == user.Id);
 
             var department = user.DepartmentId.HasValue
                 ? await _context.Departments.AsNoTracking().FirstOrDefaultAsync(d => d.DepartmentId == user.DepartmentId.Value)
@@ -163,11 +169,121 @@ namespace FourierIT_API.Controllers
                 ProfilePhoneNumber = profile?.PhoneNumber,
                 JobTitle = profile?.JobTitle,
                 DateOfBirth = profile?.DateOfBirth,
+                ProfileImageUrl = profile?.ProfileImageBlob != null
+                    ? BuildProfileImageUrl(user.Id)
+                    : null,
                 DepartmentId = user.DepartmentId,
                 DepartmentName = department?.DepartmentName
             };
 
             return Ok(dto);
+        }
+
+        [Authorize]
+        [HttpPost("profile-image")]
+        [RequestSizeLimit(5 * 1024 * 1024)]
+        public async Task<IActionResult> UploadProfileImage([FromForm] IFormFile file)
+        {
+            var user = await ResolveCurrentUserAsync();
+            if (user == null) return Unauthorized(new { error = "Invalid token." });
+            if (file == null || file.Length == 0)
+                return BadRequest(new { error = "An image file is required." });
+            if (file.Length > 5 * 1024 * 1024)
+                return BadRequest(new { error = "Profile images must be 5 MB or smaller." });
+
+            var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+            var mimeType = extension switch
+            {
+                ".jpg" or ".jpeg" when file.ContentType.Equals("image/jpeg", StringComparison.OrdinalIgnoreCase) => "image/jpeg",
+                ".png" when file.ContentType.Equals("image/png", StringComparison.OrdinalIgnoreCase) => "image/png",
+                ".webp" when file.ContentType.Equals("image/webp", StringComparison.OrdinalIgnoreCase) => "image/webp",
+                _ => string.Empty
+            };
+
+            if (string.IsNullOrEmpty(mimeType))
+                return BadRequest(new { error = "Only JPG, PNG, and WebP images are supported." });
+
+            await using var stream = new MemoryStream();
+            await file.CopyToAsync(stream);
+            var fileData = stream.ToArray();
+            stream.Position = 0;
+            var scanResult = await _fileScanService.ScanFileAsync(stream);
+            if (!scanResult.IsClean)
+                return BadRequest(new { error = scanResult.Message });
+
+            var profile = await _context.Profiles.FirstOrDefaultAsync(p => p.UserId == user.Id);
+            if (profile == null)
+            {
+                profile = new Profile
+                {
+                    UserId = user.Id,
+                    FirstName = user.UserName ?? "User",
+                    LastName = "",
+                    DateOfBirth = DateOnly.FromDateTime(DateTime.UtcNow.AddYears(-18)),
+                    PhoneNumber = string.Empty,
+                    JobTitle = string.Empty
+                };
+                _context.Profiles.Add(profile);
+                await _context.SaveChangesAsync();
+            }
+
+            var imageBlob = await _context.ProfileImageBlobs
+                .FirstOrDefaultAsync(blob => blob.ProfileId == profile.ProfileId);
+            if (imageBlob == null)
+            {
+                imageBlob = new ProfileImageBlob { ProfileId = profile.ProfileId };
+                _context.ProfileImageBlobs.Add(imageBlob);
+            }
+
+            imageBlob.FileData = fileData;
+            imageBlob.MimeType = mimeType;
+            imageBlob.FileHash = Convert.ToHexString(SHA256.HashData(fileData));
+            imageBlob.UploadedDate = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "Profile image uploaded successfully.",
+                imageUrl = BuildProfileImageUrl(user.Id)
+            });
+        }
+
+        [AllowAnonymous]
+        [HttpGet("profile-image/{userId}")]
+        public async Task<IActionResult> GetProfileImage(string userId)
+        {
+            var imageBlob = await _context.ProfileImageBlobs
+                .AsNoTracking()
+                .Include(blob => blob.Profile)
+                .FirstOrDefaultAsync(blob => blob.Profile.UserId == userId);
+
+            return imageBlob == null
+                ? NotFound()
+                : File(imageBlob.FileData, imageBlob.MimeType);
+        }
+
+        private string BuildProfileImageUrl(string userId) =>
+            $"{Request.Scheme}://{Request.Host}/api/user/profile-image/{Uri.EscapeDataString(userId)}";
+
+        [Authorize]
+        [HttpDelete("profile-image")]
+        public async Task<IActionResult> DeleteProfileImage()
+        {
+            var user = await ResolveCurrentUserAsync();
+            if (user == null) return Unauthorized(new { error = "Invalid token." });
+
+            var profile = await _context.Profiles.FirstOrDefaultAsync(p => p.UserId == user.Id);
+            if (profile == null) return NotFound(new { error = "Profile not found." });
+
+            var imageBlob = await _context.ProfileImageBlobs
+                .FirstOrDefaultAsync(blob => blob.ProfileId == profile.ProfileId);
+            if (imageBlob != null)
+            {
+                _context.ProfileImageBlobs.Remove(imageBlob);
+                await _context.SaveChangesAsync();
+            }
+
+            return Ok(new { message = "Profile image removed." });
         }
 
         private async Task<User?> ResolveCurrentUserAsync()
@@ -598,6 +714,7 @@ namespace FourierIT_API.Controllers
         }
 
         [Authorize(Roles = "Department Admin")]
+        [Authorize]
         [HttpPut("profile/{profileId}")]
         public async Task<IActionResult> UpdateManagedUser([FromRoute] int profileId, [FromBody] UpdateUserManagementRequestDto dto)
         {
@@ -608,10 +725,13 @@ namespace FourierIT_API.Controllers
 
             var user = profile.User ?? await _userManager.FindByIdAsync(profile.UserId);
             if (user == null) return NotFound(new { error = "User not found for the profile." });
-            if (IsSuperAdminUser(user)) return BadRequest(new { error = "The Super Admin account cannot be edited." });
+            var currentUser = await ResolveCurrentUserAsync();
+            var isSelfEdit = currentUser?.Id == user.Id;
+            if (!isSelfEdit && !User.IsInRole("Admin") && !User.IsInRole("Department Admin"))
+                return Forbid();
 
             var roleName = dto.Role.Trim();
-            if (!await _roleManager.RoleExistsAsync(roleName))
+            if (!isSelfEdit && !await _roleManager.RoleExistsAsync(roleName))
             {
                 var allowedRoles = await _context.Roles.Select(r => r.Name).ToListAsync();
                 return BadRequest(new { error = "Invalid role", allowedRoles });
@@ -629,12 +749,15 @@ namespace FourierIT_API.Controllers
             var userUpdateResult = await _userManager.UpdateAsync(user);
             if (!userUpdateResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, userUpdateResult.Errors);
 
-            var existingRoles = await _userManager.GetRolesAsync(user);
-            var removeRolesResult = await _userManager.RemoveFromRolesAsync(user, existingRoles);
-            if (!removeRolesResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, removeRolesResult.Errors);
+            if (!isSelfEdit)
+            {
+                var existingRoles = await _userManager.GetRolesAsync(user);
+                var removeRolesResult = await _userManager.RemoveFromRolesAsync(user, existingRoles);
+                if (!removeRolesResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, removeRolesResult.Errors);
 
-            var addRoleResult = await _userManager.AddToRoleAsync(user, roleName);
-            if (!addRoleResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, addRoleResult.Errors);
+                var addRoleResult = await _userManager.AddToRoleAsync(user, roleName);
+                if (!addRoleResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, addRoleResult.Errors);
+            }
 
             await _context.SaveChangesAsync();
             return Ok(new { message = "User and profile updated." });

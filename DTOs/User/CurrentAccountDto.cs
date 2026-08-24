@@ -14,6 +14,7 @@ namespace FourierIT_API.DTOs.User
         public string? ProfilePhoneNumber { get; set; }
         public string? JobTitle { get; set; }
         public DateOnly? DateOfBirth { get; set; }
+        public string? ProfileImageUrl { get; set; }
         public int? DepartmentId { get; set; }
         public string? DepartmentName { get; set; }
     }

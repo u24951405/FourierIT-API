@@ -23,7 +23,6 @@ namespace FourierIT_API.DTOs.User
         [EmailAddress]
         public string EmailAddress { get; set; } = string.Empty;
 
-        [Required]
         public string Role { get; set; } = string.Empty;
 
         public string AccountStatus { get; set; } = "Active";

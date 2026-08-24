@@ -29,6 +29,7 @@ namespace FourierIT_API.Data
         public DbSet<DocumentType> DocumentTypes { get; set; }
         public DbSet<DepartmentDocumentType> DepartmentDocumentTypes { get; set; }
         public DbSet<DocumentBlob> DocumentBlobs { get; set; }
+        public DbSet<ProfileImageBlob> ProfileImageBlobs { get; set; }
         public DbSet<BlobHistory> BlobHistories { get; set; }
         public DbSet<FICARule> FICARules { get; set; }
         public DbSet<DocumentFicaRule> DocumentFicaRules { get; set; }
@@ -268,6 +269,12 @@ namespace FourierIT_API.Data
             modelBuilder.Entity<Profile>()
                 .HasIndex(p => p.UserId)
                 .IsUnique();
+
+            modelBuilder.Entity<Profile>()
+                .HasOne(p => p.ProfileImageBlob)
+                .WithOne(b => b.Profile)
+                .HasForeignKey<ProfileImageBlob>(b => b.ProfileId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             // Configure Address-Profile one-to-one relationship
             modelBuilder.Entity<Address>()

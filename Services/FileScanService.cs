@@ -62,6 +62,7 @@ namespace FourierIT_API.Services
             (new byte[] { 0x49, 0x49, 0x2A, 0x00 }, 0), // TIFF little-endian
             (new byte[] { 0x4D, 0x4D, 0x00, 0x2A }, 0), // TIFF big-endian
             (new byte[] { 0x50, 0x4B, 0x03, 0x04 }, 0), // ZIP / DOCX / XLSX / PPTX
+            (new byte[] { 0x57, 0x45, 0x42, 0x50 }, 8), // WEBP
         };
 
         private async Task<FileScanResult> ValidateMagicBytesAsync(Stream file)
