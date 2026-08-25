@@ -21,10 +21,17 @@ namespace FourierIT_API.Interfaces
         // ===== DASHBOARD =====
         Task<ComplianceDashboardDto> GetSystemDashboardAsync();
         Task<ComplianceDashboardDto> GetDepartmentDashboardAsync(int departmentId);
+        Task<ComplianceDashboardSnapshotDto> GetSystemDashboardSnapshotAsync();
+        Task<ComplianceDashboardSnapshotDto> GetDepartmentDashboardSnapshotAsync(int departmentId);
+        Task<ComplianceDashboardSnapshotDto> GetUserDashboardSnapshotAsync(string userId);
         Task<ComplianceStatisticsDto> GetComplianceStatisticsAsync(DateTime? startDate = null, DateTime? endDate = null);
 
         // ===== DOCUMENT CHECKS =====
-        Task<DocumentComplianceCheck> PerformDocumentCheckAsync(int documentId, int complianceStatusId);
+        Task<DocumentComplianceCheck> PerformDocumentCheckAsync(
+            int documentId,
+            int complianceStatusId,
+            int warningThresholdDays,
+            int maxMonthsOld);
         Task<List<DocumentComplianceIssueDto>> GetDocumentIssuesAsync(string userId);
         Task<List<MissingDocumentDto>> IdentifyMissingDocumentsAsync(string userId);
 

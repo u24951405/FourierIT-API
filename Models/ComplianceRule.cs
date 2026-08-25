@@ -21,6 +21,8 @@ namespace FourierIT_API.Models
 
         public int? ExpiryPeriodDays { get; set; }
 
+        public int? WarningThresholdDays { get; set; }
+
         [StringLength(500)]
         public string ValidationRules { get; set; } = string.Empty;
 

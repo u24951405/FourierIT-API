@@ -21,6 +21,16 @@ namespace FourierIT_API.DTOs.Compliance
         public int TotalDocumentsChecked { get; set; }
         public int TotalCompliantDocuments { get; set; }
 
+        // Department document totals
+        public int? TotalUploaded { get; set; }
+        public int? TotalVerified { get; set; }
+        public int? TotalRejected { get; set; }
+        public int? TotalMissing { get; set; }
+        public int? TotalPendingReview { get; set; }
+        public int? TotalExpiringSoon { get; set; }
+        public int? TotalExpired { get; set; }
+        public int? WarningThresholdDays { get; set; }
+
         // Risk Metrics
         public int CriticalRiskUsers { get; set; }
         public int HighRiskUsers { get; set; }
@@ -94,6 +104,7 @@ namespace FourierIT_API.DTOs.Compliance
         public int CompliancePercentage { get; set; }
         public decimal ComplianceScore { get; set; }
         public int RiskScore { get; set; }
+        public int? WarningThresholdDays { get; set; }
 
         // Flags
         public bool RequiresEnhancedDueDiligence { get; set; }
@@ -289,5 +300,11 @@ namespace FourierIT_API.DTOs.Compliance
         public int AlertId { get; set; }
         public string ResolutionNotes { get; set; } = string.Empty;
         public bool ActionTaken { get; set; } = false;
+    }
+
+    public class ComplianceDecisionDto
+    {
+        public bool Approved { get; set; }
+        public string Reason { get; set; } = string.Empty;
     }
 }

@@ -23,6 +23,14 @@ namespace FourierIT_API.Models
         [Required]
         public bool IsCertified { get; set; } = false;
 
+        [Required]
+        public bool IsManualOverrideActive { get; set; } = false;
+
+        public string? ManualOverrideBy { get; set; }
+
+        public DateTime? ManualOverrideAt { get; set; }
+
+        public string? ManualOverrideReason { get; set; }
 
         [Required]
         public long FileSizeBytes { get; set; }

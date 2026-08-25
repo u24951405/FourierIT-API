@@ -124,7 +124,7 @@ namespace FourierIT_API.Controllers
                 if (currentUserId != userId && !User.IsInRole("Admin") && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
                     return Forbid();
 
-                await _complianceService.CheckUserComplianceAsync(userId);
+                await _complianceService.CheckUserComplianceAsync(userId, false);
                 var details = await _complianceService.GetUserComplianceDetailsAsync(userId);
                 return Ok(new { success = true, data = details });
             }
@@ -217,6 +217,61 @@ namespace FourierIT_API.Controllers
             }
         }
 
+        [HttpGet("dashboard-snapshot")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> GetSystemDashboardSnapshot()
+        {
+            try
+            {
+                var snapshot = await _complianceService.GetSystemDashboardSnapshotAsync();
+                return Ok(new { success = true, data = snapshot });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error: {ex.Message}");
+                return BadRequest(new { success = false, error = ex.Message });
+            }
+        }
+
+        [HttpGet("departments/{departmentId}/dashboard-snapshot")]
+        [Authorize(Roles = "Admin,Department Admin,Stakeholder")]
+        public async Task<IActionResult> GetDepartmentDashboardSnapshot(int departmentId)
+        {
+            try
+            {
+                if (!await UserCanAccessDepartmentAsync(departmentId))
+                    return Forbid();
+
+                var snapshot = await _complianceService.GetDepartmentDashboardSnapshotAsync(departmentId);
+                return Ok(new { success = true, data = snapshot });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error: {ex.Message}");
+                return BadRequest(new { success = false, error = ex.Message });
+            }
+        }
+
+        [HttpGet("users/{userId}/dashboard-snapshot")]
+        [Authorize]
+        public async Task<IActionResult> GetUserDashboardSnapshot(string userId)
+        {
+            try
+            {
+                var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (currentUserId != userId && !User.IsInRole("Admin") && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
+                    return Forbid();
+
+                var snapshot = await _complianceService.GetUserDashboardSnapshotAsync(userId);
+                return Ok(new { success = true, data = snapshot });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Error: {ex.Message}");
+                return BadRequest(new { success = false, error = ex.Message });
+            }
+        }
+
         /// <summary>
         /// Get compliance statistics
         /// </summary>
@@ -251,7 +306,7 @@ namespace FourierIT_API.Controllers
                 if (currentUserId != userId && !User.IsInRole("Admin") && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
                     return Forbid();
 
-                await _complianceService.CheckUserComplianceAsync(userId);
+                await _complianceService.CheckUserComplianceAsync(userId, false);
                 var issues = await _complianceService.GetDocumentIssuesAsync(userId);
                 return Ok(new { success = true, count = issues.Count, data = issues });
             }
@@ -275,7 +330,7 @@ namespace FourierIT_API.Controllers
                 if (currentUserId != userId && !User.IsInRole("Admin") && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
                     return Forbid();
 
-                await _complianceService.CheckUserComplianceAsync(userId);
+                await _complianceService.CheckUserComplianceAsync(userId, false);
                 var missing = await _complianceService.IdentifyMissingDocumentsAsync(userId);
                 return Ok(new { success = true, count = missing.Count, data = missing });
             }
@@ -392,7 +447,7 @@ namespace FourierIT_API.Controllers
         /// Approve document compliance
         /// </summary>
         [HttpPost("documents/{checkId}/approve")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Roles = "Admin,Department Admin,Compliance Officer")]
         public async Task<IActionResult> ApproveDocumentCompliance(int checkId, [FromBody] ApproveDocumentComplianceDto request)
         {
             try
@@ -418,7 +473,7 @@ namespace FourierIT_API.Controllers
         /// Reject document compliance
         /// </summary>
         [HttpPost("documents/{checkId}/reject")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Roles = "Admin,Department Admin,Compliance Officer")]
         public async Task<IActionResult> RejectDocumentCompliance(int checkId, [FromBody] ApproveDocumentComplianceDto request)
         {
             try
@@ -550,13 +605,56 @@ namespace FourierIT_API.Controllers
         /// Get documents pending manual review
         /// </summary>
         [HttpGet("documents/pending-review")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Roles = "Admin,Department Admin,Compliance Officer")]
         public async Task<IActionResult> GetPendingManualReviews()
         {
             try
             {
                 var documents = await _complianceService.GetPendingManualReviewsAsync();
-                return Ok(new { success = true, count = documents.Count, data = documents });
+                var data = documents.Select(check =>
+                {
+                    var user = check.Document?.User;
+                    var profileName = user?.Profile == null
+                        ? string.Empty
+                        : string.Join(" ", new[] { user.Profile.FirstName, user.Profile.LastName }
+                            .Where(name => !string.IsNullOrWhiteSpace(name)));
+
+                    return new
+                    {
+                        checkId = check.CheckId,
+                        documentId = check.DocumentId,
+                        document = check.Document == null
+                            ? null
+                            : new
+                            {
+                                fileName = check.Document.FileName,
+                                documentType = check.Document.DocumentType == null
+                                    ? null
+                                    : new { typeName = check.Document.DocumentType.TypeName }
+                            },
+                        fileName = check.Document?.FileName,
+                        checkStatus = check.CheckStatus,
+                        nonComplianceReason = check.NonComplianceReason,
+                        manualReviewReason = check.ManualReviewReason,
+                        qualityScore = check.QualityScore,
+                        checkedAt = check.CheckedAt,
+                        uploadedDate = check.Document?.UploadedDate,
+                        ownerUserId = check.Document?.UserId,
+                        ownerName = string.IsNullOrWhiteSpace(profileName)
+                            ? user?.UserName
+                            : profileName,
+                        departmentName = user?.Department?.DepartmentName,
+                        isExpiryValid = check.IsExpiryValid,
+                        daysUntilExpiry = check.DaysUntilExpiry,
+                        isCertified = check.IsCertified,
+                        isRecent = check.IsRecent,
+                        requiresManualReview = check.RequiresManualReview,
+                        remediationAction = check.RemediationAction,
+                        actionDueDate = check.ActionDueDate
+                    };
+                }).ToList();
+
+                return Ok(new { success = true, count = data.Count, data });
             }
             catch (Exception ex)
             {
@@ -580,7 +678,7 @@ namespace FourierIT_API.Controllers
                 if (currentUserId != userId && !User.IsInRole("Admin"))
                     return Forbid();
 
-                await _complianceService.CheckUserComplianceAsync(userId);
+                await _complianceService.CheckUserComplianceAsync(userId, false);
                 var status = await _complianceService.GetComplianceHistoryAsync(userId, limit);
                 return Ok(new { success = true, count = status.Count, data = status });
             }
