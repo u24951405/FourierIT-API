@@ -26,6 +26,7 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
         options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
         options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+        options.JsonSerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
             // Allow enums to be sent/received as strings (e.g. "OTP_SENT") from the frontend
             options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
     });
@@ -239,6 +240,7 @@ if (runDbInit)
 
     if (runDevSeed)
     {
+        await DevLookupSeed.EnsureRolesExistAsync(db);
         await DevLookupSeed.EnsureBranchesExistAsync(db);
         await DevLookupSeed.EnsureDepartmentsAndRequirementsAsync(db);
     }

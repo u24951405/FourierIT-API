@@ -6,6 +6,11 @@ namespace FourierIT_API.Data
     /// <summary>Ensures minimum lookup rows exist so departments can reference a valid Branch (development convenience).</summary>
     public static class DevLookupSeed
     {
+        private static readonly (string Id, string Name)[] DevelopmentRoles =
+        {
+            ("CFO", "ComplianceOfficer")
+        };
+
         /// <summary>Financial-sector institution types for <c>InstitutionType</c> (inserted when missing).</summary>
         private static readonly string[] FinancialInstitutionTypeNames =
         {
@@ -147,6 +152,37 @@ namespace FourierIT_API.Data
             if (requirements.Count > 0)
             {
                 db.DepartmentDocumentTypes.AddRange(requirements);
+                await db.SaveChangesAsync(ct);
+            }
+        }
+
+        public static async Task EnsureRolesExistAsync(AppDbContext db, CancellationToken ct = default)
+        {
+            var existingRoleNames = await db.Roles
+                .AsNoTracking()
+                .Select(r => r.Name ?? string.Empty)
+                .ToListAsync(ct);
+
+            var existingRoleSet = existingRoleNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var rolesToAdd = new List<Role>();
+
+            foreach (var (id, name) in DevelopmentRoles)
+            {
+                if (!existingRoleSet.Contains(name))
+                {
+                    rolesToAdd.Add(new Role
+                    {
+                        Id = id,
+                        Name = name,
+                        NormalizedName = name.ToUpperInvariant()
+                    });
+                    existingRoleSet.Add(name);
+                }
+            }
+
+            if (rolesToAdd.Count > 0)
+            {
+                db.Roles.AddRange(rolesToAdd);
                 await db.SaveChangesAsync(ct);
             }
         }

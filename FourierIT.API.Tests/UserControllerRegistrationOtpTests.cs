@@ -93,6 +93,9 @@ public class UserControllerRegistrationOtpTests
         var emailService = new Mock<IEmailService>();
         emailService.Setup(x => x.SendUserRegistrationOtpEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<DateTimeOffset>()))
             .Returns(Task.CompletedTask);
+        var fileScanService = new Mock<IFileScanService>();
+        fileScanService.Setup(x => x.ScanFileAsync(It.IsAny<Stream>()))
+            .ReturnsAsync(FileScanResult.Clean());
 
         var controller = new UserController(
             userManager.Object,
@@ -103,7 +106,8 @@ public class UserControllerRegistrationOtpTests
             entityVerificationService.Object,
             configuration,
             auditLogService.Object,
-            emailService.Object);
+            emailService.Object,
+            fileScanService.Object);
 
         var registerResult = await controller.Register(new UserDto
         {
