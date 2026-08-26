@@ -6,6 +6,7 @@ using FourierIT_API.Security;
 using FourierIT_API.Service;
 using FourierIT_API.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
@@ -20,6 +21,8 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
@@ -29,6 +32,29 @@ builder.Services.AddControllers()
             // Allow enums to be sent/received as strings (e.g. "OTP_SENT") from the frontend
             options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
     });
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
+    options.InvalidModelStateResponseFactory = context =>
+    {
+        var traceId = context.HttpContext.TraceIdentifier;
+        var errors = context.ModelState
+            .Where(entry => entry.Value?.Errors.Count > 0)
+            .ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value!.Errors.Select(error =>
+                    string.IsNullOrWhiteSpace(error.ErrorMessage)
+                        ? "The supplied value is invalid."
+                        : error.ErrorMessage).ToArray());
+
+        return new BadRequestObjectResult(new
+        {
+            message = "One or more validation errors occurred.",
+            statusCode = StatusCodes.Status400BadRequest,
+            traceId,
+            errors
+        });
+    };
+});
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AngularClient", policy =>
@@ -154,16 +180,28 @@ builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("SuperAdminOnly", policy =>
         policy.RequireClaim("superadmin", "true"));
+
+    foreach (var permission in new[]
+    {
+        "Documents.View", "Documents.Upload", "Documents.Manage", "Compliance.View",
+        "Compliance.Manage", "Users.Manage", "Roles.Manage", "Reports.View",
+        "Audit.View", "Backup.Manage"
+    })
+    {
+        options.AddPolicy(permission, policy => policy.Requirements.Add(new PermissionRequirement(permission)));
+    }
 });
 
 builder.Services.AddScoped<ITokenService, TokenService>();
 builder.Services.AddScoped<DepartmentRequestValidationService>();
 // Register SuperAdmin authorization handler so the seeded Super Admin user bypasses role-based checks
 builder.Services.AddSingleton<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, FourierIT_API.Security.SuperAdminRoleHandler>();
+builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, PermissionAuthorizationHandler>();
 
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
+app.UseExceptionHandler();
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -179,7 +217,8 @@ app.MapControllers();
 // Startup database initialization is intentionally configurable to avoid
 // expensive startup delays on every API run.
 var runDbInit = builder.Configuration.GetValue("StartupTasks:RunDatabaseInitialization", builder.Environment.IsDevelopment());
-var runDevSeed = builder.Configuration.GetValue("StartupTasks:RunDevSeed", builder.Environment.IsDevelopment());
+var runDevSeed = builder.Environment.IsDevelopment()
+    && builder.Configuration.GetValue("StartupTasks:RunDevSeed", false);
 
 if (runDbInit)
 {
@@ -241,6 +280,12 @@ if (runDbInit)
     {
         await DevLookupSeed.EnsureBranchesExistAsync(db);
         await DevLookupSeed.EnsureDepartmentsAndRequirementsAsync(db);
+            await DevelopmentDataSeeder.SeedAsync(
+                db,
+                scope.ServiceProvider.GetRequiredService<UserManager<User>>(),
+                scope.ServiceProvider.GetRequiredService<RoleManager<Role>>(),
+                scope.ServiceProvider.GetRequiredService<IDocumentService>(),
+                scope.ServiceProvider.GetRequiredService<IComplianceService>());
     }
 
     startupTimer.Stop();

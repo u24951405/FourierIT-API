@@ -37,4 +37,12 @@
         /// </summary>
         public string ReferenceNumber { get; set; } = string.Empty;
     }
+
+    public class UpdateInstitutionDocumentRequestDto
+    {
+        public string PurposeNote { get; set; } = string.Empty;
+        public List<RequestedDocumentTypeDto> RequestedDocuments { get; set; } = new();
+        public DateTimeOffset? SubmissionDeadline { get; set; }
+        public string ReferenceNumber { get; set; } = string.Empty;
+    }
 }

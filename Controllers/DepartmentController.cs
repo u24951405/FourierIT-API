@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Linq;
 
 namespace FourierIT_API.Controllers
 {
@@ -74,7 +75,7 @@ namespace FourierIT_API.Controllers
             return Ok(department.ToDepartmentDto());
         }
 
-        [Authorize(Roles = "Super Admin")]
+        [Authorize(Policy = "Users.Manage")]
         [HttpPost]
         public async Task<IActionResult> create([FromBody] CreateDepartmentRequestDto DepartmentDto)
         {
@@ -90,8 +91,128 @@ namespace FourierIT_API.Controllers
             return CreatedAtAction(nameof(GetById), new { DepartmentId = departmentModel.DepartmentId }, departmentModel.ToDepartmentDto());
         }
 
+        [Authorize(Policy = "Users.Manage")]
+        [HttpGet("hierarchy")]
+        public async Task<IActionResult> GetHierarchy()
+        {
+            var allDepartments = await _context.Departments
+                .AsNoTracking()
+                .OrderBy(d => d.DepartmentName)
+                .ToListAsync();
 
-        [Authorize(Roles = "Department Admin")]
+            var roots = allDepartments
+                .Where(d => d.ParentId == null)
+                .Select(d => BuildHierarchyNode(d, allDepartments))
+                .ToList();
+
+            return Ok(roots);
+        }
+
+        [Authorize(Policy = "Users.Manage")]
+        [HttpPost("hierarchy")]
+        public async Task<IActionResult> CreateHierarchyNode([FromBody] DepartmentHierarchyRequestDto request)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            if (string.IsNullOrWhiteSpace(request.DepartmentName))
+                return BadRequest(new { error = "Department name is required." });
+
+            if (!await _context.Branches.AnyAsync(b => b.BranchId == request.BranchId))
+                return BadRequest(new { error = "Invalid branch. Select an existing branch." });
+
+            if (request.ParentId.HasValue && request.ParentId.Value <= 0)
+                return BadRequest(new { error = "Parent department is invalid." });
+
+            if (request.ParentId.HasValue && !await _context.Departments.AnyAsync(d => d.DepartmentId == request.ParentId.Value))
+                return BadRequest(new { error = "Parent department was not found." });
+
+            var department = new Department
+            {
+                DepartmentName = request.DepartmentName.Trim(),
+                BranchId = request.BranchId,
+                ParentId = request.ParentId,
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+
+            await _context.Departments.AddAsync(department);
+            await _context.SaveChangesAsync();
+
+            var allDepartments = await _context.Departments.AsNoTracking().ToListAsync();
+            return Ok(BuildHierarchyNode(department, allDepartments));
+        }
+
+        [Authorize(Policy = "Users.Manage")]
+        [HttpPut("hierarchy/{departmentId:int}")]
+        public async Task<IActionResult> UpdateHierarchyNode([FromRoute] int departmentId, [FromBody] DepartmentHierarchyRequestDto request)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var department = await _context.Departments
+                .Include(d => d.Children)
+                .FirstOrDefaultAsync(d => d.DepartmentId == departmentId);
+
+            if (department == null)
+                return NotFound(new { error = "Department not found." });
+
+            if (string.IsNullOrWhiteSpace(request.DepartmentName))
+                return BadRequest(new { error = "Department name is required." });
+
+            if (!await _context.Branches.AnyAsync(b => b.BranchId == request.BranchId))
+                return BadRequest(new { error = "Invalid branch. Select an existing branch." });
+
+            if (request.ParentId == departmentId)
+                return BadRequest(new { error = "A department cannot be its own parent." });
+
+            if (request.ParentId.HasValue && request.ParentId.Value != department.ParentId)
+            {
+                var allDepartments = await _context.Departments.AsNoTracking().ToListAsync();
+                var targetParent = allDepartments.FirstOrDefault(d => d.DepartmentId == request.ParentId.Value);
+                if (targetParent == null)
+                    return BadRequest(new { error = "Parent department was not found." });
+
+                if (IsDescendantOf(departmentId, request.ParentId.Value, allDepartments))
+                    return BadRequest(new { error = "A department cannot be moved beneath one of its own children." });
+            }
+
+            department.DepartmentName = request.DepartmentName.Trim();
+            department.BranchId = request.BranchId;
+            department.ParentId = request.ParentId;
+
+            await _context.SaveChangesAsync();
+
+            var allDepartmentsAfter = await _context.Departments.AsNoTracking().ToListAsync();
+            return Ok(BuildHierarchyNode(department, allDepartmentsAfter));
+        }
+
+        [Authorize(Policy = "Users.Manage")]
+        [HttpDelete("hierarchy/{departmentId:int}")]
+        public async Task<IActionResult> DeleteHierarchyNode([FromRoute] int departmentId)
+        {
+            var department = await _context.Departments
+                .Include(d => d.Children)
+                .Include(d => d.DepartmentUsers)
+                .Include(d => d.DepartmentDocumentTypes)
+                .Include(d => d.ComplianceStatuses)
+                .FirstOrDefaultAsync(d => d.DepartmentId == departmentId);
+
+            if (department == null)
+                return NotFound(new { error = "Department not found." });
+
+            if (department.Children.Any() || department.DepartmentUsers.Any() || department.DepartmentDocumentTypes.Any() || department.ComplianceStatuses.Any())
+                return Conflict(new
+                {
+                    error = "Department cannot be deleted because it still has child departments, users, document assignments, or compliance records."
+                });
+
+            _context.Departments.Remove(department);
+            await _context.SaveChangesAsync();
+            return NoContent();
+        }
+
+
+        [Authorize(Policy = "Users.Manage")]
         [HttpPut]
         [Route("{DepartmentId}")]
         public async Task<IActionResult> Update([FromRoute] int DepartmentId, [FromBody] UpdateDepartmentRequestDto UpdateDto)
@@ -127,22 +248,78 @@ namespace FourierIT_API.Controllers
 
         }
 
-        [Authorize(Roles = "Super Admin")]
+        [Authorize(Policy = "Users.Manage")]
         [HttpDelete]
         [Route("{DepartmentId}")]
         public async Task<IActionResult> Delete([FromRoute] int DepartmentId)
         {
-            
-            var departmentModel =await _context.Departments.FirstOrDefaultAsync(x => x.DepartmentId == DepartmentId);
+            var departmentModel = await _context.Departments
+                .Include(d => d.Children)
+                .Include(d => d.DepartmentUsers)
+                .Include(d => d.DepartmentDocumentTypes)
+                .Include(d => d.ComplianceStatuses)
+                .FirstOrDefaultAsync(x => x.DepartmentId == DepartmentId);
+
             if (departmentModel == null)
             {
                 return NotFound();
             }
 
+            if (departmentModel.Children.Any() || departmentModel.DepartmentUsers.Any() || departmentModel.DepartmentDocumentTypes.Any() || departmentModel.ComplianceStatuses.Any())
+                return Conflict(new
+                {
+                    error = "Department cannot be deleted because it still has child departments, users, document assignments, or compliance records."
+                });
+
             //this removes the department which was deleted
             _context.Departments.Remove(departmentModel);
             await _context.SaveChangesAsync();
             return NoContent();
+        }
+
+        private static bool IsDescendantOf(int departmentId, int potentialParentId, IEnumerable<Department> allDepartments)
+        {
+            var visited = new HashSet<int>();
+            var queue = new Queue<int>();
+            queue.Enqueue(potentialParentId);
+
+            while (queue.Count > 0)
+            {
+                var currentId = queue.Dequeue();
+                if (!visited.Add(currentId))
+                    continue;
+
+                if (currentId == departmentId)
+                    return true;
+
+                var children = allDepartments
+                    .Where(d => d.ParentId == currentId)
+                    .Select(d => d.DepartmentId)
+                    .ToList();
+
+                foreach (var childId in children)
+                    queue.Enqueue(childId);
+            }
+
+            return false;
+        }
+
+        private static DepartmentHierarchyNodeDto BuildHierarchyNode(Department department, IEnumerable<Department> allDepartments)
+        {
+            var childNodes = allDepartments
+                .Where(d => d.ParentId == department.DepartmentId)
+                .OrderBy(d => d.DepartmentName)
+                .Select(d => BuildHierarchyNode(d, allDepartments))
+                .ToList();
+
+            return new DepartmentHierarchyNodeDto
+            {
+                DepartmentId = department.DepartmentId,
+                ParentId = department.ParentId,
+                DepartmentName = department.DepartmentName,
+                BranchId = department.BranchId,
+                Children = childNodes
+            };
         }
 
         /// <summary>

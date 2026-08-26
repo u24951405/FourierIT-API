@@ -107,7 +107,7 @@ namespace FourierIT_API.Controllers
 
             var otpCode = GenerateOtpCode();
             invitation.OtpCodeHash = HashValue(otpCode);
-            invitation.OtpExpiryTimeStamp = DateTimeOffset.UtcNow.AddMinutes(10);
+            invitation.OtpExpiryTimeStamp = DateTimeOffset.UtcNow.AddMinutes(await GetSettingMinutesAsync("InstitutionOtpExpiryMinutes", 10));
             invitation.OtpSendCount += 1;
             await _context.SaveChangesAsync();
 
@@ -149,9 +149,7 @@ namespace FourierIT_API.Controllers
             if (!int.TryParse(dto.InstitutionId, out var institutionId))
                 return BadRequest(new { error = "Invalid institution identifier." });
 
-            try
-            {
-                var invitation = await _context.InstitutionInvitations
+            var invitation = await _context.InstitutionInvitations
                     .FirstOrDefaultAsync(ii => ii.TokenString == dto.AccessToken && ii.InstitutionId == institutionId);
 
                 if (invitation == null)
@@ -179,7 +177,7 @@ namespace FourierIT_API.Controllers
                 invitation.OtpExpiryTimeStamp = DateTimeOffset.UtcNow;
 
                 var sessionToken = GenerateSessionToken();
-                var expiresAt = DateTimeOffset.UtcNow.AddHours(8);
+                var expiresAt = DateTimeOffset.UtcNow.AddMinutes(await GetSettingMinutesAsync("InstitutionSessionTimeoutMinutes", 480));
 
                 // Store session token in database
                 var sessionRecord = new InstitutionSessionToken
@@ -201,13 +199,7 @@ namespace FourierIT_API.Controllers
                     Message = "OTP verified successfully."
                 };
 
-                return Ok(response);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Unhandled exception during OTP verification for institution {InstitutionId}.", dto.InstitutionId);
-                return StatusCode(500, new { error = "An unexpected error occurred while verifying the OTP. Please try again." });
-            }
+            return Ok(response);
         }
 
         [AllowAnonymous]
@@ -235,7 +227,7 @@ namespace FourierIT_API.Controllers
 
             var otpCode = GenerateOtpCode();
             invitation.OtpCodeHash = HashValue(otpCode);
-            invitation.OtpExpiryTimeStamp = DateTimeOffset.UtcNow.AddMinutes(10);
+            invitation.OtpExpiryTimeStamp = DateTimeOffset.UtcNow.AddMinutes(await GetSettingMinutesAsync("InstitutionOtpExpiryMinutes", 10));
             invitation.OtpSendCount += 1;
             await _context.SaveChangesAsync();
 
@@ -307,6 +299,17 @@ namespace FourierIT_API.Controllers
             }
 
             return Ok(new { AccessToken = tokenString });
+        }
+
+        private async Task<int> GetSettingMinutesAsync(string key, int fallback)
+        {
+            var setting = await _context.SystemSettings
+                .AsNoTracking()
+                .SingleOrDefaultAsync(item => item.Key == key);
+
+            return int.TryParse(setting?.Value, out var minutes) && minutes > 0
+                ? minutes
+                : fallback;
         }
 
         private static string GenerateTokenString()

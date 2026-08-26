@@ -22,6 +22,40 @@ namespace FourierIT_API.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("FourierIT_API.DTOs.Compliance.InstitutionComplianceSummaryDto", b =>
+                {
+                    b.Property<string>("ComplianceStatus")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("InstitutionId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("InstitutionName")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("MissingDocumentTypeCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("MissingDocumentTypes")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("RequestCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("RequiredDocumentTypeCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("SubmittedOrApprovedDocumentTypeCount")
+                        .HasColumnType("int");
+
+                    b.ToTable((string)null);
+
+                    b.ToView(null, (string)null);
+                });
+
             modelBuilder.Entity("FourierIT_API.Models.AccessList", b =>
                 {
                     b.Property<int>("EnquiryRequestId")
@@ -79,6 +113,61 @@ namespace FourierIT_API.Migrations
                     b.ToTable("AccessTokens");
                 });
 
+            modelBuilder.Entity("FourierIT_API.Models.AdHocReport", b =>
+                {
+                    b.Property<int>("AdHocReportId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("AdHocReportId"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("CreatedByName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("CreatedByUserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<DateTime>("DateFrom")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("DateTo")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ExportFormat")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("FocusAreas")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<long>("SizeKb")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.HasKey("AdHocReportId");
+
+                    b.ToTable("AdHocReports");
+                });
+
             modelBuilder.Entity("FourierIT_API.Models.Address", b =>
                 {
                     b.Property<int>("AddressId")
@@ -126,6 +215,9 @@ namespace FourierIT_API.Migrations
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
 
+                    b.Property<int?>("InstitutionId")
+                        .HasColumnType("int");
+
                     b.Property<string>("PreviousBlockHash")
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
@@ -142,11 +234,14 @@ namespace FourierIT_API.Migrations
                         .HasColumnType("datetimeoffset");
 
                     b.Property<string>("UserId")
-                        .IsRequired()
                         .HasMaxLength(450)
                         .HasColumnType("nvarchar(450)");
 
                     b.HasKey("AuditLogId");
+
+                    b.HasIndex("InstitutionId");
+
+                    b.HasIndex("UserId");
 
                     b.ToTable("AuditLogs");
                 });
@@ -999,9 +1094,14 @@ namespace FourierIT_API.Migrations
                         .HasMaxLength(150)
                         .HasColumnType("nvarchar(150)");
 
+                    b.Property<int?>("ParentId")
+                        .HasColumnType("int");
+
                     b.HasKey("DepartmentId");
 
                     b.HasIndex("BranchId");
+
+                    b.HasIndex("ParentId");
 
                     b.ToTable("Departments");
                 });
@@ -1092,7 +1192,12 @@ namespace FourierIT_API.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Documents");
+                    b.ToTable("Documents", null, t =>
+                        {
+                            t.HasTrigger("TR_Documents_SetLastModifiedDate");
+                        });
+
+                    b.HasAnnotation("SqlServer:UseSqlOutputClause", false);
                 });
 
             modelBuilder.Entity("FourierIT_API.Models.DocumentAccess", b =>
@@ -1636,6 +1741,9 @@ namespace FourierIT_API.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<DateTimeOffset>("FlaggedAt")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<bool>("IsResolved")
                         .HasColumnType("bit");
 
@@ -2095,6 +2203,88 @@ namespace FourierIT_API.Migrations
                     b.ToTable("PEPLists");
                 });
 
+            modelBuilder.Entity("FourierIT_API.Models.PendingRegistration", b =>
+                {
+                    b.Property<int>("PendingRegistrationId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("PendingRegistrationId"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateOnly>("DateOfBirth")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("EntityIdentificationNumber")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int?>("EntityTypeId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("FirstName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("JobTitle")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("LastName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("NormalizedEmail")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("NormalizedUserName")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTimeOffset>("OtpExpiry")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("OtpHash")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("PhoneNumber")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("RequestedRolesJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("UserName")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.HasKey("PendingRegistrationId");
+
+                    b.ToTable("PendingRegistrations");
+                });
+
             modelBuilder.Entity("FourierIT_API.Models.Permission", b =>
                 {
                     b.Property<int>("PermissionId")
@@ -2111,6 +2301,58 @@ namespace FourierIT_API.Migrations
                     b.HasKey("PermissionId");
 
                     b.ToTable("Permissions");
+
+                    b.HasData(
+                        new
+                        {
+                            PermissionId = 1,
+                            PermissionKey = "Documents.View"
+                        },
+                        new
+                        {
+                            PermissionId = 2,
+                            PermissionKey = "Documents.Upload"
+                        },
+                        new
+                        {
+                            PermissionId = 3,
+                            PermissionKey = "Documents.Manage"
+                        },
+                        new
+                        {
+                            PermissionId = 4,
+                            PermissionKey = "Compliance.View"
+                        },
+                        new
+                        {
+                            PermissionId = 5,
+                            PermissionKey = "Compliance.Manage"
+                        },
+                        new
+                        {
+                            PermissionId = 6,
+                            PermissionKey = "Users.Manage"
+                        },
+                        new
+                        {
+                            PermissionId = 7,
+                            PermissionKey = "Roles.Manage"
+                        },
+                        new
+                        {
+                            PermissionId = 8,
+                            PermissionKey = "Reports.View"
+                        },
+                        new
+                        {
+                            PermissionId = 9,
+                            PermissionKey = "Audit.View"
+                        },
+                        new
+                        {
+                            PermissionId = 10,
+                            PermissionKey = "Backup.Manage"
+                        });
                 });
 
             modelBuilder.Entity("FourierIT_API.Models.Profile", b =>
@@ -2161,6 +2403,42 @@ namespace FourierIT_API.Migrations
                         .IsUnique();
 
                     b.ToTable("Profiles");
+                });
+
+            modelBuilder.Entity("FourierIT_API.Models.ProfileImageBlob", b =>
+                {
+                    b.Property<int>("ProfileImageBlobId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("ProfileImageBlobId"));
+
+                    b.Property<byte[]>("FileData")
+                        .IsRequired()
+                        .HasColumnType("varbinary(max)");
+
+                    b.Property<string>("FileHash")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<string>("MimeType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int>("ProfileId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("UploadedDate")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("ProfileImageBlobId");
+
+                    b.HasIndex("ProfileId")
+                        .IsUnique();
+
+                    b.ToTable("ProfileImageBlobs");
                 });
 
             modelBuilder.Entity("FourierIT_API.Models.Province", b =>
@@ -2541,6 +2819,138 @@ namespace FourierIT_API.Migrations
                     b.HasIndex("PermissionId");
 
                     b.ToTable("RolePermissions");
+
+                    b.HasData(
+                        new
+                        {
+                            RoleId = "AD",
+                            PermissionId = 1
+                        },
+                        new
+                        {
+                            RoleId = "AD",
+                            PermissionId = 2
+                        },
+                        new
+                        {
+                            RoleId = "AD",
+                            PermissionId = 3
+                        },
+                        new
+                        {
+                            RoleId = "AD",
+                            PermissionId = 4
+                        },
+                        new
+                        {
+                            RoleId = "AD",
+                            PermissionId = 5
+                        },
+                        new
+                        {
+                            RoleId = "AD",
+                            PermissionId = 6
+                        },
+                        new
+                        {
+                            RoleId = "AD",
+                            PermissionId = 7
+                        },
+                        new
+                        {
+                            RoleId = "AD",
+                            PermissionId = 8
+                        },
+                        new
+                        {
+                            RoleId = "AD",
+                            PermissionId = 9
+                        },
+                        new
+                        {
+                            RoleId = "AD",
+                            PermissionId = 10
+                        },
+                        new
+                        {
+                            RoleId = "DA",
+                            PermissionId = 1
+                        },
+                        new
+                        {
+                            RoleId = "DA",
+                            PermissionId = 2
+                        },
+                        new
+                        {
+                            RoleId = "DA",
+                            PermissionId = 3
+                        },
+                        new
+                        {
+                            RoleId = "DA",
+                            PermissionId = 4
+                        },
+                        new
+                        {
+                            RoleId = "DA",
+                            PermissionId = 5
+                        },
+                        new
+                        {
+                            RoleId = "DA",
+                            PermissionId = 6
+                        },
+                        new
+                        {
+                            RoleId = "DA",
+                            PermissionId = 7
+                        },
+                        new
+                        {
+                            RoleId = "DA",
+                            PermissionId = 8
+                        },
+                        new
+                        {
+                            RoleId = "DO",
+                            PermissionId = 1
+                        },
+                        new
+                        {
+                            RoleId = "DO",
+                            PermissionId = 2
+                        },
+                        new
+                        {
+                            RoleId = "CO",
+                            PermissionId = 1
+                        },
+                        new
+                        {
+                            RoleId = "CO",
+                            PermissionId = 4
+                        },
+                        new
+                        {
+                            RoleId = "CO",
+                            PermissionId = 5
+                        },
+                        new
+                        {
+                            RoleId = "CO",
+                            PermissionId = 8
+                        },
+                        new
+                        {
+                            RoleId = "SH",
+                            PermissionId = 1
+                        },
+                        new
+                        {
+                            RoleId = "SH",
+                            PermissionId = 4
+                        });
                 });
 
             modelBuilder.Entity("FourierIT_API.Models.SecurityQuestion", b =>
@@ -2585,6 +2995,41 @@ namespace FourierIT_API.Migrations
                     b.HasIndex("CityId");
 
                     b.ToTable("Suburbs");
+                });
+
+            modelBuilder.Entity("FourierIT_API.Models.SystemSetting", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(250)
+                        .HasColumnType("nvarchar(250)");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("SystemSettings");
+
+                    b.HasData(
+                        new
+                        {
+                            Key = "InstitutionOtpExpiryMinutes",
+                            Description = "Minutes before an institution portal OTP expires.",
+                            Value = "10"
+                        },
+                        new
+                        {
+                            Key = "InstitutionSessionTimeoutMinutes",
+                            Description = "Minutes before an institution portal session expires.",
+                            Value = "480"
+                        });
                 });
 
             modelBuilder.Entity("FourierIT_API.Models.User", b =>
@@ -2919,6 +3364,23 @@ namespace FourierIT_API.Migrations
                     b.Navigation("Suburb");
                 });
 
+            modelBuilder.Entity("FourierIT_API.Models.AuditLog", b =>
+                {
+                    b.HasOne("FourierIT_API.Models.Institution", "Institution")
+                        .WithMany()
+                        .HasForeignKey("InstitutionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("FourierIT_API.Models.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Institution");
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("FourierIT_API.Models.BlobHistory", b =>
                 {
                     b.HasOne("FourierIT_API.Models.DocumentBlob", "DocumentBlob")
@@ -3169,7 +3631,14 @@ namespace FourierIT_API.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("FourierIT_API.Models.Department", "Parent")
+                        .WithMany("Children")
+                        .HasForeignKey("ParentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.Navigation("Branch");
+
+                    b.Navigation("Parent");
                 });
 
             modelBuilder.Entity("FourierIT_API.Models.DepartmentDocumentType", b =>
@@ -3531,6 +4000,17 @@ namespace FourierIT_API.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("FourierIT_API.Models.ProfileImageBlob", b =>
+                {
+                    b.HasOne("FourierIT_API.Models.Profile", "Profile")
+                        .WithOne("ProfileImageBlob")
+                        .HasForeignKey("FourierIT_API.Models.ProfileImageBlob", "ProfileId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Profile");
+                });
+
             modelBuilder.Entity("FourierIT_API.Models.RequiredDocument", b =>
                 {
                     b.HasOne("FourierIT_API.Models.DocumentType", "DocumentType")
@@ -3780,6 +4260,8 @@ namespace FourierIT_API.Migrations
 
             modelBuilder.Entity("FourierIT_API.Models.Department", b =>
                 {
+                    b.Navigation("Children");
+
                     b.Navigation("ComplianceStatuses");
 
                     b.Navigation("DepartmentDocumentTypes");
@@ -3870,6 +4352,11 @@ namespace FourierIT_API.Migrations
             modelBuilder.Entity("FourierIT_API.Models.Permission", b =>
                 {
                     b.Navigation("RolePermissions");
+                });
+
+            modelBuilder.Entity("FourierIT_API.Models.Profile", b =>
+                {
+                    b.Navigation("ProfileImageBlob");
                 });
 
             modelBuilder.Entity("FourierIT_API.Models.Province", b =>

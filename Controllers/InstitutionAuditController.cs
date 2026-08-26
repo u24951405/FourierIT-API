@@ -41,7 +41,7 @@ namespace FourierIT_API.Controllers
 
                 await _auditLogService.CreateAuditLogAsync(new AuditLog
                 {
-                    UserId = string.IsNullOrWhiteSpace(entry.UserId) ? "portal" : entry.UserId,
+                    UserId = string.IsNullOrWhiteSpace(entry.UserId) ? null : entry.UserId,
                     ActionCode = entry.ActionType.ToString(),
                     TimeStamp = DateTimeOffset.TryParse(entry.Timestamp, out var parsed)
                         ? parsed

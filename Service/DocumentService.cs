@@ -127,6 +127,7 @@ namespace FourierIT_API.Service
                 FileName = fileName,
                 FileSizeBytes = fileData.Length,
                 UploadedDate = DateTime.UtcNow,
+                CurrentStatus = "Uploaded",
                 UserId = userId,
                 IsEncrypted = true,
                 EncryptionAlgorithm = "AES-256",

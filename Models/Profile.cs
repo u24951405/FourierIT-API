@@ -8,6 +8,7 @@ namespace FourierIT_API.Models
     public class Profile
     {
         [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
         public int ProfileId { get; set; }
 
         [Required]

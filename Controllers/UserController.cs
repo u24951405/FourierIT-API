@@ -14,6 +14,8 @@ using System.Net;
 using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Cryptography;
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace FourierIT_API.Controllers
 {
@@ -75,7 +77,7 @@ namespace FourierIT_API.Controllers
             {
                 await TryCreateAuditLogAsync(new AuditLog
                 {
-                    UserId = username,
+                    UserId = null,
                     ActionCode = "LOGIN_FAILURE",
                     TimeStamp = DateTimeOffset.UtcNow,
                     Description = "Failed login attempt with invalid username.",
@@ -368,9 +370,17 @@ namespace FourierIT_API.Controllers
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] UserDto userDto)
         {
-            try
+            if (!ModelState.IsValid) return BadRequest(ModelState);
+
+            var email = userDto.EmailAddress.Trim();
+            var normalizedEmail = email.ToUpperInvariant();
+            if (await _context.Users.AnyAsync(u => u.NormalizedEmail == normalizedEmail || u.Email == email))
             {
-                if (!ModelState.IsValid) return BadRequest(ModelState);
+                return Conflict(new
+                {
+                    error = "An account with this email address already exists. Please sign in or use a different email address."
+                });
+            }
 
                 // Build requested roles early so we can decide entity assignment and validate roles before creating the user
                 var requestedRoles = (userDto.Roles ?? new List<string>())
@@ -472,79 +482,68 @@ namespace FourierIT_API.Controllers
                 var otpCode = GenerateOtpCode();
                 var otpExpiry = DateTimeOffset.UtcNow.AddMinutes(15);
                 var otpHash = HashOtpCode(otpCode);
+                var pending = await _context.PendingRegistrations
+                    .FirstOrDefaultAsync(r => r.NormalizedEmail == normalizedEmail);
 
-                var newUser = new User
+                if (pending != null && pending.OtpExpiry <= DateTimeOffset.UtcNow)
                 {
-                    UserName = userDto.Username?.ToLower(),
-                    Email = userDto.EmailAddress?.Trim(),
-                    PhoneNumber = userDto.PhoneNumber,
-                    AccountStatus = "PendingVerification",
-                    EmailVerified = false,
-                    EmailVerificationCodeHash = otpHash,
-                    EmailVerificationExpiry = otpExpiry,
-                    EntityTypeId = userDto.EntityTypeId,
-                    EntityIdentificationNumber = verificationNumber ?? string.Empty
-                };
-
-                var createdUser = await _userManager.CreateAsync(newUser, userDto.Password);
-                if (!createdUser.Succeeded)
-                {
-                    return BadRequest(createdUser.Errors);
+                    _context.PendingRegistrations.Remove(pending);
+                    await _context.SaveChangesAsync();
+                    pending = null;
                 }
 
-                // Add roles (roles already validated)
-                var roleResult = await _userManager.AddToRolesAsync(newUser, requestedRoles);
-                if (!roleResult.Succeeded)
+                var passwordHash = _userManager.PasswordHasher.HashPassword(new User(), userDto.Password!);
+                if (pending == null)
                 {
-                    // Attempt cleanup: delete partially created user
-                    await _userManager.DeleteAsync(newUser);
-                    return StatusCode(StatusCodes.Status500InternalServerError, roleResult.Errors);
+                    pending = new PendingRegistration();
+                    _context.PendingRegistrations.Add(pending);
                 }
 
-                var profile = new Profile
-                {
-                    FirstName = userDto.FirstName ?? string.Empty,
-                    LastName = userDto.LastName ?? string.Empty,
-                    DateOfBirth = userDto.DateOfBirth,
-                    PhoneNumber = userDto.PhoneNumber ?? string.Empty,
-                    JobTitle = userDto.JobTitle ?? string.Empty,
-                    UserId = newUser.Id
-                };
-
-                _context.Profiles.Add(profile);
+                pending.Email = email;
+                pending.NormalizedEmail = normalizedEmail;
+                pending.UserName = userDto.Username.Trim().ToLowerInvariant();
+                pending.NormalizedUserName = pending.UserName.ToUpperInvariant();
+                pending.PasswordHash = passwordHash;
+                pending.FirstName = userDto.FirstName.Trim();
+                pending.LastName = userDto.LastName.Trim();
+                pending.DateOfBirth = userDto.DateOfBirth;
+                pending.PhoneNumber = userDto.PhoneNumber?.Trim() ?? string.Empty;
+                pending.JobTitle = userDto.JobTitle.Trim();
+                pending.EntityTypeId = userDto.EntityTypeId;
+                pending.EntityIdentificationNumber = verificationNumber ?? string.Empty;
+                pending.RequestedRolesJson = JsonSerializer.Serialize(requestedRoles);
+                pending.OtpHash = otpHash;
+                pending.OtpExpiry = otpExpiry;
+                pending.CreatedAt = DateTimeOffset.UtcNow;
                 await _context.SaveChangesAsync();
 
                 try
                 {
-                    await _emailService.SendUserRegistrationOtpEmailAsync(newUser.Email ?? string.Empty, otpCode, otpExpiry);
+                    await _emailService.SendUserRegistrationOtpEmailAsync(pending.Email, otpCode, otpExpiry);
                 }
                 catch
                 {
-                    await _userManager.DeleteAsync(newUser);
+                    _context.PendingRegistrations.Remove(pending);
+                    await _context.SaveChangesAsync();
                     throw;
                 }
 
                 await TryCreateAuditLogAsync(new AuditLog
                 {
-                    UserId = newUser.Id,
-                    ActionCode = "USER_REGISTERED_PENDING_VERIFICATION",
+                    UserId = null,
+                    ActionCode = "USER_REGISTRATION_PENDING_VERIFICATION",
                     TimeStamp = DateTimeOffset.UtcNow,
-                    Description = "New user registration created and awaiting email verification.",
-                    TableAffected = "Users",
+                    Description = "New pending registration created and awaiting email verification.",
+                    TableAffected = "PendingRegistrations",
                     RecordID = null
                 });
 
                 return Ok(new
                 {
                     message = "We sent a verification code to your email. Enter it to complete registration.",
-                    email = newUser.Email ?? string.Empty,
+                    email = pending.Email,
                     requiresVerification = true
                 });
-            }
-            catch (Exception ex)
-            {
-                return Problem(detail: ex.Message, title: "Registration failed", statusCode: StatusCodes.Status500InternalServerError);
-            }
         }
 
         [AllowAnonymous]
@@ -554,36 +553,93 @@ namespace FourierIT_API.Controllers
             if (!ModelState.IsValid) return BadRequest(ModelState);
 
             var email = request.EmailAddress?.Trim() ?? string.Empty;
-            var user = await _userManager.FindByEmailAsync(email);
-            if (user == null)
+            var pending = await _context.PendingRegistrations
+                .FirstOrDefaultAsync(r => r.NormalizedEmail == email.ToUpperInvariant());
+            if (pending == null)
             {
                 return BadRequest(new { error = "We could not find a pending registration for this email address." });
             }
 
-            if (user.EmailVerified)
+            if (pending.OtpExpiry <= DateTimeOffset.UtcNow)
             {
-                return Ok(new { message = "This account has already been verified." });
-            }
-
-            if (user.EmailVerificationExpiry is null || user.EmailVerificationExpiry.Value.UtcDateTime < DateTime.UtcNow)
-            {
+                _context.PendingRegistrations.Remove(pending);
+                await _context.SaveChangesAsync();
                 return BadRequest(new { error = "The verification code has expired. Please register again." });
             }
 
-            if (!VerifyOtpCode(request.Otp, user.EmailVerificationCodeHash, user))
+            if (!VerifyOtpCode(request.Otp, pending.OtpHash, new User()))
             {
                 return BadRequest(new { error = "The verification code is invalid." });
             }
 
-            user.EmailVerified = true;
-            user.AccountStatus = "Active";
-            user.EmailVerificationCodeHash = null;
-            user.EmailVerificationExpiry = null;
-
-            var updateResult = await _userManager.UpdateAsync(user);
-            if (!updateResult.Succeeded)
+            var requestedRoles = JsonSerializer.Deserialize<List<string>>(pending.RequestedRolesJson) ?? new List<string>();
+            var user = new User
             {
-                return StatusCode(StatusCodes.Status500InternalServerError, updateResult.Errors);
+                UserName = pending.UserName,
+                NormalizedUserName = pending.NormalizedUserName,
+                Email = pending.Email,
+                NormalizedEmail = pending.NormalizedEmail,
+                PasswordHash = pending.PasswordHash,
+                PhoneNumber = pending.PhoneNumber,
+                AccountStatus = "Active",
+                EmailVerified = true,
+                EntityTypeId = pending.EntityTypeId,
+                EntityIdentificationNumber = pending.EntityIdentificationNumber
+            };
+
+            var materializeResult = await _context.Database.CreateExecutionStrategy().ExecuteAsync(async () =>
+            {
+                await using var transaction = _context.Database.IsRelational()
+                    ? await _context.Database.BeginTransactionAsync()
+                    : null;
+
+                try
+                {
+                    var createResult = await _userManager.CreateAsync(user);
+                    if (!createResult.Succeeded)
+                    {
+                        return (Result: (IActionResult?)BadRequest(createResult.Errors), Commit: false);
+                    }
+
+                    var roleResult = await _userManager.AddToRolesAsync(user, requestedRoles);
+                    if (!roleResult.Succeeded)
+                    {
+                        return (Result: (IActionResult?)StatusCode(StatusCodes.Status500InternalServerError, roleResult.Errors), Commit: false);
+                    }
+
+                    _context.Profiles.Add(new Profile
+                    {
+                        FirstName = pending.FirstName,
+                        LastName = pending.LastName,
+                        DateOfBirth = pending.DateOfBirth,
+                        PhoneNumber = pending.PhoneNumber,
+                        JobTitle = pending.JobTitle,
+                        UserId = user.Id
+                    });
+                    _context.PendingRegistrations.Remove(pending);
+                    await _context.SaveChangesAsync();
+
+                    if (transaction != null)
+                    {
+                        await transaction.CommitAsync();
+                    }
+
+                    return (Result: (IActionResult?)null, Commit: true);
+                }
+                catch
+                {
+                    if (transaction != null)
+                    {
+                        await transaction.RollbackAsync();
+                    }
+
+                    throw;
+                }
+            });
+
+            if (materializeResult.Result != null)
+            {
+                return materializeResult.Result;
             }
 
             var token = await _tokenService.CreateTokenAsync(user);
@@ -713,7 +769,7 @@ namespace FourierIT_API.Controllers
             };
         }
 
-        [Authorize(Roles = "Department Admin")]
+        [Authorize(Policy = "Users.Manage")]
         [Authorize]
         [HttpPut("profile/{profileId}")]
         public async Task<IActionResult> UpdateManagedUser([FromRoute] int profileId, [FromBody] UpdateUserManagementRequestDto dto)
@@ -844,7 +900,7 @@ namespace FourierIT_API.Controllers
             return NoContent();
         }
 
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Policy = "Users.Manage")]
         [HttpGet("all")]
         public async Task<IActionResult> GetAllUsers()
         {
@@ -1091,72 +1147,19 @@ namespace FourierIT_API.Controllers
             if (department == null)
                 return NotFound(new { error = "Department not found." });
 
-            User? targetUser = null;
+            if (string.IsNullOrWhiteSpace(dto.UserId))
+                return BadRequest(new { error = "An existing verified UserId is required to assign a Department Admin." });
 
-            if (!string.IsNullOrWhiteSpace(dto.UserId))
-            {
-                // Assign existing user as Department Admin
-                targetUser = await _userManager.FindByIdAsync(dto.UserId.Trim());
-                if (targetUser == null)
-                    return NotFound(new { error = "User not found." });
+            var targetUser = await _userManager.FindByIdAsync(dto.UserId.Trim());
+            if (targetUser == null)
+                return NotFound(new { error = "User not found." });
 
-                // Check if user is already assigned to another department
-                if (targetUser.DepartmentId.HasValue && targetUser.DepartmentId != departmentId)
-                    return BadRequest(new { error = "User is already assigned to another department." });
+            if (!targetUser.EmailConfirmed && !targetUser.EmailVerified)
+                return BadRequest(new { error = "The user must complete email verification before department assignment." });
 
-                if (dto.DateOfBirth.HasValue)
-                {
-                    var existingProfile = await _context.Profiles.FirstOrDefaultAsync(p => p.UserId == targetUser.Id);
-                    if (existingProfile != null)
-                    {
-                        existingProfile.DateOfBirth = dto.DateOfBirth.Value;
-                        _context.Profiles.Update(existingProfile);
-                        await _context.SaveChangesAsync();
-                    }
-                }
-            }
-            else
-            {
-                // Create new Department Admin user
-                if (string.IsNullOrWhiteSpace(dto.Username) || string.IsNullOrWhiteSpace(dto.Password) || string.IsNullOrWhiteSpace(dto.EmailAddress) || !dto.DateOfBirth.HasValue)
-                    return BadRequest(new { error = "Username, password, email, and date of birth are required to create a new Department Admin." });
-
-                var existingUser = await _userManager.FindByNameAsync(dto.Username.ToLower());
-                if (existingUser != null)
-                    return BadRequest(new { error = "Username already exists." });
-
-                var entityType = await _context.EntityTypes.FirstOrDefaultAsync(et => et.EntityTypeId == 3); // Company / Department entity type
-                if (entityType == null)
-                    return StatusCode(StatusCodes.Status500InternalServerError, new { error = "Default entity type for Department Admin not found." });
-
-                targetUser = new User
-                {
-                    UserName = dto.Username?.ToLower().Trim(),
-                    Email = dto.EmailAddress?.Trim(),
-                    PhoneNumber = dto.PhoneNumber,
-                    AccountStatus = "Active",
-                    DepartmentId = departmentId,
-                    EntityTypeId = entityType.EntityTypeId,
-                    EntityIdentificationNumber = string.Empty
-                };
-
-                var createResult = await _userManager.CreateAsync(targetUser, dto.Password ?? string.Empty);
-                if (!createResult.Succeeded)
-                    return StatusCode(StatusCodes.Status500InternalServerError, createResult.Errors);
-
-                // Create profile
-                var profile = new Profile
-                {
-                    FirstName = dto.FirstName ?? string.Empty,
-                    LastName = dto.LastName ?? string.Empty,
-                    PhoneNumber = dto.PhoneNumber ?? string.Empty,
-                    JobTitle = dto.JobTitle ?? string.Empty,
-                    DateOfBirth = dto.DateOfBirth.Value,
-                    UserId = targetUser.Id
-                };
-                _context.Profiles.Add(profile);
-                await _context.SaveChangesAsync();
-            }
+            // Check if user is already assigned to another department
+            if (targetUser.DepartmentId.HasValue && targetUser.DepartmentId != departmentId)
+                return BadRequest(new { error = "User is already assigned to another department." });
 
             // Ensure user is assigned to department
             if (!targetUser.DepartmentId.HasValue || targetUser.DepartmentId != departmentId)

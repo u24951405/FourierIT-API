@@ -66,10 +66,21 @@ namespace FourierIT_API.Repositories
                     .Where(cal => cal.DocumentId == id)
                     .ToListAsync();
 
+                var accessApprovals = await _context.DocumentAccessApprovals
+                    .Where(daa => daa.DocumentId == id)
+                    .ToListAsync();
+
+                var ruleComplianceChecks = await _context.ComplianceChecks
+                    .Where(cc => cc.DocumentId == id)
+                    .ToListAsync();
+
                 foreach (var history in statusHistories)
                     history.DocumentId = null;
 
                 foreach (var check in complianceChecks)
+                    check.DocumentId = null;
+
+                foreach (var check in ruleComplianceChecks)
                     check.DocumentId = null;
 
                 _context.BlobHistories.RemoveRange(documentBlobs.SelectMany(db => db.BlobHistories));
@@ -79,6 +90,7 @@ namespace FourierIT_API.Repositories
                 _context.DocumentAccessLogs.RemoveRange(accessLogs);
                 _context.ComplianceAlerts.RemoveRange(complianceAlerts);
                 _context.ComplianceAuditLogs.RemoveRange(complianceAuditLogs);
+                _context.DocumentAccessApprovals.RemoveRange(accessApprovals);
 
                 await _context.SaveChangesAsync();
 

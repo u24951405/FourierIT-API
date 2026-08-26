@@ -4,6 +4,8 @@
     {
         public string RoleId { get; set; } = string.Empty;
         public string RoleName { get; set; } = string.Empty;
-        public string? NewRoleId { get; internal set; }
+        public string? NewRoleId { get; set; }
+
+        public List<string> Permissions { get; set; } = new();
     }
 }

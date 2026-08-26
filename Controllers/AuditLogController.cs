@@ -1,5 +1,6 @@
 using FourierIT_API.DTOs;
 using FourierIT_API.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace FourierIT_API.Controllers
@@ -9,6 +10,7 @@ namespace FourierIT_API.Controllers
     /// </summary>
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize(Policy = "Audit.View")]
     public class AuditLogController : ControllerBase
     {
         private readonly IAuditLogService _service;

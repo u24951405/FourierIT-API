@@ -1,10 +1,12 @@
 using FourierIT_API.DTOs.Compliance;
+using FourierIT_API.Data;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
 using FourierIT_API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 
 namespace FourierIT_API.Controllers
@@ -21,15 +23,18 @@ namespace FourierIT_API.Controllers
         private readonly IComplianceService _complianceService;
         private readonly UserManager<User> _userManager;
         private readonly ILogger<ComplianceController> _logger;
+        private readonly AppDbContext _context;
 
         public ComplianceController(
             IComplianceService complianceService,
             UserManager<User> userManager,
-            ILogger<ComplianceController> logger)
+            ILogger<ComplianceController> logger,
+            AppDbContext context)
         {
             _complianceService = complianceService;
             _userManager = userManager;
             _logger = logger;
+            _context = context;
         }
 
         // ===== COMPLIANCE CHECKS =====
@@ -38,7 +43,7 @@ namespace FourierIT_API.Controllers
         /// Check compliance for a specific user
         /// </summary>
         [HttpPost("users/{userId}/check")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -60,10 +65,9 @@ namespace FourierIT_API.Controllers
                     data = status
                 });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error checking compliance: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -71,7 +75,7 @@ namespace FourierIT_API.Controllers
         /// Check compliance for entire department
         /// </summary>
         [HttpPost("departments/{departmentId}/check")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> CheckDepartmentCompliance(int departmentId)
         {
             try
@@ -82,10 +86,9 @@ namespace FourierIT_API.Controllers
                 var status = await _complianceService.CheckDepartmentComplianceAsync(departmentId);
                 return Ok(new { success = true, data = status });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -93,7 +96,7 @@ namespace FourierIT_API.Controllers
         /// Bulk check compliance for multiple users
         /// </summary>
         [HttpPost("bulk-check")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> BulkCheckCompliance([FromBody] BulkComplianceUpdateDto request)
         {
             try
@@ -101,10 +104,9 @@ namespace FourierIT_API.Controllers
                 var statuses = await _complianceService.BulkCheckComplianceAsync(request.UserIds);
                 return Ok(new { success = true, checkedCount = statuses.Count, data = statuses });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -128,16 +130,31 @@ namespace FourierIT_API.Controllers
                 var details = await _complianceService.GetUserComplianceDetailsAsync(userId);
                 return Ok(new { success = true, data = details });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
         private async Task<User?> GetCurrentUserAsync()
         {
             return await _userManager.GetUserAsync(User);
+        }
+
+        /// <summary>
+        /// Reads a DB-layer set-based rollup. The joins and conditional document-status
+        /// aggregation belong in SQL Server because the result spans request lines,
+        /// target users/departments, and documents in one round trip.
+        /// </summary>
+        [HttpGet("institutions/{institutionId:int}/summary")]
+        [Authorize(Policy = "Compliance.View")]
+        public async Task<IActionResult> GetInstitutionComplianceSummary(int institutionId)
+        {
+            var result = await _context.InstitutionComplianceSummaries.FromSqlRaw(
+                "EXEC dbo.GetInstitutionComplianceSummary @InstitutionId = {0}", institutionId)
+                .ToListAsync();
+
+            return Ok(new { success = true, data = result });
         }
 
         private async Task<bool> UserCanAccessDepartmentAsync(int departmentId)
@@ -156,7 +173,7 @@ namespace FourierIT_API.Controllers
         /// Get compliance details for all users in a department
         /// </summary>
         [HttpGet("departments/{departmentId}/users")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> GetDepartmentUserCompliance(int departmentId)
         {
             try
@@ -167,10 +184,9 @@ namespace FourierIT_API.Controllers
                 var details = await _complianceService.GetDepartmentUserComplianceAsync(departmentId);
                 return Ok(new { success = true, count = details.Count, data = details });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -180,7 +196,7 @@ namespace FourierIT_API.Controllers
         /// Get system-wide compliance dashboard
         /// </summary>
         [HttpGet("dashboard")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> GetSystemDashboard()
         {
             try
@@ -188,10 +204,9 @@ namespace FourierIT_API.Controllers
                 var dashboard = await _complianceService.GetSystemDashboardAsync();
                 return Ok(new { success = true, data = dashboard });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -199,7 +214,7 @@ namespace FourierIT_API.Controllers
         /// Get department compliance dashboard
         /// </summary>
         [HttpGet("departments/{departmentId}/dashboard")]
-        [Authorize(Roles = "Admin,Department Admin,Stakeholder")]
+        [Authorize(Policy = "Compliance.View")]
         public async Task<IActionResult> GetDepartmentDashboard(int departmentId)
         {
             try
@@ -210,10 +225,9 @@ namespace FourierIT_API.Controllers
                 var dashboard = await _complianceService.GetDepartmentDashboardAsync(departmentId);
                 return Ok(new { success = true, data = dashboard });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -221,7 +235,7 @@ namespace FourierIT_API.Controllers
         /// Get compliance statistics
         /// </summary>
         [HttpGet("statistics")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> GetStatistics([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
         {
             try
@@ -229,10 +243,9 @@ namespace FourierIT_API.Controllers
                 var stats = await _complianceService.GetComplianceStatisticsAsync(startDate, endDate);
                 return Ok(new { success = true, data = stats });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -242,7 +255,7 @@ namespace FourierIT_API.Controllers
         /// Get compliance issues for a user's documents
         /// </summary>
         [HttpGet("users/{userId}/issues")]
-        [Authorize]
+        [Authorize(Policy = "Compliance.View")]
         public async Task<IActionResult> GetDocumentIssues(string userId)
         {
             try
@@ -255,10 +268,9 @@ namespace FourierIT_API.Controllers
                 var issues = await _complianceService.GetDocumentIssuesAsync(userId);
                 return Ok(new { success = true, count = issues.Count, data = issues });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -279,10 +291,9 @@ namespace FourierIT_API.Controllers
                 var missing = await _complianceService.IdentifyMissingDocumentsAsync(userId);
                 return Ok(new { success = true, count = missing.Count, data = missing });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -308,10 +319,9 @@ namespace FourierIT_API.Controllers
                 var alerts = await _complianceService.GetOpenAlertsAsync(userId);
                 return Ok(new { success = true, count = alerts.Count, data = alerts });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -319,7 +329,7 @@ namespace FourierIT_API.Controllers
         /// Get overdue alerts
         /// </summary>
         [HttpGet("alerts/overdue")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> GetOverdueAlerts()
         {
             try
@@ -327,10 +337,9 @@ namespace FourierIT_API.Controllers
                 var alerts = await _complianceService.GetOverdueAlertsAsync();
                 return Ok(new { success = true, count = alerts.Count, data = alerts });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -353,10 +362,9 @@ namespace FourierIT_API.Controllers
 
                 return Ok(new { success = result, message = "Alert acknowledged" });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -364,7 +372,7 @@ namespace FourierIT_API.Controllers
         /// Resolve an alert
         /// </summary>
         [HttpPut("alerts/{alertId}/resolve")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> ResolveAlert(int alertId, [FromBody] ResolveAlertDto request)
         {
             try
@@ -379,10 +387,9 @@ namespace FourierIT_API.Controllers
 
                 return Ok(new { success = result, message = "Alert resolved" });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -392,7 +399,7 @@ namespace FourierIT_API.Controllers
         /// Approve document compliance
         /// </summary>
         [HttpPost("documents/{checkId}/approve")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> ApproveDocumentCompliance(int checkId, [FromBody] ApproveDocumentComplianceDto request)
         {
             try
@@ -407,10 +414,9 @@ namespace FourierIT_API.Controllers
 
                 return Ok(new { success = result, message = "Document compliance approved" });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -418,7 +424,7 @@ namespace FourierIT_API.Controllers
         /// Reject document compliance
         /// </summary>
         [HttpPost("documents/{checkId}/reject")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> RejectDocumentCompliance(int checkId, [FromBody] ApproveDocumentComplianceDto request)
         {
             try
@@ -433,10 +439,9 @@ namespace FourierIT_API.Controllers
 
                 return Ok(new { success = result, message = "Document compliance rejected" });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -444,7 +449,7 @@ namespace FourierIT_API.Controllers
         /// Bulk approve documents
         /// </summary>
         [HttpPost("documents/bulk-approve")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> BulkApproveDocuments([FromBody] List<int> checkIds)
         {
             try
@@ -459,10 +464,9 @@ namespace FourierIT_API.Controllers
 
                 return Ok(new { success = true, approved = count });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -472,7 +476,7 @@ namespace FourierIT_API.Controllers
         /// Set compliance deadline for a user
         /// </summary>
         [HttpPost("users/{userId}/deadline")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> SetDeadline(string userId, [FromBody] SetComplianceDeadlineDto request)
         {
             try
@@ -480,10 +484,9 @@ namespace FourierIT_API.Controllers
                 var result = await _complianceService.SetComplianceDeadlineAsync(userId, request.Deadline, request.Reason);
                 return Ok(new { success = result, message = "Deadline set successfully" });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -491,7 +494,7 @@ namespace FourierIT_API.Controllers
         /// Get users near their compliance deadline
         /// </summary>
         [HttpGet("users/deadline/near")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> GetUsersNearDeadline([FromQuery] int daysThreshold = 7)
         {
             try
@@ -499,10 +502,9 @@ namespace FourierIT_API.Controllers
                 var users = await _complianceService.GetUsersNearDeadlineAsync(daysThreshold);
                 return Ok(new { success = true, count = users.Count, data = users });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -512,7 +514,7 @@ namespace FourierIT_API.Controllers
         /// Escalate a user's compliance for manual review
         /// </summary>
         [HttpPost("users/{userId}/escalate")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> EscalateCompliance(string userId, [FromBody] BulkComplianceUpdateDto request)
         {
             try
@@ -520,10 +522,9 @@ namespace FourierIT_API.Controllers
                 var result = await _complianceService.EscalateComplianceAsync(userId, request.Notes ?? "No reason provided");
                 return Ok(new { success = result, message = "Compliance escalated for review" });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -531,7 +532,7 @@ namespace FourierIT_API.Controllers
         /// Flag document for manual review
         /// </summary>
         [HttpPost("documents/{checkId}/flag-review")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> FlagForManualReview(int checkId, [FromBody] BulkComplianceUpdateDto request)
         {
             try
@@ -539,10 +540,9 @@ namespace FourierIT_API.Controllers
                 var result = await _complianceService.FlagForManualReviewAsync(checkId, request.Notes ?? "No reason provided");
                 return Ok(new { success = result, message = "Document flagged for manual review" });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -550,7 +550,7 @@ namespace FourierIT_API.Controllers
         /// Get documents pending manual review
         /// </summary>
         [HttpGet("documents/pending-review")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> GetPendingManualReviews()
         {
             try
@@ -558,10 +558,9 @@ namespace FourierIT_API.Controllers
                 var documents = await _complianceService.GetPendingManualReviewsAsync();
                 return Ok(new { success = true, count = documents.Count, data = documents });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -584,10 +583,9 @@ namespace FourierIT_API.Controllers
                 var status = await _complianceService.GetComplianceHistoryAsync(userId, limit);
                 return Ok(new { success = true, count = status.Count, data = status });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -600,10 +598,9 @@ namespace FourierIT_API.Controllers
                 var rules = await _complianceService.GetComplianceRulesAsync();
                 return Ok(new { success = true, count = rules.Count, data = rules });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -613,7 +610,7 @@ namespace FourierIT_API.Controllers
         /// Send non-compliance notification to user
         /// </summary>
         [HttpPost("users/{userId}/send-notification")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> SendNonComplianceNotification(string userId)
         {
             try
@@ -621,10 +618,9 @@ namespace FourierIT_API.Controllers
                 var result = await _complianceService.SendNonComplianceNotificationAsync(userId);
                 return Ok(new { success = result, message = "Notification sent" });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 
@@ -632,7 +628,7 @@ namespace FourierIT_API.Controllers
         /// Send deadline reminder to user
         /// </summary>
         [HttpPost("users/{userId}/send-deadline-reminder")]
-        [Authorize(Roles = "Admin,Department Admin")]
+        [Authorize(Policy = "Compliance.Manage")]
         public async Task<IActionResult> SendDeadlineReminder(string userId)
         {
             try
@@ -640,10 +636,9 @@ namespace FourierIT_API.Controllers
                 var result = await _complianceService.SendDeadlineReminderAsync(userId);
                 return Ok(new { success = result, message = "Reminder sent" });
             }
-            catch (Exception ex)
+            catch
             {
-                _logger.LogError($"Error: {ex.Message}");
-                return BadRequest(new { success = false, error = ex.Message });
+                throw;
             }
         }
 

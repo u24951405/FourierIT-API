@@ -30,7 +30,12 @@ namespace FourierIT_API.Controllers
         [AllowAnonymous]
         public async Task<IActionResult> GetAllRoles()
         {
-            var roles = await _roleManager.Roles.Select(r => new RoleDto { RoleId = r.Id, RoleName = r.Name ?? string.Empty })
+            var roles = await _roleManager.Roles.Select(r => new RoleDto
+                        {
+                            RoleId = r.Id,
+                            RoleName = r.Name ?? string.Empty,
+                            Permissions = r.RolePermissions.Select(rp => rp.Permission.PermissionKey).ToList()
+                        })
                         .ToListAsync();
             return Ok(roles);
         }
@@ -42,11 +47,26 @@ namespace FourierIT_API.Controllers
             var role = await _roleManager.FindByIdAsync(RoleId);
             if (role == null) return NotFound();
 
-            return Ok(new RoleDto { RoleId = role.Id, RoleName = role.Name ?? string.Empty });
+            var permissions = await _context.RolePermissions
+                .Where(rp => rp.RoleId == role.Id)
+                .Select(rp => rp.Permission.PermissionKey)
+                .ToListAsync();
+            return Ok(new RoleDto { RoleId = role.Id, RoleName = role.Name ?? string.Empty, Permissions = permissions });
+        }
+
+        [HttpGet("permissions")]
+        [Authorize(Policy = "Roles.Manage")]
+        public async Task<IActionResult> GetPermissions()
+        {
+            return Ok(await _context.Permissions
+                .AsNoTracking()
+                .OrderBy(permission => permission.PermissionKey)
+                .Select(permission => permission.PermissionKey)
+                .ToListAsync());
         }
 
         [HttpPost]
-        [Authorize(Roles = "Department Admin")]
+        [Authorize(Policy = "Roles.Manage")]
         public async Task<IActionResult> CreateRole([FromBody] CreateRoleRequestDto model)
         {
             if (model == null || string.IsNullOrWhiteSpace(model.RoleName))
@@ -82,8 +102,9 @@ namespace FourierIT_API.Controllers
 
                 var createResult = await _roleManager.CreateAsync(roleWithProvidedId);
                 if (!createResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, createResult.Errors);
+                await ReplacePermissionsAsync(roleWithProvidedId.Id, model.Permissions);
 
-                return CreatedAtAction(nameof(GetByRoleId), new { RoleId = roleWithProvidedId.Id }, new RoleDto { RoleId = roleWithProvidedId.Id, RoleName = roleWithProvidedId.Name ?? string.Empty });
+                return CreatedAtAction(nameof(GetByRoleId), new { RoleId = roleWithProvidedId.Id }, await ToRoleDtoAsync(roleWithProvidedId));
             }
             else
             {
@@ -95,13 +116,14 @@ namespace FourierIT_API.Controllers
                 };
                 var result = await _roleManager.CreateAsync(role);
                 if (!result.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, result.Errors);
+                await ReplacePermissionsAsync(role.Id, model.Permissions);
 
-                return CreatedAtAction(nameof(GetByRoleId), new { RoleId = role.Id }, new RoleDto { RoleId = role.Id, RoleName = role.Name ?? string.Empty });
+                return CreatedAtAction(nameof(GetByRoleId), new { RoleId = role.Id }, await ToRoleDtoAsync(role));
             }
         }
 
         [HttpPut("{RoleId}")]
-        [Authorize(Roles = "Department Admin")]
+        [Authorize(Policy = "Roles.Manage")]
         public async Task<IActionResult> UpdateRole([FromRoute] string RoleId, [FromBody] UpdateRoleRequestDto  model)
         {
             if (model == null || string.IsNullOrWhiteSpace(model.RoleName)) return BadRequest(new { error = "Role name is required." });
@@ -123,8 +145,9 @@ namespace FourierIT_API.Controllers
 
                 var updateRes = await _roleManager.UpdateAsync(oldRole);
                 if (!updateRes.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, updateRes.Errors);
+                await ReplacePermissionsAsync(oldRole.Id, model.Permissions);
 
-                return Ok(new RoleDto { RoleId = oldRole.Id, RoleName = oldRole.Name ?? string.Empty });
+                return Ok(await ToRoleDtoAsync(oldRole));
             }
 
             // NewId provided and different -> perform safe id-change by creating a new role, repointing FKs, deleting old role
@@ -172,11 +195,11 @@ namespace FourierIT_API.Controllers
 
                 await _context.SaveChangesAsync();
             }
-            catch (System.Exception ex)
+            catch (System.Exception)
             {
                 // Attempt rollback: delete the newly created role
                 await _roleManager.DeleteAsync(newRole);
-                return StatusCode(StatusCodes.Status500InternalServerError, new { error = "Failed to reassign relationships to new role id.", detail = ex.Message });
+                return StatusCode(StatusCodes.Status500InternalServerError, new { error = "Failed to reassign relationships to the new role." });
             }
 
             // Delete old role
@@ -197,11 +220,12 @@ namespace FourierIT_API.Controllers
 
                 return StatusCode(StatusCodes.Status500InternalServerError, new { error = "Failed to delete old role after id-change.", deleteErrors = deleteOld.Errors, recreateOldSucceeded = recreateRes.Succeeded });
             }
-            return Ok(new RoleDto { RoleId = newRole.Id, RoleName = newRole.Name ?? string.Empty });
+            await ReplacePermissionsAsync(newRole.Id, model.Permissions);
+            return Ok(await ToRoleDtoAsync(newRole));
         }
 
         [HttpDelete("{RoleId}")]
-        [Authorize(Roles = "Department Admin")]
+        [Authorize(Policy = "Roles.Manage")]
         public async Task<IActionResult> DeleteRole([FromRoute] string RoleId)
         {
             var role = await _roleManager.FindByIdAsync(RoleId);
@@ -215,6 +239,46 @@ namespace FourierIT_API.Controllers
             if (!result.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, result.Errors);
 
             return NoContent();
+        }
+
+        private async Task ReplacePermissionsAsync(string roleId, IEnumerable<string>? permissionKeys)
+        {
+            var requestedKeys = (permissionKeys ?? Enumerable.Empty<string>())
+                .Where(key => !string.IsNullOrWhiteSpace(key))
+                .Select(key => key.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var permissions = await _context.Permissions
+                .Where(permission => requestedKeys.Contains(permission.PermissionKey))
+                .ToListAsync();
+
+            if (permissions.Count != requestedKeys.Count)
+                throw new InvalidOperationException("One or more requested permissions do not exist.");
+
+            var current = await _context.RolePermissions
+                .Where(rolePermission => rolePermission.RoleId == roleId)
+                .ToListAsync();
+            _context.RolePermissions.RemoveRange(current);
+            _context.RolePermissions.AddRange(permissions.Select(permission => new RolePermission
+            {
+                RoleId = roleId,
+                PermissionId = permission.PermissionId
+            }));
+            await _context.SaveChangesAsync();
+        }
+
+        private async Task<RoleDto> ToRoleDtoAsync(Role role)
+        {
+            return new RoleDto
+            {
+                RoleId = role.Id,
+                RoleName = role.Name ?? string.Empty,
+                Permissions = await _context.RolePermissions
+                    .Where(rolePermission => rolePermission.RoleId == role.Id)
+                    .Select(rolePermission => rolePermission.Permission.PermissionKey)
+                    .ToListAsync()
+            };
         }
     }
 }

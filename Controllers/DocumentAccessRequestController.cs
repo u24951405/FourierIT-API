@@ -94,10 +94,6 @@ namespace FourierIT_API.Controllers
                 if (targetDepartment == null)
                     return NotFound(new { error = "Target department not found." });
 
-                // Verify department belongs to the institution
-                if (targetDepartment.Branch.InstitutionId != institutionId)
-                    return BadRequest(new { error = "Department does not belong to the specified institution." });
-
                 // Verify requested document types belong to department
                 var departmentRequiredDocTypeIds = await _context.DepartmentDocumentTypes
                     .Where(ddt => ddt.DepartmentId == targetDepartment.DepartmentId)
@@ -154,7 +150,7 @@ namespace FourierIT_API.Controllers
             {
                 await _auditLogService.CreateAuditLogAsync(new AuditLog
                 {
-                    UserId = "institution_portal",
+                    InstitutionId = institutionId,
                     ActionCode = "INSTITUTION_REQUEST_CREATED",
                     TimeStamp = DateTimeOffset.UtcNow,
                     Description = $"Institution portal request {request.EnquiryRequestId} created for institution {institutionId}.",
@@ -263,9 +259,6 @@ namespace FourierIT_API.Controllers
                 if (targetDepartment == null)
                     return NotFound(new { error = "Target department not found." });
 
-                // Verify department belongs to the institution
-                if (targetDepartment.Branch.InstitutionId != institutionId)
-                    return BadRequest(new { error = "Department does not belong to the specified institution." });
             }
             else // Individual request
             {
@@ -286,30 +279,9 @@ namespace FourierIT_API.Controllers
             if (!requestedDocumentTypeIds.Any())
                 return BadRequest(new { error = "At least one document type must be requested." });
 
-            // If targeting individual, check if they have requested documents
-            if (targetUser != null)
-            {
-                var targetDocumentTypeIds = await _context.Documents
-                    .AsNoTracking()
-                    .Where(d => d.UserId == targetUser.Id && d.CurrentStatus != "Deleted")
-                    .Select(d => d.DocumentTypeId)
-                    .Distinct()
-                    .ToListAsync();
-
-                var missingDocumentTypes = requestedDocumentTypeIds
-                    .Except(targetDocumentTypeIds)
-                    .ToList();
-
-                if (missingDocumentTypes.Any())
-                {
-                    return BadRequest(new
-                    {
-                        error = "The target user does not currently have all requested document types.",
-                        missingDocumentTypeIds = missingDocumentTypes
-                    });
-                }
-            }
-            else if (targetDepartment != null)
+            // Individual requests may target document types the user hasn't uploaded yet —
+            // the request itself becomes the requirement for them to upload it.
+            if (targetDepartment != null)
             {
                 // Validate that requested document types belong to the department's required documents
                 var departmentRequiredDocTypeIds = await _context.DepartmentDocumentTypes
@@ -334,33 +306,13 @@ namespace FourierIT_API.Controllers
                     });
                 }
 
-                // For department requests, check if at least one user in the department has these documents
-                var departmentUserIds = await _context.Users
-                    .Where(u => u.DepartmentId == targetDepartment.DepartmentId)
-                    .Select(u => u.Id)
-                    .ToListAsync();
+                // Department requests may target document types department members haven't
+                // uploaded yet — the request itself becomes the requirement for them to upload it.
+                var departmentHasUsers = await _context.Users
+                    .AnyAsync(u => u.DepartmentId == targetDepartment.DepartmentId);
 
-                if (!departmentUserIds.Any())
+                if (!departmentHasUsers)
                     return BadRequest(new { error = "Target department has no users assigned." });
-
-                var availableDocumentTypes = await _context.Documents
-                    .AsNoTracking()
-                    .Where(d => departmentUserIds.Contains(d.UserId) && d.CurrentStatus != "Deleted")
-                    .Select(d => d.DocumentTypeId)
-                    .Distinct()
-                    .ToListAsync();
-
-                // We don't strictly require all docs for department requests (they're not assigned to one person)
-                // But we warn if some are missing
-                var missingTypes = requestedDocumentTypeIds.Except(availableDocumentTypes).ToList();
-                if (missingTypes.Any())
-                {
-                    return BadRequest(new
-                    {
-                        error = "Department members do not have all requested document types available.",
-                        missingDocumentTypeIds = missingTypes
-                    });
-                }
             }
 
             var defaultRule = await EnsureDefaultFicaRuleAsync();
@@ -386,10 +338,11 @@ namespace FourierIT_API.Controllers
             {
                 await _auditLogService.CreateAuditLogAsync(new AuditLog
                 {
-                    UserId = "institution_portal",
+                    UserId = actor.Id,
+                    InstitutionId = institutionId,
                     ActionCode = "INSTITUTION_REQUEST_CREATED",
                     TimeStamp = DateTimeOffset.UtcNow,
-                    Description = $"Institution portal request {request.EnquiryRequestId} created for institution {institutionId}.",
+                    Description = $"Request {request.EnquiryRequestId} created for institution {institutionId} by {actor.UserName}.",
                     TableAffected = "InstitutionEnquiryRequests",
                     RecordID = request.EnquiryRequestId
                 });
@@ -547,6 +500,90 @@ namespace FourierIT_API.Controllers
             }).ToList());
         }
 
+        [AllowAnonymous]
+        [HttpGet("institution-access/requests/{requestId:int}")]
+        public async Task<IActionResult> GetInstitutionRequest([FromRoute] int requestId, [FromQuery] string token)
+        {
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+            if (sessionToken == null) return Unauthorized(new { error = "Invalid or expired session token." });
+
+            var request = await _context.InstitutionEnquiryRequests
+                .AsNoTracking()
+                .Include(r => r.TargetDepartment)
+                .Include(r => r.TargetUser).ThenInclude(u => u.Profile)
+                .Include(r => r.RequestedDocumentTypes).ThenInclude(rdt => rdt.DocumentType)
+                .FirstOrDefaultAsync(r => r.EnquiryRequestId == requestId && r.InstitutionId == sessionToken.InstitutionId);
+            if (request == null) return NotFound(new { error = "Request not found." });
+
+            return Ok(new
+            {
+                request.EnquiryRequestId,
+                request.InstitutionId,
+                request.RequestType,
+                request.TargetDepartmentId,
+                request.TargetUserId,
+                RecipientName = request.RequestType == "Department"
+                    ? request.TargetDepartment?.DepartmentName
+                    : request.TargetUser?.Profile == null ? request.TargetUserId : $"{request.TargetUser.Profile.FirstName} {request.TargetUser.Profile.LastName}".Trim(),
+                request.Status,
+                request.PurposeNote,
+                request.SubmissionDeadline,
+                request.ReferenceNumber,
+                Documents = request.RequestedDocumentTypes.Select(d => new
+                {
+                    d.DocumentTypeId,
+                    DocumentTypeName = d.DocumentType.TypeName,
+                    d.isMandatory
+                })
+            });
+        }
+
+        [AllowAnonymous]
+        [HttpPut("institution-access/requests/{requestId:int}")]
+        public async Task<IActionResult> UpdateInstitutionRequest(
+            [FromRoute] int requestId,
+            [FromQuery] string token,
+            [FromBody] UpdateInstitutionDocumentRequestDto dto)
+        {
+            var sessionToken = await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+            if (sessionToken == null) return Unauthorized(new { error = "Invalid or expired session token." });
+            if (dto == null || string.IsNullOrWhiteSpace(dto.PurposeNote) || !dto.RequestedDocuments.Any())
+                return BadRequest(new { error = "A justification and at least one requested document are required." });
+
+            var request = await _context.InstitutionEnquiryRequests
+                .Include(r => r.RequestedDocumentTypes)
+                .FirstOrDefaultAsync(r => r.EnquiryRequestId == requestId && r.InstitutionId == sessionToken.InstitutionId);
+            if (request == null) return NotFound(new { error = "Request not found." });
+            if (request.Status != "Pending" && request.Status != "Department_Pending")
+                return Conflict(new { error = "Only pending requests can be edited." });
+
+            var documentTypeIds = dto.RequestedDocuments.Select(d => d.DocumentTypeId).Distinct().ToList();
+            var validDocumentTypeIds = await _context.DocumentTypes
+                .Where(d => documentTypeIds.Contains(d.DocumentTypeId))
+                .Select(d => d.DocumentTypeId)
+                .ToListAsync();
+            if (validDocumentTypeIds.Count != documentTypeIds.Count)
+                return BadRequest(new { error = "One or more requested document types are invalid." });
+
+            request.PurposeNote = dto.PurposeNote.Trim();
+            request.SubmissionDeadline = dto.SubmissionDeadline;
+            request.ReferenceNumber = dto.ReferenceNumber?.Trim();
+            _context.InstitutionRequestedDocumentTypes.RemoveRange(request.RequestedDocumentTypes);
+            var defaultRule = await EnsureDefaultFicaRuleAsync();
+            foreach (var item in dto.RequestedDocuments.DistinctBy(d => d.DocumentTypeId))
+                _context.InstitutionRequestedDocumentTypes.Add(new InstitutionRequestedDocumentType
+                {
+                    EnquiryRequestId = requestId,
+                    DocumentTypeId = item.DocumentTypeId,
+                    FICARuleId = item.FICARuleId ?? defaultRule.RuleId,
+                    isMandatory = item.IsMandatory
+                });
+            await _context.SaveChangesAsync();
+            return Ok(new { request.EnquiryRequestId, request.Status, requestedDocumentTypeIds = documentTypeIds });
+        }
+
         /// <summary>
         /// Revoke an outgoing institution request (institution portal).
         /// </summary>
@@ -587,7 +624,7 @@ namespace FourierIT_API.Controllers
             {
                 await _auditLogService.CreateAuditLogAsync(new AuditLog
                 {
-                    UserId = "institution_portal",
+                    InstitutionId = sessionToken.InstitutionId,
                     ActionCode = "REQUEST_REVOKED",
                     TimeStamp = DateTimeOffset.UtcNow,
                     Description = $"Institution revoked request {request.EnquiryRequestId}.",
@@ -800,10 +837,13 @@ namespace FourierIT_API.Controllers
 
             if (docRole != null)
             {
+                var documentOwnerUserIds = _context.Set<IdentityUserRole<string>>()
+                    .Where(userRole => userRole.RoleId == docRole.Id)
+                    .Select(userRole => userRole.UserId);
+
                 members = await _context.Users
                     .Include(u => u.Profile)
-                    .Include(u => u.UserRoles)
-                    .Where(u => u.UserRoles.Any(ur => ur.RoleId == docRole.Id))
+                    .Where(u => documentOwnerUserIds.Contains(u.Id))
                     .Select(u => new
                     {
                         userId = u.Id,
@@ -818,39 +858,9 @@ namespace FourierIT_API.Controllers
             }
             else
             {
-                // If role not present, leave members empty so we fall back to returning all users below.
-                members = new List<object>();
-            }
-
-            if (!members.Any())
-            {
-                // Fallback: return all users in the system if no document owners are found
-                var allUsers = await _context.Users
-                    .Include(u => u.Profile)
-                    .Select(u => new
-                    {
-                        userId = u.Id,
-                        userName = u.UserName,
-                        displayName = !string.IsNullOrWhiteSpace(u.Profile.FirstName) || !string.IsNullOrWhiteSpace(u.Profile.LastName)
-                            ? (u.Profile.FirstName + " " + u.Profile.LastName).Trim()
-                            : (string.IsNullOrWhiteSpace(u.UserName) ? u.Id : u.UserName)
-                    })
-                    .OrderBy(u => u.displayName)
-                    .ToListAsync();
-                // Provide a small diagnostic hint listing any roles that partially match
-                var roleCandidates = await _context.Roles
-                    .Where(r => (r.Name != null && (r.Name.Contains("Document") || r.Name.Contains("Owner")))
-                                || (r.NormalizedName != null && (r.NormalizedName.Contains("DOCUMENT") || r.NormalizedName.Contains("OWNER"))))
-                    .Select(r => new { r.Id, r.Name, r.NormalizedName })
-                    .ToListAsync();
-
-                var candidateNames = roleCandidates.Select(r => r.Name ?? r.NormalizedName ?? r.Id).ToList();
-                var candidateHint = candidateNames.Any() ? $" Candidates: {string.Join(", ", candidateNames)}" : string.Empty;
-
-                return Ok(new
+                return StatusCode(StatusCodes.Status500InternalServerError, new
                 {
-                    users = allUsers,
-                    warning = "No users with role 'Document Owner' were found. Returning all users as a fallback." + candidateHint
+                    error = "Document Owner role is not configured."
                 });
             }
 
@@ -1055,7 +1065,7 @@ namespace FourierIT_API.Controllers
         /// Get pending department requests for department admins
         /// </summary>
         [HttpGet("department-access-requests/pending")]
-        [Authorize(Roles = "Department Admin")]
+        [Authorize(Policy = "Documents.Manage")]
         public async Task<IActionResult> GetPendingDepartmentRequests()
         {
             var currentUser = await _userManager.GetUserAsync(User);
@@ -1122,7 +1132,7 @@ namespace FourierIT_API.Controllers
         /// Department admin routes a request to a specific document owner
         /// </summary>
         [HttpPost("department-access-requests/{requestId:int}/route-to-owner")]
-        [Authorize(Roles = "Department Admin")]
+        [Authorize(Policy = "Documents.Manage")]
         public async Task<IActionResult> RouteRequestToOwner(
             [FromRoute] int requestId,
             [FromBody] RouteRequestToOwnerDto dto)
@@ -1158,23 +1168,8 @@ namespace FourierIT_API.Controllers
             if (targetUser.DepartmentId != request.TargetDepartmentId)
                 return BadRequest(new { error = "Target user does not belong to the same department." });
 
-            // Verify target user has the requested documents
-            var requestedDocTypes = request.RequestedDocumentTypes.Select(r => r.DocumentTypeId).ToList();
-            var targetUserDocTypes = await _context.Documents
-                .Where(d => d.UserId == targetUser.Id && d.CurrentStatus != "Deleted")
-                .Select(d => d.DocumentTypeId)
-                .Distinct()
-                .ToListAsync();
-
-            var missingTypes = requestedDocTypes.Except(targetUserDocTypes).ToList();
-            if (missingTypes.Any())
-            {
-                return BadRequest(new
-                {
-                    error = "Target user does not have all requested document types.",
-                    missingDocumentTypeIds = missingTypes
-                });
-            }
+            // The owner may not have uploaded all requested document types yet — routing the
+            // request to them becomes the requirement for them to upload what's missing.
 
             // Route the request to the owner
             request.TargetUserId = targetUser.Id;
@@ -1243,16 +1238,28 @@ namespace FourierIT_API.Controllers
                 });
             }
 
+            var requestedDocumentTypeIds = request.RequestedDocumentTypes
+                .Select(rdt => rdt.DocumentTypeId)
+                .Distinct()
+                .ToList();
+
             var approvedDocuments = await _context.Documents
                 .Where(d => d.UserId == request.TargetUserId
                     && d.CurrentStatus != "Deleted"
-                    && request.RequestedDocumentTypes
-                        .Select(rdt => rdt.DocumentTypeId)
-                        .Contains(d.DocumentTypeId))
+                    && requestedDocumentTypeIds.Contains(d.DocumentTypeId))
                 .ToListAsync();
 
-            if (!approvedDocuments.Any())
-                return BadRequest(new { error = "No matching documents were found to approve." });
+            var uploadedDocumentTypeIds = approvedDocuments.Select(d => d.DocumentTypeId).Distinct().ToList();
+            var missingDocumentTypeIds = requestedDocumentTypeIds.Except(uploadedDocumentTypeIds).ToList();
+
+            if (missingDocumentTypeIds.Any())
+            {
+                return BadRequest(new
+                {
+                    error = "All requested document types must be uploaded before this request can be approved.",
+                    missingDocumentTypeIds
+                });
+            }
 
             var existingToken = await _context.AccessTokens
                 .FirstOrDefaultAsync(at => at.UserId == request.TargetUserId);
@@ -1504,7 +1511,7 @@ namespace FourierIT_API.Controllers
             {
                 await _auditLogService.CreateAuditLogAsync(new AuditLog
                 {
-                    UserId = "institution_portal",
+                    InstitutionId = sessionToken.InstitutionId,
                     ActionCode = "DOCUMENT_FLAGGED",
                     TimeStamp = DateTimeOffset.UtcNow,
                     Description = $"Approved document {documentId} was flagged by institution {sessionToken.InstitutionId}. Reason: {flag.FlagReason}",

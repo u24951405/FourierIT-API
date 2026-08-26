@@ -1,21 +1,761 @@
 using FourierIT_API.Data;
 using FourierIT_API.DTOs.Reports;
+using FourierIT_API.Models;
+using ClosedXML.Excel;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
+using System.Text.Json;
+using System.Globalization;
+using FourierIT_API.Services;
 
 namespace FourierIT_API.Controllers
 {
     [ApiController]
     [Route("api/reports")]
-    [Authorize(Policy = "SuperAdminOnly")]
+    [Authorize(Policy = "Reports.View")]
     public class ReportsController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly IConfiguration _configuration;
+        private readonly ReportPdfService _pdfService;
 
-        public ReportsController(AppDbContext context)
+        public ReportsController(AppDbContext context, IConfiguration? configuration = null)
         {
             _context = context;
+            _configuration = configuration ?? new ConfigurationBuilder().Build();
+            _pdfService = new ReportPdfService();
+        }
+
+        [HttpGet("monthly")]
+        public async Task<ActionResult<MonthlyReportDto>> GetMonthlyReport(
+            [FromQuery] DateTime? startDate,
+            [FromQuery] DateTime? endDate)
+        {
+            var start = (startDate ?? new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1)).Date;
+            var end = (endDate ?? start.AddMonths(1).AddDays(-1)).Date;
+            if (end < start)
+                return BadRequest(new { error = "The end date must not be before the start date." });
+
+            var endExclusive = end.AddDays(1);
+            var documents = await _context.Documents.AsNoTracking()
+                .Include(document => document.DocumentType)
+                .Where(document => document.UploadedDate >= start
+                    && document.UploadedDate < endExclusive
+                    && document.CurrentStatus != "Deleted")
+                .ToListAsync();
+            var allActiveDocuments = await _context.Documents.AsNoTracking()
+                .Where(document => document.CurrentStatus != "Deleted")
+                .Select(document => document.FileSizeBytes)
+                .ToListAsync();
+            var complianceStatuses = await _context.ComplianceStatuses.AsNoTracking()
+                .Where(status => status.LastChecked >= start && status.LastChecked < endExclusive)
+                .ToListAsync();
+            var auditLogs = await _context.AuditLogs.AsNoTracking()
+                .Where(log => log.TimeStamp >= new DateTimeOffset(start) && log.TimeStamp < new DateTimeOffset(endExclusive))
+                .ToListAsync();
+            var enquiryCount = await _context.InstitutionEnquiryRequests.AsNoTracking()
+                .CountAsync(request => request.RequestDate >= new DateTimeOffset(start) && request.RequestDate < new DateTimeOffset(endExclusive));
+
+            var days = Enumerable.Range(0, (end - start).Days + 1).Select(offset => start.AddDays(offset)).ToList();
+            var uploadGroups = documents.GroupBy(document => document.UploadedDate.Date)
+                .ToDictionary(group => group.Key, group => group.Count());
+            var uploadVolume = days.Select(day => new MonthlyUploadVolumeDto
+            {
+                Day = day.Day,
+                Count = uploadGroups.GetValueOrDefault(day, 0)
+            }).ToList();
+            var totalUploads = documents.Count;
+            var peak = uploadVolume.OrderByDescending(item => item.Count).FirstOrDefault();
+
+            var distributionGroups = documents.GroupBy(document => document.DocumentType?.TypeName ?? "Unknown")
+                .OrderBy(group => group.Key).ToList();
+            var distribution = distributionGroups.Select((group, index) => new MonthlyDistributionCategoryDto
+            {
+                Label = group.Key,
+                Count = group.Count(),
+                Percentage = totalUploads == 0 ? 0 : Math.Round(group.Count() * 100m / totalUploads, 2),
+                Color = new[] { "#1e2a3a", "#2d5282", "#4a7fb5", "#7bafd4", "#b0cfe8" }[index % 5]
+            }).ToList();
+
+            var totalCapacityBytes = _configuration.GetValue<long?>("Storage:TotalCapacityBytes") ?? 1_073_741_824L;
+            var usedBytes = allActiveDocuments.Sum();
+            var usedGb = usedBytes / 1_073_741_824m;
+            var totalGb = totalCapacityBytes / 1_073_741_824m;
+            var availableGb = Math.Max(0, totalGb - usedGb);
+
+            return Ok(new MonthlyReportDto
+            {
+                ReportId = $"DV-OPR-{start:yyyyMMdd}-{end:yyyyMMdd}",
+                Month = start.ToString("MMMM yyyy", CultureInfo.InvariantCulture),
+                DateGenerated = DateTime.UtcNow,
+                CreatedBy = User?.Identity?.Name ?? "System",
+                Processing = new MonthlyProcessingStatsDto
+                {
+                    Verified = documents.Count(document => IsStatus(document.CurrentStatus, "approved", "verified", "compliant")),
+                    PendingVerification = documents.Count(document => IsStatus(document.CurrentStatus, "pending", "under review", "awaiting verification")),
+                    FlaggedAnomalies = complianceStatuses.Count(status => status.IsSuspicious || status.HasSanctionFlag)
+                        + auditLogs.Count(log => log.ActionCode.Contains("FLAG", StringComparison.OrdinalIgnoreCase)
+                            || log.ActionCode.Contains("ANOMAL", StringComparison.OrdinalIgnoreCase)),
+                    PartOfEnquiry = enquiryCount
+                },
+                SecurityEvents = days.Select(day =>
+                {
+                    var dayLogs = auditLogs.Where(log => log.TimeStamp.Date == day).ToList();
+                    return new MonthlySecurityEventDto
+                    {
+                        Day = day.Day,
+                        FailedLogins = dayLogs.Count(log => log.ActionCode.Equals("LOGIN_FAILURE", StringComparison.OrdinalIgnoreCase)),
+                        PermissionElevationRequest = dayLogs.Count(log => log.ActionCode.Contains("ROLE", StringComparison.OrdinalIgnoreCase)
+                            || log.ActionCode.Contains("PERMISSION", StringComparison.OrdinalIgnoreCase)),
+                        UnusualAccessPattern = dayLogs.Count(log =>
+                            !log.ActionCode.Equals("LOGIN_FAILURE", StringComparison.OrdinalIgnoreCase)
+                            && !log.ActionCode.Contains("ROLE", StringComparison.OrdinalIgnoreCase)
+                            && !log.ActionCode.Contains("PERMISSION", StringComparison.OrdinalIgnoreCase))
+                    };
+                }).ToList(),
+                Distribution = distribution,
+                Storage = new MonthlyStorageStatsDto
+                {
+                    UsedGb = Math.Round(usedGb, 2),
+                    AvailableGb = Math.Round(availableGb, 2),
+                    TotalGb = Math.Round(totalGb, 2),
+                    UsedPercentage = totalGb == 0 ? 0 : Math.Round(usedGb * 100m / totalGb, 2)
+                },
+                UploadVolume = uploadVolume,
+                TotalUploads = totalUploads,
+                DailyAverage = days.Count == 0 ? 0 : Math.Round(totalUploads / (decimal)days.Count, 2),
+                PeakDay = peak?.Day ?? 0
+            });
+        }
+
+        [HttpGet("monthly/pdf")]
+        public async Task<IActionResult> DownloadMonthlyPdf([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
+        {
+            var result = await GetMonthlyReport(startDate, endDate);
+            if (result.Result is not OkObjectResult ok || ok.Value is not MonthlyReportDto report)
+                return result.Result ?? BadRequest(new { error = "Monthly report could not be generated." });
+            return File(_pdfService.GenerateMonthly(report), "application/pdf", $"{report.ReportId}.pdf");
+        }
+
+        private static bool IsStatus(string status, params string[] expected)
+        {
+            return expected.Any(value => status.Equals(value, StringComparison.OrdinalIgnoreCase));
+        }
+
+        [HttpGet("activity/{ownerId}")]
+        public async Task<ActionResult<ActivityReportDto>> GetActivityReport(string ownerId)
+        {
+            if (string.IsNullOrWhiteSpace(ownerId))
+                return BadRequest(new { error = "Owner ID is required." });
+
+            var owner = await _context.Users.AsNoTracking()
+                .Include(user => user.Profile)
+                .FirstOrDefaultAsync(user => user.Id == ownerId);
+
+            if (owner == null)
+                return NotFound(new { error = "Document owner not found." });
+
+            var documents = await _context.Documents.AsNoTracking()
+                .Include(document => document.DocumentType)
+                .Where(document => document.UserId == ownerId && document.CurrentStatus != "Deleted")
+                .OrderByDescending(document => document.UploadedDate)
+                .ToListAsync();
+
+            var documentColors = new[] { "#1e2a3a", "#2d5282", "#4a7fb5", "#7bafd4", "#b0cfe8" };
+
+            var inventory = documents
+                .Select(document => new DocumentInventoryItemDto
+                {
+                    DocumentName = document.FileName,
+                    Category = document.DocumentType?.TypeName ?? "Unknown",
+                    CategoryColor = documentColors[(document.DocumentTypeId - 1) % documentColors.Length],
+                    UploadDate = document.UploadedDate.ToString("yyyy-MM-dd"),
+                    ExpiryDate = document.ExpiryDate != default ? document.ExpiryDate.UtcDateTime.ToString("yyyy-MM-dd") : null,
+                    VerificationStatus = ResolveDocumentVerificationStatus(document.CurrentStatus, document.ExpiryDate)
+                })
+                .ToList();
+
+            var accessLogs = await _context.DocumentAccessLogs.AsNoTracking()
+                .Include(log => log.Document)
+                .Include(log => log.AccessedByUser)
+                    .ThenInclude(user => user.Profile)
+                .Where(log => log.Document.UserId == ownerId)
+                .OrderByDescending(log => log.AccessDateTime)
+                .Take(25)
+                .ToListAsync();
+
+            var userIds = accessLogs.Select(log => log.AccessedByUserId).Distinct().ToList();
+            var rolesByUserId = await _context.Set<IdentityUserRole<string>>().AsNoTracking()
+                .Where(userRole => userIds.Contains(userRole.UserId))
+                .Join(_context.Roles,
+                    userRole => userRole.RoleId,
+                    role => role.Id,
+                    (userRole, role) => new { userRole.UserId, RoleName = role.Name ?? "System" })
+                .GroupBy(role => role.UserId)
+                .Select(group => new { UserId = group.Key, RoleName = group.First().RoleName })
+                .ToDictionaryAsync(item => item.UserId, item => item.RoleName);
+
+            var institutionByDocumentId = await _context.DocumentAccessApprovals.AsNoTracking()
+                .Include(approval => approval.InstitutionEnquiryRequest)
+                    .ThenInclude(request => request.Institution)
+                .Where(approval => approval.Document.UserId == ownerId)
+                .GroupBy(approval => approval.DocumentId)
+                .Select(group => new
+                {
+                    DocumentId = group.Key,
+                    InstitutionName = group.Select(x => x.InstitutionEnquiryRequest.Institution.InstitutionName).FirstOrDefault() ?? "DocuVault Platform"
+                })
+                .ToDictionaryAsync(item => item.DocumentId, item => item.InstitutionName);
+
+            var vaultAccessLog = accessLogs
+                .Select(log =>
+                {
+                    var accessorRole = rolesByUserId.TryGetValue(log.AccessedByUserId, out var resolvedRoleName)
+                        ? resolvedRoleName
+                        : "System";
+
+                    var organisation = institutionByDocumentId.TryGetValue(log.DocumentId, out var resolvedOrgName)
+                        ? resolvedOrgName
+                        : "DocuVault Platform";
+
+                    return new VaultAccessLogEntryDto
+                    {
+                        Timestamp = log.AccessDateTime.ToString("yyyy-MM-dd HH:mm"),
+                        AccessorName = BuildFullName(log.AccessedByUser?.Profile),
+                        AccessorRole = accessorRole,
+                        ActionReason = $"{log.ActionType} · {log.Document?.FileName ?? "Document"}",
+                        Organisation = organisation
+                    };
+                })
+                .ToList();
+
+            var accessGrants = await _context.DocumentAccesses.AsNoTracking()
+                .Include(access => access.Document)
+                .Where(access => access.Document.UserId == ownerId)
+                .GroupBy(access => access.DocumentId)
+                .Select(group => new { DocumentId = group.Key, Count = group.Count() })
+                .ToListAsync();
+
+            var categoryBreakdown = documents
+                .GroupBy(document => document.DocumentType?.TypeName ?? "Unknown")
+                .OrderBy(group => group.Key)
+                .Select((group, index) => new MonthlyDistributionCategoryDto
+                {
+                    Label = group.Key,
+                    Count = group.Count(),
+                    Percentage = documents.Count == 0 ? 0 : Math.Round(group.Count() * 100m / documents.Count, 2),
+                    Color = documentColors[index % documentColors.Length]
+                })
+                .ToList();
+
+            var activeDocuments = documents.Count(document => ResolveDocumentStatusState(document.CurrentStatus, document.ExpiryDate) == "Active");
+            var inactiveDocuments = documents.Count - activeDocuments;
+
+            var clientRelationships = await _context.DocumentAccessApprovals.AsNoTracking()
+                .Include(approval => approval.InstitutionEnquiryRequest)
+                    .ThenInclude(request => request.Institution)
+                .Include(approval => approval.Document)
+                .Where(approval => approval.Document.UserId == ownerId)
+                .GroupBy(approval => approval.InstitutionEnquiryRequest.Institution.InstitutionName)
+                .Select(group => new ClientRelationshipDto
+                {
+                    Organisation = group.Key,
+                    DocumentsShared = group.Select(x => x.DocumentId).Distinct().Count(),
+                    Status = group.Any(x => x.ExpiresAt.HasValue && x.ExpiresAt.Value > DateTime.UtcNow && !x.IsRevoked) ? "Active" : (group.Any(x => x.IsRevoked) ? "Expired" : "Pending")
+                })
+                .OrderByDescending(item => item.DocumentsShared)
+                .ToListAsync();
+
+            if (clientRelationships.Count == 0 && accessGrants.Count > 0)
+            {
+                clientRelationships = accessGrants
+                    .Take(5)
+                    .Select(item => new ClientRelationshipDto
+                    {
+                        Organisation = "Access Granted",
+                        DocumentsShared = item.Count,
+                        Status = "Active"
+                    })
+                    .ToList();
+            }
+
+            var ownerName = BuildFullName(owner.Profile);
+            var activityReport = new ActivityReportDto
+            {
+                ReportId = $"DV-DAR-{ownerId}-{DateTime.UtcNow:yyyyMMddHHmmss}",
+                DateGenerated = DateTime.UtcNow,
+                DocumentOwner = ownerName,
+                OwnerId = owner.Id,
+                ActiveDocuments = activeDocuments,
+                InactiveDocuments = inactiveDocuments,
+                TotalDocuments = documents.Count,
+                DistributionByCategory = categoryBreakdown,
+                Inventory = inventory,
+                VaultAccessLog = vaultAccessLog,
+                ClientRelationships = clientRelationships
+            };
+
+            return Ok(activityReport);
+        }
+
+        [HttpGet("activity/{ownerId}/pdf")]
+        public async Task<IActionResult> DownloadActivityPdf(string ownerId)
+        {
+            var result = await GetActivityReport(ownerId);
+            if (result.Result is not OkObjectResult ok || ok.Value is not ActivityReportDto report)
+                return result.Result ?? BadRequest(new { error = "Activity report could not be generated." });
+            return File(_pdfService.GenerateActivity(report), "application/pdf", $"{report.ReportId}.pdf");
+        }
+
+        private static string BuildFullName(Profile? profile)
+        {
+            if (profile == null)
+                return "Unknown User";
+
+            var name = $"{profile.FirstName ?? string.Empty} {profile.LastName ?? string.Empty}".Trim();
+            return string.IsNullOrWhiteSpace(name) ? "Unknown User" : name;
+        }
+
+        private static string ResolveDocumentVerificationStatus(string currentStatus, DateTimeOffset expiryDate)
+        {
+            var normalized = currentStatus?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(normalized))
+                return "Pending";
+
+            if (normalized.Equals("Verified", StringComparison.OrdinalIgnoreCase)
+                || normalized.Equals("Approved", StringComparison.OrdinalIgnoreCase)
+                || normalized.Equals("Compliant", StringComparison.OrdinalIgnoreCase)
+                || normalized.Equals("Active", StringComparison.OrdinalIgnoreCase))
+                return expiryDate <= DateTimeOffset.UtcNow ? "Expired" : (expiryDate <= DateTimeOffset.UtcNow.AddDays(30) ? "Expiring Soon" : "Verified");
+
+            if (normalized.Equals("Pending", StringComparison.OrdinalIgnoreCase)
+                || normalized.Contains("Review", StringComparison.OrdinalIgnoreCase)
+                || normalized.Contains("Awaiting", StringComparison.OrdinalIgnoreCase))
+                return "Pending";
+
+            if (normalized.Equals("Expired", StringComparison.OrdinalIgnoreCase) || expiryDate <= DateTimeOffset.UtcNow)
+                return "Expired";
+
+            if (expiryDate <= DateTimeOffset.UtcNow.AddDays(30))
+                return "Expiring Soon";
+
+            return "Verified";
+        }
+
+        private static string ResolveDocumentStatusState(string currentStatus, DateTimeOffset expiryDate)
+        {
+            var verification = ResolveDocumentVerificationStatus(currentStatus, expiryDate);
+            return verification == "Verified" || verification == "Expiring Soon" ? "Active" : "Inactive";
+        }
+
+        [HttpPost("ad-hoc")]
+        public async Task<ActionResult<object>> CreateAdHocReport([FromBody] AdHocReportRequestDto request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Title) || request.FocusAreas.Count == 0)
+                return BadRequest(new { error = "A title and at least one report focus area are required." });
+
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)
+                ?? User.FindFirstValue(ClaimTypes.Name)
+                ?? "unknown";
+            var createdByName = User.FindFirstValue(ClaimTypes.GivenName)
+                ?? User.FindFirstValue(ClaimTypes.Name)
+                ?? "Unknown User";
+
+            var report = new AdHocReport
+            {
+                Title = request.Title.Trim(),
+                DateFrom = request.DateFrom.Date,
+                DateTo = request.DateTo.Date,
+                FocusAreas = JsonSerializer.Serialize(request.FocusAreas),
+                ExportFormat = string.IsNullOrWhiteSpace(request.ExportFormat) ? "PDF" : request.ExportFormat.Trim().ToUpperInvariant(),
+                CreatedByUserId = userId,
+                CreatedByName = createdByName,
+                CreatedAt = DateTime.UtcNow,
+                Status = "ready",
+                SizeKb = 0
+            };
+
+            _context.AdHocReports.Add(report);
+            await _context.SaveChangesAsync();
+
+            return Ok(new { reportId = report.AdHocReportId.ToString(), message = "Ad-hoc report saved." });
+        }
+
+        [HttpGet("ad-hoc/recent")]
+        public async Task<ActionResult<List<AdHocReportSummaryDto>>> GetRecentAdHocReports()
+        {
+            var reports = await _context.AdHocReports
+                .AsNoTracking()
+                .OrderByDescending(report => report.CreatedAt)
+                .Take(10)
+                .Select(report => new AdHocReportSummaryDto
+                {
+                    Id = report.AdHocReportId.ToString(),
+                    Title = report.Title,
+                    Date = report.CreatedAt,
+                    SizeKb = report.SizeKb,
+                    Status = report.Status
+                })
+                .ToListAsync();
+
+            return Ok(reports);
+        }
+
+        [HttpGet("ad-hoc/{id:int}")]
+        public async Task<ActionResult<AdHocReportDataDto>> GetAdHocReportData(int id)
+        {
+            var report = await _context.AdHocReports.AsNoTracking()
+                .FirstOrDefaultAsync(item => item.AdHocReportId == id);
+            if (report == null)
+                return NotFound(new { error = "Report not found." });
+
+            var focusAreas = JsonSerializer.Deserialize<List<string>>(report.FocusAreas) ?? new();
+            var normalizedFocusAreas = focusAreas
+                .Select(focus => focus.Trim().ToUpperInvariant())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var result = new AdHocReportDataDto
+            {
+                ReportId = report.AdHocReportId,
+                Title = report.Title,
+                DateFrom = report.DateFrom,
+                DateTo = report.DateTo,
+                DateGenerated = report.CreatedAt,
+                CreatedBy = report.CreatedByName,
+                FocusAreas = focusAreas
+            };
+
+            var hasDocuments = normalizedFocusAreas.Contains("DOCUMENT_PROCESSING")
+                || normalizedFocusAreas.Contains("DOCUMENT_DISTRIBUTION")
+                || normalizedFocusAreas.Contains("SYSTEM_STORAGE")
+                || normalizedFocusAreas.Contains("UPLOAD_VOLUME");
+            var documents = hasDocuments ? await GetReportDocumentsAsync(report) : new List<Document>();
+
+            if (normalizedFocusAreas.Any(focus => focus is "COMPLIANCE" or "COMPLIANCE_STATUS" or "COMPLIANCE_STATUSES"))
+            {
+                result.ComplianceResults = await _context.ComplianceStatuses.AsNoTracking()
+                    .Where(status => status.LastChecked >= report.DateFrom && status.LastChecked < report.DateTo.Date.AddDays(1))
+                    .OrderBy(status => status.LastChecked)
+                    .Select(status => new AdHocComplianceResultDto
+                    {
+                        StatusId = status.ComplianceStatusId,
+                        UserId = status.UserId,
+                        OverallStatus = status.OverallStatus,
+                        RiskLevel = status.RiskLevel,
+                        CompliancePercentage = status.CompliancePercentage,
+                        OverallRiskScore = status.OverallRiskScore,
+                        LastChecked = status.LastChecked
+                    })
+                    .ToListAsync();
+            }
+
+            if (normalizedFocusAreas.Contains("DOCUMENT_PROCESSING"))
+            {
+                result.DocumentResults = documents.Select(document => new AdHocDocumentResultDto
+                {
+                    DocumentId = document.DocumentId,
+                    FileName = document.FileName,
+                    DocumentType = document.DocumentType?.TypeName ?? "Unknown",
+                    Status = document.CurrentStatus,
+                    UploadedDate = document.UploadedDate,
+                    FileSizeBytes = document.FileSizeBytes,
+                    Certified = document.IsCertified
+                }).ToList();
+            }
+
+            if (normalizedFocusAreas.Contains("DOCUMENT_DISTRIBUTION"))
+            {
+                result.DistributionResults = documents
+                    .GroupBy(document => document.DocumentType?.TypeName ?? "Unknown")
+                    .OrderBy(group => group.Key)
+                    .Select(group => new AdHocDistributionResultDto
+                    {
+                        DocumentType = group.Key,
+                        DocumentCount = group.Count(),
+                        TotalSizeBytes = group.Sum(document => document.FileSizeBytes)
+                    })
+                    .ToList();
+            }
+
+            if (normalizedFocusAreas.Contains("SYSTEM_STORAGE"))
+            {
+                result.StorageResult = new AdHocStorageResultDto
+                {
+                    DateFrom = report.DateFrom,
+                    DateTo = report.DateTo,
+                    DocumentCount = documents.Count,
+                    TotalSizeBytes = documents.Sum(document => document.FileSizeBytes)
+                };
+            }
+
+            if (normalizedFocusAreas.Contains("UPLOAD_VOLUME"))
+            {
+                result.UploadVolumeResults = documents
+                    .GroupBy(document => document.UploadedDate.Date)
+                    .OrderBy(group => group.Key)
+                    .Select(group => new AdHocUploadVolumeResultDto
+                    {
+                        UploadDate = group.Key,
+                        UploadCount = group.Count()
+                    })
+                    .ToList();
+            }
+
+            if (normalizedFocusAreas.Contains("SECURITY_ANOMALIES"))
+            {
+                result.SecurityResults = await _context.AuditLogs.AsNoTracking()
+                    .Where(log => log.TimeStamp >= new DateTimeOffset(report.DateFrom)
+                        && log.TimeStamp < new DateTimeOffset(report.DateTo.Date.AddDays(1)))
+                    .OrderBy(log => log.TimeStamp)
+                    .Select(log => new AdHocSecurityResultDto
+                    {
+                        AuditLogId = log.AuditLogId,
+                        UserId = log.UserId ?? "System",
+                        Action = log.ActionCode,
+                        Timestamp = log.TimeStamp.DateTime,
+                        Description = log.Description ?? string.Empty,
+                        Table = log.TableAffected
+                    })
+                    .ToListAsync();
+            }
+
+            return Ok(result);
+        }
+
+        [HttpGet("ad-hoc/{id:int}/pdf")]
+        public async Task<IActionResult> DownloadAdHocPdf(int id)
+        {
+            var result = await GetAdHocReportData(id);
+            if (result.Result is not OkObjectResult ok || ok.Value is not AdHocReportDataDto report)
+                return result.Result ?? BadRequest(new { error = "Ad-hoc report could not be generated." });
+            return File(_pdfService.GenerateAdHoc(report), "application/pdf", $"AD-HOC-{report.ReportId}.pdf");
+        }
+
+        [HttpGet("ad-hoc/{id:int}/excel")]
+        public async Task<IActionResult> DownloadAdHocExcel(int id)
+        {
+            var report = await _context.AdHocReports
+                .AsNoTracking()
+                .FirstOrDefaultAsync(item => item.AdHocReportId == id);
+            if (report == null)
+                return NotFound(new { error = "Report not found." });
+
+            using var workbook = new XLWorkbook();
+            var sheet = workbook.Worksheets.Add("Document Activity");
+            sheet.Cell("A1").Value = report.Title;
+            sheet.Range("A1:G1").Merge();
+            sheet.Cell("A1").Style.Font.Bold = true;
+            sheet.Cell("A1").Style.Font.FontSize = 16;
+
+            sheet.Cell("A3").Value = "Field";
+            sheet.Cell("B3").Value = "Value";
+            sheet.Range("A3:B3").Style.Font.Bold = true;
+            sheet.Range("A3:B3").Style.Fill.BackgroundColor = XLColor.LightBlue;
+            sheet.Cell("A4").Value = "Report ID";
+            sheet.Cell("B4").Value = report.AdHocReportId;
+            sheet.Cell("A5").Value = "Generated by";
+            sheet.Cell("B5").Value = report.CreatedByName;
+            sheet.Cell("A6").Value = "Generated date";
+            sheet.Cell("B6").Value = report.CreatedAt;
+            sheet.Cell("B6").Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss";
+            sheet.Cell("A7").Value = "Date from";
+            sheet.Cell("B7").Value = report.DateFrom;
+            sheet.Cell("B7").Style.DateFormat.Format = "yyyy-mm-dd";
+            sheet.Cell("A8").Value = "Date to";
+            sheet.Cell("B8").Value = report.DateTo;
+            sheet.Cell("B8").Style.DateFormat.Format = "yyyy-mm-dd";
+            sheet.Cell("A9").Value = "Export format";
+            sheet.Cell("B9").Value = report.ExportFormat;
+            sheet.Cell("A10").Value = "Focus areas";
+            sheet.Cell("B10").Value = string.Join(", ", JsonSerializer.Deserialize<List<string>>(report.FocusAreas) ?? new());
+
+            var focusAreas = JsonSerializer.Deserialize<List<string>>(report.FocusAreas) ?? new();
+            if (focusAreas.Count == 0)
+                focusAreas.Add("DOCUMENT_PROCESSING");
+
+            foreach (var focusArea in focusAreas.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                switch (focusArea.Trim().ToUpperInvariant())
+                {
+                    case "COMPLIANCE":
+                    case "COMPLIANCE_STATUS":
+                    case "COMPLIANCE_STATUSES":
+                        await AddComplianceResultsSheetAsync(workbook, report);
+                        break;
+                    case "SECURITY_ANOMALIES":
+                        await AddSecurityResultsSheetAsync(workbook, report);
+                        break;
+                    case "DOCUMENT_DISTRIBUTION":
+                        await AddDistributionResultsSheetAsync(workbook, report);
+                        break;
+                    case "SYSTEM_STORAGE":
+                        await AddStorageResultsSheetAsync(workbook, report);
+                        break;
+                    case "UPLOAD_VOLUME":
+                        await AddUploadVolumeResultsSheetAsync(workbook, report);
+                        break;
+                    default:
+                        await AddDocumentResultsSheetAsync(workbook, report);
+                        break;
+                }
+            }
+
+            sheet.Columns().AdjustToContents();
+            sheet.Column(1).Width = Math.Max(sheet.Column(1).Width, 20);
+            sheet.Column(2).Width = Math.Min(Math.Max(sheet.Column(2).Width, 24), 80);
+
+            using var stream = new MemoryStream();
+            workbook.SaveAs(stream);
+            return File(
+                stream.ToArray(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                $"{SanitizeFileName(report.Title)}.xlsx");
+        }
+
+        private static string SanitizeFileName(string title)
+        {
+            var invalidCharacters = Path.GetInvalidFileNameChars();
+            var safeTitle = new string(title.Select(character => invalidCharacters.Contains(character) ? '_' : character).ToArray());
+            return string.IsNullOrWhiteSpace(safeTitle) ? "ad-hoc-report" : safeTitle.Trim();
+        }
+
+        private async Task AddDocumentResultsSheetAsync(XLWorkbook workbook, AdHocReport report)
+        {
+            var documents = await GetReportDocumentsAsync(report);
+            var sheet = CreateResultsSheet(workbook, "Document Processing", new[] { "Document ID", "File name", "Document type", "Status", "Uploaded date", "File size (bytes)", "Certified" });
+            for (var index = 0; index < documents.Count; index++)
+            {
+                var document = documents[index];
+                var row = index + 2;
+                sheet.Cell(row, 1).Value = document.DocumentId;
+                sheet.Cell(row, 2).Value = document.FileName;
+                sheet.Cell(row, 3).Value = document.DocumentType?.TypeName ?? "Unknown";
+                sheet.Cell(row, 4).Value = document.CurrentStatus;
+                sheet.Cell(row, 5).Value = document.UploadedDate;
+                sheet.Cell(row, 5).Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss";
+                sheet.Cell(row, 6).Value = document.FileSizeBytes;
+                sheet.Cell(row, 7).Value = document.IsCertified;
+            }
+            FormatResultsSheet(sheet);
+        }
+
+        private async Task<List<Document>> GetReportDocumentsAsync(AdHocReport report)
+        {
+            return await _context.Documents.AsNoTracking()
+                .Include(document => document.DocumentType)
+                .Where(document => document.UploadedDate >= report.DateFrom
+                    && document.UploadedDate < report.DateTo.Date.AddDays(1)
+                    && document.CurrentStatus != "Deleted")
+                .OrderBy(document => document.UploadedDate)
+                .ToListAsync();
+        }
+
+        private async Task AddComplianceResultsSheetAsync(XLWorkbook workbook, AdHocReport report)
+        {
+            var statuses = await _context.ComplianceStatuses.AsNoTracking()
+                .Where(status => status.LastChecked >= report.DateFrom && status.LastChecked < report.DateTo.Date.AddDays(1))
+                .OrderBy(status => status.LastChecked)
+                .ToListAsync();
+            var sheet = CreateResultsSheet(workbook, "Compliance Results", new[] { "Status ID", "User ID", "Overall status", "Risk level", "Compliance %", "Risk score", "Last checked" });
+            for (var index = 0; index < statuses.Count; index++)
+            {
+                var status = statuses[index];
+                var row = index + 2;
+                sheet.Cell(row, 1).Value = status.ComplianceStatusId;
+                sheet.Cell(row, 2).Value = status.UserId;
+                sheet.Cell(row, 3).Value = status.OverallStatus;
+                sheet.Cell(row, 4).Value = status.RiskLevel;
+                sheet.Cell(row, 5).Value = status.CompliancePercentage;
+                sheet.Cell(row, 6).Value = status.OverallRiskScore;
+                sheet.Cell(row, 7).Value = status.LastChecked;
+                sheet.Cell(row, 7).Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss";
+            }
+            FormatResultsSheet(sheet);
+        }
+
+        private async Task AddSecurityResultsSheetAsync(XLWorkbook workbook, AdHocReport report)
+        {
+            var logs = await _context.AuditLogs.AsNoTracking()
+                .Where(log => log.TimeStamp >= new DateTimeOffset(report.DateFrom) && log.TimeStamp < new DateTimeOffset(report.DateTo.Date.AddDays(1)))
+                .OrderBy(log => log.TimeStamp)
+                .ToListAsync();
+            var sheet = CreateResultsSheet(workbook, "Security Anomalies", new[] { "Audit ID", "User ID", "Action", "Timestamp", "Description", "Table", "Record ID" });
+            for (var index = 0; index < logs.Count; index++)
+            {
+                var log = logs[index];
+                var row = index + 2;
+                sheet.Cell(row, 1).Value = log.AuditLogId;
+                sheet.Cell(row, 2).Value = log.UserId ?? "System";
+                sheet.Cell(row, 3).Value = log.ActionCode;
+                sheet.Cell(row, 4).Value = log.TimeStamp.DateTime;
+                sheet.Cell(row, 4).Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss";
+                sheet.Cell(row, 5).Value = log.Description ?? string.Empty;
+                sheet.Cell(row, 6).Value = log.TableAffected;
+                if (log.RecordID.HasValue) sheet.Cell(row, 7).Value = log.RecordID.Value;
+            }
+            FormatResultsSheet(sheet);
+        }
+
+        private async Task AddDistributionResultsSheetAsync(XLWorkbook workbook, AdHocReport report)
+        {
+            var documents = await GetReportDocumentsAsync(report);
+            var groups = documents.GroupBy(document => document.DocumentType?.TypeName ?? "Unknown")
+                .OrderBy(group => group.Key).ToList();
+            var sheet = CreateResultsSheet(workbook, "Document Distribution", new[] { "Document type", "Document count", "Total size (bytes)" });
+            for (var index = 0; index < groups.Count; index++)
+            {
+                var group = groups[index];
+                sheet.Cell(index + 2, 1).Value = group.Key;
+                sheet.Cell(index + 2, 2).Value = group.Count();
+                sheet.Cell(index + 2, 3).Value = group.Sum(document => document.FileSizeBytes);
+            }
+            FormatResultsSheet(sheet);
+        }
+
+        private async Task AddStorageResultsSheetAsync(XLWorkbook workbook, AdHocReport report)
+        {
+            var documents = await GetReportDocumentsAsync(report);
+            var sheet = CreateResultsSheet(workbook, "System Storage", new[] { "Period from", "Period to", "Document count", "Total size (bytes)" });
+            sheet.Cell("A2").Value = report.DateFrom;
+            sheet.Cell("B2").Value = report.DateTo;
+            sheet.Cell("A2").Style.DateFormat.Format = "yyyy-mm-dd";
+            sheet.Cell("B2").Style.DateFormat.Format = "yyyy-mm-dd";
+            sheet.Cell("C2").Value = documents.Count;
+            sheet.Cell("D2").Value = documents.Sum(document => document.FileSizeBytes);
+            FormatResultsSheet(sheet);
+        }
+
+        private async Task AddUploadVolumeResultsSheetAsync(XLWorkbook workbook, AdHocReport report)
+        {
+            var documents = await GetReportDocumentsAsync(report);
+            var groups = documents.GroupBy(document => document.UploadedDate.Date).OrderBy(group => group.Key).ToList();
+            var sheet = CreateResultsSheet(workbook, "Upload Volume", new[] { "Upload date", "Upload count" });
+            for (var index = 0; index < groups.Count; index++)
+            {
+                sheet.Cell(index + 2, 1).Value = groups[index].Key;
+                sheet.Cell(index + 2, 1).Style.DateFormat.Format = "yyyy-mm-dd";
+                sheet.Cell(index + 2, 2).Value = groups[index].Count();
+            }
+            FormatResultsSheet(sheet);
+        }
+
+        private static IXLWorksheet CreateResultsSheet(XLWorkbook workbook, string name, IReadOnlyList<string> headers)
+        {
+            var sheet = workbook.Worksheets.Add(name);
+            for (var index = 0; index < headers.Count; index++) sheet.Cell(1, index + 1).Value = headers[index];
+            sheet.Range(1, 1, 1, headers.Count).Style.Font.Bold = true;
+            sheet.Range(1, 1, 1, headers.Count).Style.Fill.BackgroundColor = XLColor.LightBlue;
+            return sheet;
+        }
+
+        private static void FormatResultsSheet(IXLWorksheet sheet)
+        {
+            sheet.Columns().AdjustToContents();
+            for (var column = 1; column <= sheet.LastColumnUsed()?.ColumnNumber(); column++)
+                sheet.Column(column).Width = Math.Min(Math.Max(sheet.Column(column).Width, 14), 60);
         }
 
         [HttpGet("document-owner-compliance")]
@@ -218,7 +958,7 @@ namespace FourierIT_API.Controllers
                 return new List<DocumentOwnerComplianceReportRowDto>();
             }
 
-            var ownerUserIds = await _context.UserRoles
+            var ownerUserIds = await _context.Set<IdentityUserRole<string>>()
                 .AsNoTracking()
                 .Where(ur => ur.RoleId == docOwnerRole.Id)
                 .Select(ur => ur.UserId)
@@ -530,15 +1270,24 @@ namespace FourierIT_API.Controllers
 
             var departmentIds = departments.Select(d => d.DepartmentId).ToList();
 
-            var departmentAdmins = await _context.UserRoles
+            var departmentAdmins = await _context.Set<IdentityUserRole<string>>()
                 .AsNoTracking()
-                .Where(ur => ur.Role.NormalizedName == "DEPARTMENT ADMIN" && ur.User.DepartmentId.HasValue && departmentIds.Contains(ur.User.DepartmentId.Value))
-                .Select(ur => new
+                .Join(_context.Roles,
+                    userRole => userRole.RoleId,
+                    role => role.Id,
+                    (userRole, role) => new { userRole, role })
+                .Where(joined => joined.role.NormalizedName == "DEPARTMENT ADMIN")
+                .Join(_context.Users,
+                    joined => joined.userRole.UserId,
+                    user => user.Id,
+                    (joined, user) => new { joined.userRole, user })
+                .Where(joined => joined.user.DepartmentId.HasValue && departmentIds.Contains(joined.user.DepartmentId.Value))
+                .Select(joined => new
                 {
-                    DepartmentId = ur.User.DepartmentId!.Value,
-                    FirstName = ur.User.Profile.FirstName,
-                    LastName = ur.User.Profile.LastName,
-                    ur.User.Email
+                    DepartmentId = joined.user.DepartmentId!.Value,
+                    FirstName = joined.user.Profile.FirstName,
+                    LastName = joined.user.Profile.LastName,
+                    joined.user.Email
                 })
                 .ToListAsync();
 

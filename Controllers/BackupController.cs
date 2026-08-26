@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Logging;
 using FourierIT_API.DTOs;
 using FourierIT_API.Interfaces;
@@ -8,6 +9,7 @@ namespace FourierIT_API.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize(Policy = "Backup.Manage")]
     public class BackupController : ControllerBase
     {
         private readonly IBackupService _backupService;

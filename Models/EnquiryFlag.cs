@@ -21,6 +21,8 @@ namespace FourierIT_API.Models
 
         public bool IsResolved { get; set; } = false;
 
+        public DateTimeOffset FlaggedAt { get; set; } = DateTimeOffset.UtcNow;
+
         // Navigation property for AccessList
         public ICollection<AccessList> AccessLists { get; set; } = new List<AccessList>();
     }

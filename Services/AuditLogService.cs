@@ -29,7 +29,7 @@ namespace FourierIT_API.Services
             DateTimeOffset? from,
             DateTimeOffset? to)
         {
-            var query = _context.AuditLogs.AsNoTracking().AsQueryable();
+            var query = _context.AuditLogs.AsNoTracking().Include(a => a.User).Include(a => a.Institution).AsQueryable();
 
             if (!string.IsNullOrWhiteSpace(userId))
             {
@@ -57,6 +57,10 @@ namespace FourierIT_API.Services
                 {
                     AuditLogId = a.AuditLogId,
                     UserId = a.UserId,
+                    UserName = a.User != null ? a.User.UserName : null,
+                    UserEmail = a.User != null ? a.User.Email : null,
+                    InstitutionId = a.InstitutionId,
+                    InstitutionName = a.Institution != null ? a.Institution.InstitutionName : null,
                     ActionCode = a.ActionCode,
                     TimeStamp = a.TimeStamp,
                     Description = a.Description,
@@ -77,7 +81,7 @@ namespace FourierIT_API.Services
             int pageSize,
             string? query)
         {
-            var q = _context.AuditLogs.AsNoTracking().AsQueryable();
+            var q = _context.AuditLogs.AsNoTracking().Include(a => a.User).Include(a => a.Institution).AsQueryable();
 
             if (!string.IsNullOrWhiteSpace(userId))
             {
@@ -104,7 +108,10 @@ namespace FourierIT_API.Services
                 var qLower = query.ToLowerInvariant();
                 q = q.Where(a => (a.Description ?? string.Empty).ToLower().Contains(qLower)
                                  || a.ActionCode.ToLower().Contains(qLower)
-                                 || a.UserId.ToLower().Contains(qLower));
+                                 || (a.UserId ?? string.Empty).ToLower().Contains(qLower)
+                                 || (a.User != null && ((a.User.UserName ?? string.Empty).ToLower().Contains(qLower)
+                                     || (a.User.Email ?? string.Empty).ToLower().Contains(qLower)))
+                                 || (a.Institution != null && a.Institution.InstitutionName.ToLower().Contains(qLower)));
             }
 
             var total = await q.CountAsync();
@@ -120,6 +127,10 @@ namespace FourierIT_API.Services
                 {
                     AuditLogId = a.AuditLogId,
                     UserId = a.UserId,
+                    UserName = a.User != null ? a.User.UserName : null,
+                    UserEmail = a.User != null ? a.User.Email : null,
+                    InstitutionId = a.InstitutionId,
+                    InstitutionName = a.Institution != null ? a.Institution.InstitutionName : null,
                     ActionCode = a.ActionCode,
                     TimeStamp = a.TimeStamp,
                     Description = a.Description,
@@ -141,6 +152,8 @@ namespace FourierIT_API.Services
         {
             var auditLog = await _context.AuditLogs
                 .AsNoTracking()
+                .Include(a => a.User)
+                .Include(a => a.Institution)
                 .FirstOrDefaultAsync(a => a.AuditLogId == id);
 
             if (auditLog == null)
@@ -150,6 +163,10 @@ namespace FourierIT_API.Services
             {
                 AuditLogId = auditLog.AuditLogId,
                 UserId = auditLog.UserId,
+                UserName = auditLog.User?.UserName,
+                UserEmail = auditLog.User?.Email,
+                InstitutionId = auditLog.InstitutionId,
+                InstitutionName = auditLog.Institution?.InstitutionName,
                 ActionCode = auditLog.ActionCode,
                 TimeStamp = auditLog.TimeStamp,
                 Description = auditLog.Description,
@@ -173,6 +190,10 @@ namespace FourierIT_API.Services
             {
                 AuditLogId = auditLog.AuditLogId,
                 UserId = auditLog.UserId,
+                UserName = auditLog.User?.UserName,
+                UserEmail = auditLog.User?.Email,
+                InstitutionId = auditLog.InstitutionId,
+                InstitutionName = auditLog.Institution?.InstitutionName,
                 ActionCode = auditLog.ActionCode,
                 TimeStamp = auditLog.TimeStamp,
                 Description = auditLog.Description,

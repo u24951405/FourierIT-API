@@ -78,7 +78,7 @@ namespace FourierIT_API.Controllers
             return Ok(dto);
         }
         
-        [Authorize(Roles = "Department Admin")]
+        [Authorize(Policy = "Users.Manage")]
         [HttpPut]
         [Route("{profileId}")]
         public async Task<IActionResult> UpdateProfile([FromRoute] int profileId, [FromBody] UpdateProfileRequestDto updateDto)
@@ -93,7 +93,7 @@ namespace FourierIT_API.Controllers
             return Ok(profileModel.ToProfileDto());           
         }
 
-        [Authorize(Roles = "Department Admin")]
+        [Authorize(Policy = "Users.Manage")]
         [HttpDelete]
         [Route("{profileId}")]
         public async Task<IActionResult> DeleteProfile([FromRoute] int profileId)

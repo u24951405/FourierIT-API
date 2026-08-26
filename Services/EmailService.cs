@@ -107,7 +107,7 @@ namespace FourierIT_API.Services
             return $"Hello,\n\n" +
                    "We received a request to reset your DocuVault password. Use the link below to choose a new password:\n\n" +
                    $"{resetLink}\n\n" +
-                   $"This link expires on {expiresAt:yyyy-MM-dd HH:mm} UTC.\n\n" +
+                   $"This link expires on {expiresAt:yyyy-MM-dd HH:mm}.\n\n" +
                    "If you did not request a password reset, you can safely ignore this message.\n\n" +
                    "Thank you,\n" +
                    "M5CS | DocuVault Security Team\n";
@@ -129,7 +129,7 @@ namespace FourierIT_API.Services
                    $"<p style=\"margin:0 0 32px;text-align:center;\"><a href=\"{resetLink}\" style=\"display:inline-flex;align-items:center;justify-content:center;padding:14px 26px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:12px;font-weight:700;box-shadow:0 12px 30px rgba(37,99,235,0.18);\">Reset Password</a></p>" +
                    "<div style=\"padding:24px;background:#f8fafc;border-radius:18px;border:1px solid #e2e8f0;margin-bottom:32px;\">" +
                    "<p style=\"margin:0 0 12px;font-size:14px;font-weight:700;color:#0f172a;\">Link expiry</p>" +
-                   $"<p style=\"margin:0;font-size:15px;color:#475569;\">This link expires on <strong>{expiresAt:yyyy-MM-dd HH:mm} UTC</strong>.</p>" +
+                   $"<p style=\"margin:0;font-size:15px;color:#475569;\">This link expires on <strong>{expiresAt:yyyy-MM-dd HH:mm}</strong>.</p>" +
                    "</div>" +
                    "<p style=\"margin:0 0 18px;font-size:15px;color:#475569;\">If you did not request a password reset, please ignore this message or contact your administrator.</p>" +
                    "</div>" +
@@ -236,7 +236,7 @@ namespace FourierIT_API.Services
         {
             var expiryText = expiresAt == DateTimeOffset.MaxValue
                 ? "This access link does not expire."
-                : $"This link expires on {expiresAt:yyyy-MM-dd HH:mm} UTC, so please access it promptly.";
+                : $"This link expires on {expiresAt:yyyy-MM-dd HH:mm}, so please access it promptly.";
 
             return $"Hello,\n\n" +
                    $"You have been invited to securely access DocuVault on behalf of {institutionName}.\n\n" +
@@ -265,7 +265,7 @@ namespace FourierIT_API.Services
                    $"<p style=\"margin:0 0 32px;text-align:center;\"><a href=\"{accessLink}\" style=\"display:inline-flex;align-items:center;justify-content:center;padding:14px 26px;background:#2563eb;color:#ffffff;text-decoration:none;border-radius:12px;font-weight:700;box-shadow:0 12px 30px rgba(37,99,235,0.18);\">Open Secure Access Portal</a></p>" +
                    $"<div style=\"padding:24px;background:#f8fafc;border-radius:18px;border:1px solid #e2e8f0;margin-bottom:32px;\">" +
                    $"<p style=\"margin:0 0 12px;font-size:14px;font-weight:700;color:#0f172a;\">Link expiry</p>" +
-                   $"<p style=\"margin:0;font-size:15px;color:#475569;\">{(expiresAt == DateTimeOffset.MaxValue ? "This access link does not expire." : $"This link expires on <strong>{expiresAt:yyyy-MM-dd HH:mm} UTC</strong>. Please open it before then.")}</p>" +
+                   $"<p style=\"margin:0;font-size:15px;color:#475569;\">{(expiresAt == DateTimeOffset.MaxValue ? "This access link does not expire." : $"This link expires on <strong>{expiresAt:yyyy-MM-dd HH:mm}</strong>. Please open it before then.")}</p>" +
                    "</div>" +
                    $"<p style=\"margin:0 0 18px;font-size:15px;color:#475569;\">This invitation email contains ONLY your secure access link. The one-time verification code (OTP) will be generated and sent separately to this email address after the link is opened.</p>" +
                    $"<p style=\"margin:0;font-size:15px;color:#475569;\">If you did not request this invitation, please ignore this message or contact your administrator immediately.</p>" +
@@ -289,7 +289,7 @@ namespace FourierIT_API.Services
             return $"Welcome to DocuVault!\n\n" +
                    "We’re glad you’re joining us. To complete your registration and verify your email, please use the code below.\n\n" +
                    $"Your verification code is: {otpCode}\n\n" +
-                   $"This code will expire on {expiresAt:yyyy-MM-dd HH:mm} UTC.\n\n" +
+                   $"This code will expire on {expiresAt:yyyy-MM-dd HH:mm}.\n\n" +
                    "If you did not create this account, please ignore this message and contact support.\n\n" +
                    "Thank you,\n" +
                    "M5CS | DocuVault Security Team\n";
@@ -310,7 +310,7 @@ namespace FourierIT_API.Services
                    "<p style=\"margin:0 0 24px;font-size:16px;color:#334155;\">Hello,<br/>Welcome to DocuVault. Please verify your email address to complete your account registration and activate your profile.</p>" +
                    $"<div style=\"padding:26px 24px;background:#eff6ff;border-radius:18px;border:1px solid #dbeafe;text-align:center;margin-bottom:32px;\">" +
                    $"<p style=\"margin:0;font-size:32px;font-weight:800;color:#0f172a;letter-spacing:0.16em;\">{otpCode}</p>" +
-                   $"<p style=\"margin:8px 0 0;font-size:14px;color:#475569;\">This code expires on {expiresAt:yyyy-MM-dd HH:mm} UTC.</p>" +
+                   $"<p style=\"margin:8px 0 0;font-size:14px;color:#475569;\">This code expires on {expiresAt:yyyy-MM-dd HH:mm}.</p>" +
                    "</div>" +
                    "<p style=\"margin:0 0 18px;font-size:15px;color:#475569;\">Use this one-time code to verify your email address.</p>" +
                    "<p style=\"margin:0;font-size:15px;color:#475569;\">If you did not create this account, please ignore this message or contact support.</p>" +
@@ -334,7 +334,7 @@ namespace FourierIT_API.Services
                    $"You are attempting to access the {institutionName} institution portal.\n\n" +
                    "Use the one-time access code below to continue.\n\n" +
                    $"Your institution portal access code is: {otpCode}\n\n" +
-                   $"This code will expire on {expiresAt:yyyy-MM-dd HH:mm} UTC.\n\n" +
+                   $"This code will expire on {expiresAt:yyyy-MM-dd HH:mm}.\n\n" +
                    "Do not share this code with anyone.\n\n" +
                    "If you did not request this access code, please contact your administrator immediately.\n\n" +
                    "Thank you,\n" +
@@ -356,7 +356,7 @@ namespace FourierIT_API.Services
                    $"<p style=\"margin:0 0 24px;font-size:16px;color:#334155;\">Hello,<br/>You are requesting access to the <strong>{institutionName}</strong> institution portal. Use the one-time code below to continue securely.</p>" +
                    $"<div style=\"padding:26px 24px;background:#eff6ff;border-radius:18px;border:1px solid #dbeafe;text-align:center;margin-bottom:32px;\">" +
                    $"<p style=\"margin:0;font-size:32px;font-weight:800;color:#0f172a;letter-spacing:0.16em;\">{otpCode}</p>" +
-                   $"<p style=\"margin:8px 0 0;font-size:14px;color:#475569;\">This code expires on {expiresAt:yyyy-MM-dd HH:mm} UTC.</p>" +
+                   $"<p style=\"margin:8px 0 0;font-size:14px;color:#475569;\">This code expires on {expiresAt:yyyy-MM-dd HH:mm}.</p>" +
                    "</div>" +
                    "<p style=\"margin:0 0 18px;font-size:15px;color:#475569;\">Do not share this code with anyone else.</p>" +
                    "<p style=\"margin:0;font-size:15px;color:#475569;\">If you did not request this access code, contact your institution administrator immediately.</p>" +

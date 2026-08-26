@@ -1,4 +1,5 @@
 using FourierIT_API.Models;
+using FourierIT_API.DTOs.Compliance;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
@@ -46,9 +47,11 @@ namespace FourierIT_API.Data
         public DbSet<EntityType> EntityTypes { get; set; }
         public DbSet<RequiredDocument> RequiredDocuments { get; set; }
         public DbSet<ClientEnlistment> ClientEnlistments { get; set; }
+        public DbSet<PendingRegistration> PendingRegistrations { get; set; }
 
         // FICA Compliance System DbSets
         public DbSet<ComplianceStatus> ComplianceStatuses { get; set; }
+        public DbSet<InstitutionComplianceSummaryDto> InstitutionComplianceSummaries { get; set; }
         public DbSet<DocumentComplianceCheck> DocumentComplianceChecks { get; set; }
         public DbSet<ComplianceHistory> ComplianceHistories { get; set; }
         public DbSet<ComplianceAlert> ComplianceAlerts { get; set; }
@@ -57,6 +60,7 @@ namespace FourierIT_API.Data
         public DbSet<ComplianceRequirement> ComplianceRequirements { get; set; }
         public DbSet<ComplianceCheck> ComplianceChecks { get; set; }
         public DbSet<ComplianceResult> ComplianceResults { get; set; }
+        public DbSet<AdHocReport> AdHocReports { get; set; }
 
         // System (Backup, Restore, Auditlog) Db Sets 
         public DbSet<AuditLog> AuditLogs { get; set; }
@@ -72,6 +76,7 @@ namespace FourierIT_API.Data
         public DbSet<Permission> Permissions { get; set; }
         public DbSet<SecurityQuestion> SecurityQuestions { get; set; }
         public DbSet<FICARuleHistory> FICARuleHistories { get; set; }
+        public DbSet<SystemSetting> SystemSettings { get; set; }
 
         // Risk Rating DbSets
         public DbSet<RiskVariable> RiskVariables { get; set; }
@@ -89,6 +94,8 @@ namespace FourierIT_API.Data
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
+
+            modelBuilder.Entity<InstitutionComplianceSummaryDto>().HasNoKey().ToView(null);
 
             // Ensure Email is unique (in addition to UserName)
             modelBuilder.Entity<User>()
@@ -130,6 +137,53 @@ namespace FourierIT_API.Data
                 }
             };
             modelBuilder.Entity<Role>().HasData(Roles);
+
+            modelBuilder.Entity<Permission>().HasData(
+                new Permission { PermissionId = 1, PermissionKey = "Documents.View" },
+                new Permission { PermissionId = 2, PermissionKey = "Documents.Upload" },
+                new Permission { PermissionId = 3, PermissionKey = "Documents.Manage" },
+                new Permission { PermissionId = 4, PermissionKey = "Compliance.View" },
+                new Permission { PermissionId = 5, PermissionKey = "Compliance.Manage" },
+                new Permission { PermissionId = 6, PermissionKey = "Users.Manage" },
+                new Permission { PermissionId = 7, PermissionKey = "Roles.Manage" },
+                new Permission { PermissionId = 8, PermissionKey = "Reports.View" },
+                new Permission { PermissionId = 9, PermissionKey = "Audit.View" },
+                new Permission { PermissionId = 10, PermissionKey = "Backup.Manage" });
+
+            modelBuilder.Entity<RolePermission>().HasData(
+                new { RoleId = "AD", PermissionId = 1 }, new { RoleId = "AD", PermissionId = 2 },
+                new { RoleId = "AD", PermissionId = 3 }, new { RoleId = "AD", PermissionId = 4 },
+                new { RoleId = "AD", PermissionId = 5 }, new { RoleId = "AD", PermissionId = 6 },
+                new { RoleId = "AD", PermissionId = 7 }, new { RoleId = "AD", PermissionId = 8 },
+                new { RoleId = "AD", PermissionId = 9 }, new { RoleId = "AD", PermissionId = 10 },
+                new { RoleId = "DA", PermissionId = 1 }, new { RoleId = "DA", PermissionId = 2 },
+                new { RoleId = "DA", PermissionId = 3 }, new { RoleId = "DA", PermissionId = 4 },
+                new { RoleId = "DA", PermissionId = 5 }, new { RoleId = "DA", PermissionId = 6 },
+                new { RoleId = "DA", PermissionId = 7 }, new { RoleId = "DA", PermissionId = 8 },
+                new { RoleId = "DO", PermissionId = 1 }, new { RoleId = "DO", PermissionId = 2 },
+                new { RoleId = "CO", PermissionId = 1 }, new { RoleId = "CO", PermissionId = 4 },
+                new { RoleId = "CO", PermissionId = 5 }, new { RoleId = "CO", PermissionId = 8 },
+                new { RoleId = "SH", PermissionId = 1 }, new { RoleId = "SH", PermissionId = 4 });
+
+            modelBuilder.Entity<SystemSetting>().HasData(
+                new SystemSetting
+                {
+                    Key = "InstitutionOtpExpiryMinutes",
+                    Value = "10",
+                    Description = "Minutes before an institution portal OTP expires."
+                },
+                new SystemSetting
+                {
+                    Key = "InstitutionSessionTimeoutMinutes",
+                    Value = "480",
+                    Description = "Minutes before an institution portal session expires."
+                });
+
+            modelBuilder.Entity<Department>()
+                .HasOne(d => d.Parent)
+                .WithMany(d => d.Children)
+                .HasForeignKey(d => d.ParentId)
+                .OnDelete(DeleteBehavior.Restrict);
 
             modelBuilder.Entity<InstitutionInvitation>()
                 .HasIndex(ii => ii.TokenString)
@@ -306,6 +360,18 @@ namespace FourierIT_API.Data
                 .WithOne(d => d.User)
                 .HasForeignKey(d => d.UserId);
 
+            modelBuilder.Entity<AuditLog>()
+                .HasOne(a => a.User)
+                .WithMany()
+                .HasForeignKey(a => a.UserId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<AuditLog>()
+                .HasOne(a => a.Institution)
+                .WithMany()
+                .HasForeignKey(a => a.InstitutionId)
+                .OnDelete(DeleteBehavior.Restrict);
+
             // Configure DocumentType one-to-many relationship with document
             modelBuilder.Entity<DocumentType>()
                 .HasMany(dt => dt.Documents)
@@ -362,6 +428,7 @@ namespace FourierIT_API.Data
 
             // Configure document one-to-one relationship with DocumentBlob
             modelBuilder.Entity<Document>()
+                .ToTable("Documents", table => table.HasTrigger("TR_Documents_SetLastModifiedDate"))
                 .HasOne(d => d.DocumentBlob)
                 .WithOne(db => db.Document)
                 .HasForeignKey<DocumentBlob>(db => db.DocumentId);

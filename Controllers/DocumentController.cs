@@ -237,6 +237,28 @@ namespace FourierIT_API.Controllers
             return activeRequestedDocumentTypes.Select(r => r.DocumentTypeId).Distinct().ToList();
         }
 
+        private async Task<bool> HasDocumentManagePermissionAsync(string userId)
+        {
+            return await _context.Set<IdentityUserRole<string>>()
+                .Where(userRole => userRole.UserId == userId)
+                .Join(
+                    _context.RolePermissions,
+                    userRole => userRole.RoleId,
+                    rolePermission => rolePermission.RoleId,
+                    (_, rolePermission) => rolePermission.PermissionId)
+                .Join(
+                    _context.Permissions,
+                    permissionId => permissionId,
+                    permission => permission.PermissionId,
+                    (_, permission) => permission.PermissionKey)
+                .AnyAsync(permissionKey => permissionKey == "Documents.Manage");
+        }
+
+        private async Task<bool> CanManageDocumentAsync(User user, Document document)
+        {
+            return document.UserId == user.Id || await HasDocumentManagePermissionAsync(user.Id);
+        }
+
         private async Task<(bool IsValid, string? ErrorMessage)> ValidateDocumentTypeForUserContextAsync(User user, int documentTypeId, int? entityTypeId)
         {
             var activeRequestDocumentTypeIds = await GetActiveRequestedDocumentTypeIdsAsync(user);
@@ -272,6 +294,7 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpPost("upload")]
+        [Authorize(Policy = "Documents.Upload")]
         public async Task<IActionResult> Upload([FromForm] UploadDocumentDto dto)
         {
             var user = await _userManager.GetUserAsync(User);
@@ -334,6 +357,20 @@ namespace FourierIT_API.Controllers
             try
             {
                 document = await _documentService.UploadDocumentAsync(user.Id, dto.File.FileName, fileBytes, dto.DocumentTypeId);
+                document.IsCertified = dto.IsCertified;
+
+                if (dto.IsCertified && !string.IsNullOrEmpty(dto.CommissionerName) && dto.CertificationDate.HasValue)
+                {
+                    document.CertificationDetails.Add(new CertificationDetails
+                    {
+                        CertificationID = Guid.NewGuid().ToString(),
+                        CommissionerName = dto.CommissionerName,
+                        CertificationDate = dto.CertificationDate.Value,
+                        DocumentId = document.DocumentId
+                    });
+                }
+
+                await _documentRepository.UpdateDocumentAsync(document);
             }
             catch (ArgumentException ex)
             {
@@ -344,21 +381,6 @@ namespace FourierIT_API.Controllers
                 return BadRequest(new { error = ex.Message });
             }
 
-            document.DocumentTypeId = dto.DocumentTypeId;
-            document.IsCertified = dto.IsCertified;
-            document.CurrentStatus = "Uploaded";
-
-            if (dto.IsCertified && !string.IsNullOrEmpty(dto.CommissionerName) && dto.CertificationDate.HasValue)
-            {
-                document.CertificationDetails.Add(new CertificationDetails
-                {
-                    CertificationID = Guid.NewGuid().ToString(),
-                    CommissionerName = dto.CommissionerName,
-                    CertificationDate = dto.CertificationDate.Value,
-                    DocumentId = document.DocumentId
-                });
-            }
-            await _documentRepository.UpdateDocumentAsync(document);
             try
             {
                 await _complianceService.CheckUserComplianceAsync(user.Id);
@@ -367,11 +389,11 @@ namespace FourierIT_API.Controllers
             {
                 _logger.LogError(ex, "Failed to recalculate compliance after document upload for user {UserId}", user.Id);
             }
-
             return CreatedAtAction(nameof(GetById), new { id = document.DocumentId }, ToResponseDto(document));
         }
 
         [HttpGet]
+        [Authorize(Policy = "Documents.View")]
         public async Task<IActionResult> GetMyDocuments()
         {
             var user = await _userManager.GetUserAsync(User);
@@ -394,6 +416,7 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpGet("{id}")]
+        [Authorize(Policy = "Documents.View")]
         public async Task<IActionResult> GetById(int id)
         {
             var user = await _userManager.GetUserAsync(User);
@@ -412,6 +435,7 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpGet("{id}/access")]
+        [Authorize(Policy = "Documents.View")]
         public async Task<IActionResult> GetDocumentAccess(int id)
         {
             var user = await _userManager.GetUserAsync(User);
@@ -425,7 +449,7 @@ namespace FourierIT_API.Controllers
                 .Include(daa => daa.InstitutionEnquiryRequest)
                     .ThenInclude(ier => ier.Institution)
                 .Include(daa => daa.ApprovedByUser)
-                .Where(daa => daa.DocumentId == id)
+                .Where(daa => daa.DocumentId == id && !daa.IsRevoked)
                 .ToListAsync();
 
             var response = accessApprovals.Select(daa => new DocumentAccessApprovalDto
@@ -441,6 +465,7 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpGet("{id}/preview")]
+        [Authorize(Policy = "Documents.View")]
         public async Task<IActionResult> Preview(int id)
         {
             var user = await _userManager.GetUserAsync(User);
@@ -480,6 +505,7 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpGet("{id}/download")]
+        [Authorize(Policy = "Documents.View")]
         public async Task<IActionResult> Download(int id)
         {
             var user = await _userManager.GetUserAsync(User);
@@ -521,6 +547,7 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpDelete("{id}/access/{approvalId}")]
+        [Authorize]
         public async Task<IActionResult> RevokeDocumentAccess(int id, int approvalId)
         {
             var user = await _userManager.GetUserAsync(User);
@@ -529,8 +556,8 @@ namespace FourierIT_API.Controllers
             var doc = await _documentRepository.GetDocumentByIdAsync(id);
             if (doc == null) return NotFound();
 
-            // Only the document owner can revoke access
-            if (doc.UserId != user.Id) return Forbid();
+            // The document owner, or someone with Documents.Manage permission, can revoke access
+            if (!await CanManageDocumentAsync(user, doc)) return Forbid();
 
             var approval = await _context.DocumentAccessApprovals
                 .FirstOrDefaultAsync(daa => daa.ApprovalId == approvalId && daa.DocumentId == id);
@@ -554,7 +581,81 @@ namespace FourierIT_API.Controllers
             return NoContent();
         }
 
+        [HttpGet("flags")]
+        [Authorize(Policy = "Documents.View")]
+        public async Task<IActionResult> GetMyDocumentFlags()
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+
+            var myDocuments = await _context.Documents
+                .Where(d => d.UserId == user.Id && d.CurrentStatus != "Deleted")
+                .Select(d => new { d.DocumentId, d.FileName })
+                .ToListAsync();
+            var myDocumentIds = myDocuments.Select(d => d.DocumentId).ToHashSet();
+
+            var flags = await _context.EnquiryFlags
+                .Where(f => myDocumentIds.Contains(f.DocumentId))
+                .OrderByDescending(f => f.FlaggedAt)
+                .ToListAsync();
+
+            var enquiryIds = flags.Select(f => f.EnquiryId).Distinct().ToList();
+            var institutionNames = await _context.InstitutionEnquiryRequests
+                .Where(r => enquiryIds.Contains(r.EnquiryRequestId))
+                .Include(r => r.Institution)
+                .ToDictionaryAsync(r => r.EnquiryRequestId, r => r.Institution.InstitutionName);
+            var fileNames = myDocuments.ToDictionary(d => d.DocumentId, d => d.FileName);
+
+            var response = flags.Select(f => new DocumentFlagDto
+            {
+                EnquiryFlagId = f.EnquiryFlagId,
+                DocumentId = f.DocumentId,
+                FileName = fileNames.GetValueOrDefault(f.DocumentId, string.Empty),
+                InstitutionName = institutionNames.GetValueOrDefault(f.EnquiryId, "Institution"),
+                FlagReason = f.FlagReason,
+                IsResolved = f.IsResolved,
+                FlaggedAt = f.FlaggedAt
+            });
+
+            return Ok(response);
+        }
+
+        [HttpPost("{id}/flags/{flagId}/resolve")]
+        [Authorize]
+        public async Task<IActionResult> ResolveDocumentFlag(int id, int flagId)
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+
+            var doc = await _documentRepository.GetDocumentByIdAsync(id);
+            if (doc == null) return NotFound();
+
+            // The document owner, or someone with Documents.Manage permission, can resolve a flag
+            if (!await CanManageDocumentAsync(user, doc)) return Forbid();
+
+            var flag = await _context.EnquiryFlags
+                .FirstOrDefaultAsync(f => f.EnquiryFlagId == flagId && f.DocumentId == id);
+
+            if (flag == null) return NotFound(new { error = "Flag not found." });
+
+            flag.IsResolved = true;
+            await _context.SaveChangesAsync();
+
+            await TryCreateAuditLogAsync(new AuditLog
+            {
+                UserId = user.Id,
+                ActionCode = "DOCUMENT_FLAG_RESOLVED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = $"Document {id} flag {flagId} marked resolved by owner.",
+                TableAffected = "EnquiryFlags",
+                RecordID = flagId
+            });
+
+            return NoContent();
+        }
+
         [HttpPut("{id}")]
+        [Authorize]
         public async Task<IActionResult> Update(int id, [FromForm] UploadDocumentDto dto)
         {
             var user = await _userManager.GetUserAsync(User);
@@ -562,7 +663,7 @@ namespace FourierIT_API.Controllers
 
             var doc = await _documentRepository.GetDocumentByIdAsync(id);
             if (doc == null) return NotFound();
-            if (doc.UserId != user.Id) return Forbid();
+            if (!await CanManageDocumentAsync(user, doc)) return Forbid();
 
             if (dto.File != null && dto.File.Length > 0)
             {
@@ -623,6 +724,7 @@ namespace FourierIT_API.Controllers
         }
 
         [HttpDelete("{id}")]
+        [Authorize]
         public async Task<IActionResult> Delete(int id)
         {
             var user = await _userManager.GetUserAsync(User);
@@ -630,13 +732,13 @@ namespace FourierIT_API.Controllers
 
             var doc = await _documentRepository.GetDocumentByIdAsync(id);
             if (doc == null) return NotFound();
-            if (doc.UserId != user.Id) return Forbid();
+            if (!await CanManageDocumentAsync(user, doc)) return Forbid();
 
             var accessApprovals = await _context.DocumentAccessApprovals
                 .Include(daa => daa.InstitutionEnquiryRequest)
                     .ThenInclude(ier => ier.Institution)
                 .Include(daa => daa.ApprovedByUser)
-                .Where(daa => daa.DocumentId == id)
+                .Where(daa => daa.DocumentId == id && !daa.IsRevoked)
                 .ToListAsync();
 
             if (accessApprovals.Any())
@@ -703,7 +805,7 @@ namespace FourierIT_API.Controllers
 
         //Admin/compliance/stakeholder endpoint to view all users and their documents
         [HttpGet("admin/all-users-documents")]
-        [Authorize(Roles = "Department Admin, Compliance Officer, Stakeholder")]
+        [Authorize(Policy = "Documents.View")]
         public async Task<IActionResult> GetAllUsersWithDocuments()
         {
             var users = await _context.Users

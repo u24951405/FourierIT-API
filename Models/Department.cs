@@ -8,6 +8,13 @@ namespace FourierIT_API.Models
         [Key]
         public int DepartmentId { get; set; }
 
+        public int? ParentId { get; set; }
+
+        [ForeignKey(nameof(ParentId))]
+        public Department? Parent { get; set; }
+
+        public ICollection<Department> Children { get; set; } = new List<Department>();
+
         [ForeignKey("Branch")]
         public int BranchId { get; set; }
         public Branch Branch { get; set; } = null!;
