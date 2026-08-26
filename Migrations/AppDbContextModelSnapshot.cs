@@ -951,6 +951,9 @@ namespace FourierIT_API.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
+                    b.Property<int?>("WarningThresholdDays")
+                        .HasColumnType("int");
+
                     b.HasKey("ComplianceRuleId");
 
                     b.ToTable("ComplianceRules");
@@ -1173,11 +1176,23 @@ namespace FourierIT_API.Migrations
                     b.Property<bool>("IsEncrypted")
                         .HasColumnType("bit");
 
+                    b.Property<bool>("IsManualOverrideActive")
+                        .HasColumnType("bit");
+
                     b.Property<DateTime?>("LastAccessedDate")
                         .HasColumnType("datetime2");
 
                     b.Property<DateTime?>("LastModifiedDate")
                         .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ManualOverrideAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ManualOverrideBy")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("ManualOverrideReason")
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<DateTime>("UploadedDate")
                         .HasColumnType("datetime2");

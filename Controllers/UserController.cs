@@ -1162,10 +1162,20 @@ namespace FourierIT_API.Controllers
                 return BadRequest(new { error = "User is already assigned to another department." });
 
             // Ensure user is assigned to department
-            if (!targetUser.DepartmentId.HasValue || targetUser.DepartmentId != departmentId)
+            var departmentChanged = !targetUser.DepartmentId.HasValue || targetUser.DepartmentId != departmentId;
+            if (departmentChanged)
             {
                 targetUser.DepartmentId = departmentId;
                 await _userManager.UpdateAsync(targetUser);
+
+                var complianceStatus = await _context.ComplianceStatuses
+                    .FirstOrDefaultAsync(cs => cs.UserId == targetUser.Id);
+                if (complianceStatus != null)
+                {
+                    complianceStatus.LastChecked = DateTime.UtcNow;
+                    _context.ComplianceStatuses.Update(complianceStatus);
+                    await _context.SaveChangesAsync();
+                }
             }
 
             var departmentAdminUsers = await _userManager.Users

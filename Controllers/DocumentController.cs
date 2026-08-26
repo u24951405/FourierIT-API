@@ -44,6 +44,18 @@ namespace FourierIT_API.Controllers
             return roles.Contains("Department Admin") || roles.Contains("Compliance Officer") || roles.Contains("Stakeholder");
         }
 
+        private async Task<bool> UserCanAccessDepartmentAsync(int departmentId)
+        {
+            if (User.IsInRole("Admin"))
+                return true;
+
+            if (!User.IsInRole("Department Admin") && !User.IsInRole("Stakeholder"))
+                return false;
+
+            var currentUser = await _userManager.GetUserAsync(User);
+            return currentUser != null && currentUser.DepartmentId == departmentId;
+        }
+
         [HttpGet("api/users/me/documents/required")]
         public async Task<IActionResult> GetRequiredDocumentsStatus([FromQuery] int? entityTypeId = null) //? makes the parameter optional
         {
@@ -381,6 +393,17 @@ namespace FourierIT_API.Controllers
                 return BadRequest(new { error = ex.Message });
             }
 
+            if (dto.IsCertified && dto.CertificationDate.HasValue)
+            {
+                document.ExpiryDate = new DateTimeOffset(dto.CertificationDate.Value).AddMonths(3);
+            }
+            else
+            {
+                document.ExpiryDate = DateTimeOffset.MaxValue;
+            }
+
+            await _documentRepository.UpdateDocumentAsync(document);
+
             try
             {
                 await _complianceService.CheckUserComplianceAsync(user.Id);
@@ -480,7 +503,7 @@ namespace FourierIT_API.Controllers
                 if (doc.UserId != user.Id && !isAdminViewer)
                     throw new UnauthorizedAccessException("No access to this document");
 
-                var fileBytes = await _documentService.DownloadDocumentAsync(id, doc.User.Id);
+                var fileBytes = await _documentService.DownloadDocumentAsync(id, doc.UserId);
 
                 doc.LastAccessedDate = DateTime.UtcNow;
                 await _documentRepository.UpdateDocumentAsync(doc);
@@ -521,7 +544,7 @@ namespace FourierIT_API.Controllers
                 if (doc.UserId != user.Id && !isAdminViewer)
                     throw new UnauthorizedAccessException("No access to this document");
 
-                var fileBytes = await _documentService.DownloadDocumentAsync(id, doc.User.Id); // decrypt using owner's key context
+                var fileBytes = await _documentService.DownloadDocumentAsync(id, doc.UserId); // decrypt using owner's key context
 
                 doc.LastAccessedDate = DateTime.UtcNow;
                 await _documentRepository.UpdateDocumentAsync(doc);
@@ -803,6 +826,27 @@ namespace FourierIT_API.Controllers
             };
         }
 
+        [HttpGet("departments/{departmentId}")]
+        [Authorize(Roles = "Admin,Department Admin,Stakeholder")]
+        public async Task<IActionResult> GetDepartmentDocuments(int departmentId)
+        {
+            var currentUser = await _userManager.GetUserAsync(User);
+            if (currentUser == null)
+                return Unauthorized();
+
+            if (!await UserCanAccessDepartmentAsync(departmentId))
+                return Forbid();
+
+            var documents = await _context.Documents
+                .AsNoTracking()
+                .Include(d => d.DocumentType)
+                .Where(d => d.User.DepartmentId == departmentId && d.CurrentStatus != "Deleted")
+                .OrderByDescending(d => d.UploadedDate)
+                .ToListAsync();
+
+            return Ok(documents.Select(ToResponseDto));
+        }
+
         //Admin/compliance/stakeholder endpoint to view all users and their documents
         [HttpGet("admin/all-users-documents")]
         [Authorize(Policy = "Documents.View")]
@@ -845,6 +889,7 @@ namespace FourierIT_API.Controllers
             EncryptionAlgorithm = doc.EncryptionAlgorithm,
             FileSizeBytes = doc.FileSizeBytes,
             UploadedDate = doc.UploadedDate,
+            ExpiryDate = doc.ExpiryDate,
             LastModifiedDate = doc.LastModifiedDate,
             DocumentTypeId = doc.DocumentTypeId,
             DocumentTypeName = doc.DocumentType?.TypeName ?? string.Empty
