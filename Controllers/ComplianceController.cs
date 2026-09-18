@@ -605,7 +605,7 @@ namespace FourierIT_API.Controllers
         /// Get documents pending manual review
         /// </summary>
         [HttpGet("documents/pending-review")]
-        [Authorize(Policy = "Compliance.Manage")]
+        [Authorize(Policy = "Compliance.View")]
         public async Task<IActionResult> GetPendingManualReviews()
         {
             try

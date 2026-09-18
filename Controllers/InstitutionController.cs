@@ -64,7 +64,7 @@ namespace FourierIT_API.Controllers
             return Ok(institution.ToInstitutionDto());
         }
 
-        [Authorize(Policy = "Users.Manage")]
+        [Authorize(Roles = "Admin")]
         [HttpPost]
         public async Task<IActionResult> Create([FromBody] CreateInstitutionRequestDto dto)
         {
@@ -83,7 +83,7 @@ namespace FourierIT_API.Controllers
             return CreatedAtAction(nameof(GetById), new { institutionId = entity.InstitutionId }, entity.ToInstitutionDto());
         }
 
-        [Authorize(Policy = "Users.Manage")]
+        [Authorize(Roles = "Admin")]
         [HttpPut("{institutionId:int}")]
         public async Task<IActionResult> Update([FromRoute] int institutionId, [FromBody] UpdateInstitutionRequestDto dto)
         {
@@ -109,7 +109,7 @@ namespace FourierIT_API.Controllers
             return Ok(institution.ToInstitutionDto());
         }
 
-        [Authorize(Policy = "Users.Manage")]
+        [Authorize(Roles = "Admin")]
         [HttpDelete("{institutionId:int}")]
         public async Task<IActionResult> Delete([FromRoute] int institutionId)
         {

@@ -40,8 +40,14 @@ namespace FourierIT_API.Controllers
         //Role helper method
         private async Task<bool> IsAdminOrViewerRole(User user)
         {
+            // The seeded Super Admin account has no roles at all - it is granted access via a
+            // "superadmin" claim that bypasses [Authorize] attributes, but that bypass doesn't
+            // reach this hand-rolled ownership check, so it must be tested for explicitly here.
+            if (User.HasClaim("superadmin", "true"))
+                return true;
+
             var roles = await _userManager.GetRolesAsync(user);
-            return roles.Contains("Department Admin") || roles.Contains("Compliance Officer") || roles.Contains("Stakeholder");
+            return roles.Contains("Admin") || roles.Contains("Department Admin") || roles.Contains("Compliance Officer") || roles.Contains("Stakeholder");
         }
 
         private async Task<bool> UserCanAccessDepartmentAsync(int departmentId)
@@ -268,6 +274,9 @@ namespace FourierIT_API.Controllers
 
         private async Task<bool> CanManageDocumentAsync(User user, Document document)
         {
+            if (User.HasClaim("superadmin", "true"))
+                return true;
+
             return document.UserId == user.Id || await HasDocumentManagePermissionAsync(user.Id);
         }
 

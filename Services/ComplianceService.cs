@@ -112,7 +112,6 @@ namespace FourierIT_API.Services
                 if (doc == null)
                 {
                     status.MissingDocuments++;
-                    status.NonCompliantDocuments++;
                     continue;
                 }
 

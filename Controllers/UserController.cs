@@ -783,7 +783,7 @@ namespace FourierIT_API.Controllers
             if (user == null) return NotFound(new { error = "User not found for the profile." });
             var currentUser = await ResolveCurrentUserAsync();
             var isSelfEdit = currentUser?.Id == user.Id;
-            if (!isSelfEdit && !User.IsInRole("Admin") && !User.IsInRole("Department Admin"))
+            if (!isSelfEdit && !User.IsInRole("Admin") && !User.HasClaim("superadmin", "true"))
                 return Forbid();
 
             var roleName = dto.Role.Trim();
@@ -827,8 +827,8 @@ namespace FourierIT_API.Controllers
             if (currentUser == null) return Unauthorized();
 
             var currentUserIsSuperAdmin = IsSuperAdminUser(currentUser);
-            var currentUserIsDepartmentAdmin = await _userManager.IsInRoleAsync(currentUser, "Department Admin");
-            if (!currentUserIsSuperAdmin && !currentUserIsDepartmentAdmin)
+            var currentUserIsAdmin = await _userManager.IsInRoleAsync(currentUser, "Admin");
+            if (!currentUserIsSuperAdmin && !currentUserIsAdmin)
                 return Forbid();
 
             var profile = await _context.Profiles.Include(p => p.User).FirstOrDefaultAsync(p => p.ProfileId == profileId);
@@ -851,7 +851,7 @@ namespace FourierIT_API.Controllers
                 UserId = currentUser.Id,
                 ActionCode = "USER_DELETED",
                 TimeStamp = DateTimeOffset.UtcNow,
-                Description = $"User {user.Id} and related records deleted by {(currentUserIsSuperAdmin ? "Super Admin" : "Department Admin")}",
+                Description = $"User {user.Id} and related records deleted by {(currentUserIsSuperAdmin ? "Super Admin" : "Admin")}",
                 TableAffected = "Users",
                 RecordID = int.TryParse(user.Id, out var parsedId) ? parsedId : (int?)null
             });
@@ -867,8 +867,8 @@ namespace FourierIT_API.Controllers
             if (currentUser == null) return Unauthorized();
 
             var currentUserIsSuperAdmin = IsSuperAdminUser(currentUser);
-            var currentUserIsDepartmentAdmin = await _userManager.IsInRoleAsync(currentUser, "Department Admin");
-            if (!currentUserIsSuperAdmin && !currentUserIsDepartmentAdmin)
+            var currentUserIsAdmin = await _userManager.IsInRoleAsync(currentUser, "Admin");
+            if (!currentUserIsSuperAdmin && !currentUserIsAdmin)
                 return Forbid();
 
             var user = await _userManager.FindByIdAsync(userId);
@@ -892,7 +892,7 @@ namespace FourierIT_API.Controllers
                 UserId = currentUser.Id,
                 ActionCode = "USER_DELETED",
                 TimeStamp = DateTimeOffset.UtcNow,
-                Description = $"User {user.Id} and related records deleted by {(currentUserIsSuperAdmin ? "Super Admin" : "Department Admin")}",
+                Description = $"User {user.Id} and related records deleted by {(currentUserIsSuperAdmin ? "Super Admin" : "Admin")}",
                 TableAffected = "Users",
                 RecordID = int.TryParse(user.Id, out var parsedId) ? parsedId : (int?)null
             });
