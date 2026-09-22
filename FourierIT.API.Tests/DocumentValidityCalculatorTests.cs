@@ -48,6 +48,42 @@ public class DocumentValidityCalculatorTests
     }
 
     [Fact]
+    public void ExistingDocument_RecalculatesWhenCertificationDateChanges()
+    {
+        var policy = new DocumentType { ValidityBasis = ValidityBasis.CertificationDate };
+        var document = new Document
+        {
+            UploadedDate = new DateTime(2026, 1, 1),
+            ExpiryDate = DateTimeOffset.MaxValue
+        };
+        var initialCertificationDate = new DateTimeOffset(2026, 1, 15, 0, 0, 0, TimeSpan.Zero);
+        var changedCertificationDate = new DateTimeOffset(2026, 2, 15, 0, 0, 0, TimeSpan.Zero);
+
+        document.ExpiryDate = _calculator.Calculate(
+            policy,
+            document.UploadedDate,
+            initialCertificationDate).ExpiryDate;
+        document.ExpiryDate = _calculator.Calculate(
+            policy,
+            document.UploadedDate,
+            changedCertificationDate).ExpiryDate;
+
+        Assert.Equal(changedCertificationDate.AddMonths(3), document.ExpiryDate);
+    }
+
+    [Fact]
+    public void DefaultSettings_WithCertificationDate_ExpireAfterThreeMonths()
+    {
+        var policy = new DocumentType();
+        var certificationDate = new DateTimeOffset(2026, 1, 15, 0, 0, 0, TimeSpan.Zero);
+
+        var result = _calculator.Calculate(policy, new DateTime(2026, 1, 1), certificationDate);
+
+        Assert.Equal(certificationDate.AddMonths(3), result.ExpiryDate);
+        Assert.False(result.MissingSourceDate);
+    }
+
+    [Fact]
     public void UploadBasis_UsesUploadedDate()
     {
         var policy = new DocumentType { ValidityMonths = 3, ValidityBasis = ValidityBasis.UploadDate };
