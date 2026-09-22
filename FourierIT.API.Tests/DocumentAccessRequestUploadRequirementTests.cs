@@ -28,6 +28,13 @@ public class DocumentAccessRequestUploadRequirementTests
     {
         await using var context = CreateContext();
         var institution = new Institution { InstitutionId = 1, InstitutionName = "Test Institution" };
+        var sessionToken = new InstitutionSessionToken
+        {
+            InstitutionId = institution.InstitutionId,
+            TokenString = "session-token-1",
+            IssuedAt = DateTime.UtcNow.AddMinutes(-1),
+            ExpiresAt = DateTime.UtcNow.AddMinutes(30)
+        };
         var actor = CreateUser("actor-user", "Actor", "Person");
         var targetUser = CreateUser("target-user", "Target", "Owner");
         var documentType = new DocumentType { DocumentTypeId = 901, TypeName = "South African ID Book", Description = "ID document" };
@@ -41,6 +48,7 @@ public class DocumentAccessRequestUploadRequirementTests
         };
 
         context.Institutions.Add(institution);
+        context.InstitutionSessionTokens.Add(sessionToken);
         context.Users.AddRange(actor, targetUser);
         context.DocumentTypes.Add(documentType);
         context.InstitutionSessionTokens.Add(sessionToken);
@@ -71,6 +79,13 @@ public class DocumentAccessRequestUploadRequirementTests
     {
         await using var context = CreateContext();
         var institution = new Institution { InstitutionId = 2, InstitutionName = "Test Institution 2" };
+        var sessionToken = new InstitutionSessionToken
+        {
+            InstitutionId = institution.InstitutionId,
+            TokenString = "session-token-2",
+            IssuedAt = DateTime.UtcNow.AddMinutes(-1),
+            ExpiresAt = DateTime.UtcNow.AddMinutes(30)
+        };
         var actor = CreateUser("actor-user-2", "Actor", "Person");
         var branch = new Branch { BranchId = 1, InstitutionId = institution.InstitutionId, Institution = institution, BranchName = "HQ" };
         var department = new Department { DepartmentId = 1, DepartmentName = "Operations", BranchId = branch.BranchId, Branch = branch };
@@ -87,6 +102,7 @@ public class DocumentAccessRequestUploadRequirementTests
         };
 
         context.Institutions.Add(institution);
+        context.InstitutionSessionTokens.Add(sessionToken);
         context.Users.AddRange(actor, departmentUser);
         context.Branches.Add(branch);
         context.Departments.Add(department);

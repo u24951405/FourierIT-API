@@ -12,6 +12,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration.UserSecrets;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.Extensions.Logging;
+using FourierIT_API.Services;
 
 namespace FourierIT_API.Controllers
 {
@@ -27,8 +28,9 @@ namespace FourierIT_API.Controllers
         private readonly IComplianceService _complianceService;
         private readonly IAuditLogService _auditLogService;
         private readonly ILogger<DocumentController> _logger;
+        private readonly DocumentValidityCalculator _documentValidityCalculator;
 
-        public DocumentController(IDocumentService documentService, IDocumentRepository documentRepository, UserManager<User> userManager, AppDbContext context, IComplianceService complianceService, IAuditLogService auditLogService, ILogger<DocumentController> logger)
+        public DocumentController(IDocumentService documentService, IDocumentRepository documentRepository, UserManager<User> userManager, AppDbContext context, IComplianceService complianceService, IAuditLogService auditLogService, ILogger<DocumentController> logger, DocumentValidityCalculator? documentValidityCalculator = null)
         {
             _documentService = documentService;
             _documentRepository = documentRepository;
@@ -37,6 +39,7 @@ namespace FourierIT_API.Controllers
             _complianceService = complianceService;
             _auditLogService = auditLogService;
             _logger = logger;
+            _documentValidityCalculator = documentValidityCalculator ?? new DocumentValidityCalculator();
         }
 
         //Role helper method
@@ -404,14 +407,15 @@ namespace FourierIT_API.Controllers
                 return BadRequest(new { error = ex.Message });
             }
 
-            if (dto.IsCertified && dto.CertificationDate.HasValue)
-            {
-                document.ExpiryDate = new DateTimeOffset(dto.CertificationDate.Value).AddMonths(3);
-            }
-            else
-            {
-                document.ExpiryDate = DateTimeOffset.MaxValue;
-            }
+            var documentTypePolicy = await _context.DocumentTypes.FindAsync(dto.DocumentTypeId);
+            if (documentTypePolicy == null)
+                return BadRequest(new { error = "The specified document type could not be found." });
+
+            var validityResult = _documentValidityCalculator.Calculate(
+                documentTypePolicy,
+                document.UploadedDate,
+                dto.CertificationDate.HasValue ? new DateTimeOffset(dto.CertificationDate.Value) : null);
+            document.ExpiryDate = validityResult.ExpiryDate;
 
             await _documentRepository.UpdateDocumentAsync(document);
 

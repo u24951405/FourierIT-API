@@ -383,6 +383,22 @@ namespace FourierIT_API.Data
 
             // Configure DocumentType one-to-many relationship with document
             modelBuilder.Entity<DocumentType>()
+                .Property(dt => dt.ValidityMonths)
+                .HasDefaultValue(3);
+
+            modelBuilder.Entity<DocumentType>()
+                .Property(dt => dt.NeverExpires)
+                .HasDefaultValue(false);
+
+            modelBuilder.Entity<DocumentType>()
+                .Property(dt => dt.ValidityBasis)
+                .HasDefaultValue(ValidityBasis.CertificationDate);
+
+            modelBuilder.Entity<DocumentType>()
+                .Property(dt => dt.WarningDays)
+                .HasDefaultValue(30);
+
+            modelBuilder.Entity<DocumentType>()
                 .HasMany(dt => dt.Documents)
                 .WithOne(d => d.DocumentType)
                 .HasForeignKey(d => d.DocumentTypeId)
