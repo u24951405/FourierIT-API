@@ -1,0 +1,14 @@
+# Referential integrity rules for this project
+- Requirement: full referential integrity on all tables. A record may only be deleted when no other record references it.
+- Every relationship between tables must be a real foreign key configured in AppDbContext.
+- DeleteBehavior.Cascade is ONLY allowed for "owned" relationships (child rows that have no meaning without the parent). Every other relationship uses DeleteBehavior.Restrict. Never use SetNull or ClientSetNull.
+- Every delete endpoint must check for dependent records BEFORE deleting. If dependents exist, return HTTP 409 Conflict with body: { "message": string, "dependents": [ { "entity": string, "count": number } ] }. The message must be user-friendly and name what is blocking the delete.
+- Deletes must never return HTTP 500 because of a foreign key violation.
+- History, audit and log tables are never deletable through the API.
+- Do not change unrelated code, rename existing endpoints, or alter existing response shapes other than delete responses.
+- After every change, run `dotnet build .\inf-370-2026-team25\FourierIT-API.sln` from the repository root and run `Set-Location .\FourierIT-Angular; ng build` from the repository root. Both commands must succeed with no new errors; pre-existing warnings are acceptable.
+- Migrations are local-only and must never be committed or staged. Each developer generates migrations from the model after pulling.
+- Because of this, never put data changes in migration SQL. Express defaults with HasDefaultValue, and seeding with HasData or the existing seeder.
+- Never hand-edit a generated migration to remove operations. If it contains unexpected operations, stop and report.
+- A migration's Down method must reverse its Up method.
+- Never run dotnet ef database update or start the API unless explicitly asked.
