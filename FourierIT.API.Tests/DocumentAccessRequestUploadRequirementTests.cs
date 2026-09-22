@@ -24,15 +24,23 @@ namespace FourierIT.API.Tests;
 public class DocumentAccessRequestUploadRequirementTests
 {
     [Fact]
-    public async Task CreateRequest_Individual_TargetHasNotUploadedRequestedDocumentType_StillCreatesRequest()
+    public async Task CreateInstitutionRequest_Individual_TargetHasNotUploadedRequestedDocumentType_StillCreatesRequest()
     {
         await using var context = CreateContext();
         var institution = new Institution { InstitutionId = 1, InstitutionName = "Test Institution" };
+        var sessionToken = new InstitutionSessionToken
+        {
+            InstitutionId = institution.InstitutionId,
+            TokenString = "session-token-1",
+            IssuedAt = DateTime.UtcNow.AddMinutes(-1),
+            ExpiresAt = DateTime.UtcNow.AddMinutes(30)
+        };
         var actor = CreateUser("actor-user", "Actor", "Person");
         var targetUser = CreateUser("target-user", "Target", "Owner");
         var documentType = new DocumentType { DocumentTypeId = 901, TypeName = "South African ID Book", Description = "ID document" };
 
         context.Institutions.Add(institution);
+        context.InstitutionSessionTokens.Add(sessionToken);
         context.Users.AddRange(actor, targetUser);
         context.DocumentTypes.Add(documentType);
         context.InstitutionMembers.Add(new InstitutionMembers { UserId = actor.Id, InstitutionId = institution.InstitutionId });
@@ -40,8 +48,8 @@ public class DocumentAccessRequestUploadRequirementTests
 
         var controller = CreateController(context, actor);
 
-        var result = await controller.CreateRequest(
-            institution.InstitutionId,
+        var result = await controller.CreateInstitutionRequest(
+            sessionToken.TokenString,
             new InstitutionDocumentRequestDto
             {
                 RequestType = "Individual",
@@ -59,10 +67,17 @@ public class DocumentAccessRequestUploadRequirementTests
     }
 
     [Fact]
-    public async Task CreateRequest_Department_NoMemberHasUploadedRequestedDocumentType_StillCreatesRequest()
+    public async Task CreateInstitutionRequest_Department_NoMemberHasUploadedRequestedDocumentType_StillCreatesRequest()
     {
         await using var context = CreateContext();
         var institution = new Institution { InstitutionId = 2, InstitutionName = "Test Institution 2" };
+        var sessionToken = new InstitutionSessionToken
+        {
+            InstitutionId = institution.InstitutionId,
+            TokenString = "session-token-2",
+            IssuedAt = DateTime.UtcNow.AddMinutes(-1),
+            ExpiresAt = DateTime.UtcNow.AddMinutes(30)
+        };
         var actor = CreateUser("actor-user-2", "Actor", "Person");
         var branch = new Branch { BranchId = 1, InstitutionId = institution.InstitutionId, Institution = institution, BranchName = "HQ" };
         var department = new Department { DepartmentId = 1, DepartmentName = "Operations", BranchId = branch.BranchId, Branch = branch };
@@ -71,6 +86,7 @@ public class DocumentAccessRequestUploadRequirementTests
         departmentUser.DepartmentId = department.DepartmentId;
 
         context.Institutions.Add(institution);
+        context.InstitutionSessionTokens.Add(sessionToken);
         context.Users.AddRange(actor, departmentUser);
         context.Branches.Add(branch);
         context.Departments.Add(department);
@@ -88,8 +104,8 @@ public class DocumentAccessRequestUploadRequirementTests
 
         var controller = CreateController(context, actor);
 
-        var result = await controller.CreateRequest(
-            institution.InstitutionId,
+        var result = await controller.CreateInstitutionRequest(
+            sessionToken.TokenString,
             new InstitutionDocumentRequestDto
             {
                 RequestType = "Department",
