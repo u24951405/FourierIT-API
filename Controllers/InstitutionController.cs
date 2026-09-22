@@ -1,6 +1,7 @@
 ﻿using FourierIT_API.Data;
 using FourierIT_API.DTOs.Institution;
 using FourierIT_API.Mappers;
+using FourierIT_API.Exceptions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -113,14 +114,24 @@ namespace FourierIT_API.Controllers
         [HttpDelete("{institutionId:int}")]
         public async Task<IActionResult> Delete([FromRoute] int institutionId)
         {
-            var institution = await _context.Institutions.FirstOrDefaultAsync(i => i.InstitutionId == institutionId);
-            if (institution == null)
-                return NotFound();
+            return await this.SafeDeleteAsync(
+                "Institution",
+                institutionId.ToString(),
+                async () =>
+                {
+                    var institution = await _context.Institutions
+                        .Include(i => i.Branches)
+                        .Include(i => i.InstitutionMembers)
+                        .Include(i => i.ClientEnlistments)
+                        .FirstOrDefaultAsync(i => i.InstitutionId == institutionId);
 
-            _context.Institutions.Remove(institution);
-            await _context.SaveChangesAsync();
+                    if (institution == null)
+                        throw new KeyNotFoundException($"Institution with ID {institutionId} not found");
 
-            return NoContent();
+                    _context.Institutions.Remove(institution);
+                    await _context.SaveChangesAsync();
+                }
+            );
         }
     }
 }

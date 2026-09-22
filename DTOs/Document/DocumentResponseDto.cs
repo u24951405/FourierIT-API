@@ -14,5 +14,7 @@
         public DateTime? LastModifiedDate { get; set; }
         public int DocumentTypeId { get; set; }
         public string DocumentTypeName { get; set; } = string.Empty;
+        public string UploadedByFirstName { get; set; } = string.Empty;
+        public string UploadedByLastName { get; set; } = string.Empty;
     }
 }

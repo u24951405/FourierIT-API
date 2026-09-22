@@ -2,6 +2,8 @@
 using FourierIT_API.DTOs.Document;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
+using FourierIT_API.Repositories;
+using FourierIT_API.Exceptions;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -766,50 +768,47 @@ namespace FourierIT_API.Controllers
             if (doc == null) return NotFound();
             if (!await CanManageDocumentAsync(user, doc)) return Forbid();
 
-            var accessApprovals = await _context.DocumentAccessApprovals
-                .Include(daa => daa.InstitutionEnquiryRequest)
-                    .ThenInclude(ier => ier.Institution)
-                .Include(daa => daa.ApprovedByUser)
-                .Where(daa => daa.DocumentId == id && !daa.IsRevoked)
-                .ToListAsync();
-
-            if (accessApprovals.Any())
-            {
-                return Conflict(new
+            return await this.SafeDeleteAsync(
+                "Document",
+                id.ToString(),
+                async () =>
                 {
-                    message = "Document cannot be deleted while access approvals exist.",
-                    approvals = accessApprovals.Select(daa => new
+                    var accessApprovals = await _context.DocumentAccessApprovals
+                        .Include(daa => daa.InstitutionEnquiryRequest)
+                            .ThenInclude(ier => ier.Institution)
+                        .Include(daa => daa.ApprovedByUser)
+                        .Where(daa => daa.DocumentId == id && !daa.IsRevoked)
+                        .ToListAsync();
+
+                    if (accessApprovals.Any())
+                        throw new DeletionConflictException(
+                            "Document",
+                            id.ToString(),
+                            new List<string> { "Active Access Approvals" }
+                        );
+
+                    await _documentRepository.DeleteDocumentAsync(id);
+
+                    await TryCreateAuditLogAsync(new AuditLog
                     {
-                        approvalId = daa.ApprovalId,
-                        institutionId = daa.InstitutionEnquiryRequest.InstitutionId,
-                        institutionName = daa.InstitutionEnquiryRequest.Institution.InstitutionName,
-                        approvedByUserName = daa.ApprovedByUser?.UserName ?? string.Empty,
-                        approvedAt = daa.ApprovedAt
-                    })
-                });
-            }
+                        UserId = user.Id,
+                        ActionCode = "DOCUMENT_DELETED",
+                        TimeStamp = DateTimeOffset.UtcNow,
+                        Description = $"Document {doc.DocumentId} deleted by owner.",
+                        TableAffected = "Documents",
+                        RecordID = doc.DocumentId
+                    });
 
-            await _documentRepository.DeleteDocumentAsync(id);
-
-            await TryCreateAuditLogAsync(new AuditLog
-            {
-                UserId = user.Id,
-                ActionCode = "DOCUMENT_DELETED",
-                TimeStamp = DateTimeOffset.UtcNow,
-                Description = $"Document {doc.DocumentId} deleted by owner.",
-                TableAffected = "Documents",
-                RecordID = doc.DocumentId
-            });
-
-            try
-            {
-                await _complianceService.CheckUserComplianceAsync(user.Id);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to recalculate compliance after document deletion for user {UserId}", user.Id);
-            }
-            return NoContent();
+                    try
+                    {
+                        await _complianceService.CheckUserComplianceAsync(user.Id);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to recalculate compliance after document deletion for user {UserId}", user.Id);
+                    }
+                }
+            );
         }
 
         private static string GetMimeType(string fileName)
@@ -901,7 +900,9 @@ namespace FourierIT_API.Controllers
             ExpiryDate = doc.ExpiryDate,
             LastModifiedDate = doc.LastModifiedDate,
             DocumentTypeId = doc.DocumentTypeId,
-            DocumentTypeName = doc.DocumentType?.TypeName ?? string.Empty
+            DocumentTypeName = doc.DocumentType?.TypeName ?? string.Empty,
+            UploadedByFirstName = doc.User?.Profile?.FirstName ?? string.Empty,
+            UploadedByLastName = doc.User?.Profile?.LastName ?? string.Empty
         };
 
         private async Task TryCreateAuditLogAsync(AuditLog auditLog)
@@ -989,6 +990,211 @@ namespace FourierIT_API.Controllers
                 DocumentTypes = requiredDocs
             });
         }
+
+        #region Document Hierarchy Tree Endpoints
+
+        [HttpGet("hierarchy")]
+        [Authorize(Policy = "Documents.View")]
+        public async Task<IActionResult> GetDocumentHierarchy()
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+
+            var hierarchyRepository = new DocumentHierarchyRepository(_context);
+
+            List<EntityType> entityTypes;
+            string? userIdForMapping;
+
+            if (User.HasClaim("superadmin", "true"))
+            {
+                entityTypes = await hierarchyRepository.GetFullHierarchyAsync();
+                userIdForMapping = null; // SuperAdmin sees all documents
+            }
+            else
+            {
+                entityTypes = await hierarchyRepository.GetHierarchyForUserAsync(user.Id);
+                userIdForMapping = user.Id; // Regular users see only their documents
+            }
+
+            var result = entityTypes.Select(et => MapToEntityTypeHierarchyDto(et, userIdForMapping)).ToList();
+            return Ok(result);
+        }
+
+        [HttpGet("hierarchy/full")]
+        [Authorize]
+        public async Task<IActionResult> GetFullHierarchy()
+        {
+            if (!User.HasClaim("superadmin", "true"))
+                return Forbid("Only Super Admin can view full hierarchy");
+
+            var hierarchyRepository = new DocumentHierarchyRepository(_context);
+            var entityTypes = await hierarchyRepository.GetFullHierarchyAsync();
+
+            var result = entityTypes.Select(et => MapToEntityTypeHierarchyDto(et, null)).ToList();
+            return Ok(result);
+        }
+
+        [HttpGet("hierarchy/search")]
+        [Authorize(Policy = "Documents.View")]
+        public async Task<IActionResult> SearchDocumentHierarchy([FromQuery] string q)
+        {
+            if (string.IsNullOrWhiteSpace(q))
+                return BadRequest("Search query cannot be empty");
+
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+
+            var hierarchyRepository = new DocumentHierarchyRepository(_context);
+            List<Document> results;
+
+            if (User.HasClaim("superadmin", "true"))
+            {
+                results = await hierarchyRepository.SearchDocumentsAsync(q);
+            }
+            else
+            {
+                results = await hierarchyRepository.SearchDocumentsForUserAsync(user.Id, q);
+            }
+
+            var searchResults = results.Select(doc => new SearchResultDto
+            {
+                DocumentId = doc.DocumentId,
+                DocumentName = doc.FileName,
+                DocumentTypeName = doc.DocumentType?.TypeName ?? "Unknown",
+                EntityTypeName = "Document",
+                Status = doc.CurrentStatus,
+                IsCertified = doc.IsCertified,
+                UploadedDate = doc.UploadedDate,
+                FileSizeBytes = doc.FileSizeBytes,
+                UserCanView = true,
+                UserCanDownload = doc.UserId == user.Id
+            }).ToList();
+
+            return Ok(searchResults);
+        }
+
+        [HttpGet("hierarchy/entity-type/{entityTypeId}")]
+        [Authorize(Policy = "Documents.View")]
+        public async Task<IActionResult> GetDocumentTypesByEntityType(int entityTypeId)
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+
+            var hierarchyRepository = new DocumentHierarchyRepository(_context);
+            var documentTypes = await hierarchyRepository.GetDocumentTypesByEntityTypeAsync(entityTypeId);
+
+            var result = documentTypes.Select(dt => new DocumentTypeHierarchyDto
+            {
+                DocumentTypeId = dt.DocumentTypeId,
+                TypeName = dt.TypeName,
+                Description = dt.Description,
+                IsMandatory = _context.RequiredDocuments
+                    .Any(rd => rd.DocumentTypeId == dt.DocumentTypeId && rd.EntityTypeId == entityTypeId && rd.IsMandatory),
+                Documents = new List<DocumentItemDto>()
+            }).ToList();
+
+            return Ok(result);
+        }
+
+        [HttpGet("hierarchy/document-type/{documentTypeId}")]
+        [Authorize(Policy = "Documents.View")]
+        public async Task<IActionResult> GetDocumentsByType(int documentTypeId)
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+
+            var hierarchyRepository = new DocumentHierarchyRepository(_context);
+            var documents = await hierarchyRepository.GetDocumentsByTypeAsync(documentTypeId);
+
+            var result = documents.Select(async doc =>
+            {
+                var permissions = await hierarchyRepository.GetUserDocumentPermissionsAsync(user.Id, doc.DocumentId);
+                return new DocumentItemDto
+                {
+                    DocumentId = doc.DocumentId,
+                    FileName = doc.FileName,
+                    CurrentStatus = doc.CurrentStatus,
+                    IsCertified = doc.IsCertified,
+                    UploadedDate = doc.UploadedDate,
+                    FileSizeBytes = doc.FileSizeBytes,
+                    UserCanView = permissions?.CanView ?? false,
+                    UserCanDownload = permissions?.CanDownload ?? false,
+                    UserCanEdit = permissions?.CanEdit ?? false,
+                    UserCanDelete = permissions?.CanDelete ?? false,
+                    UserCanShare = permissions?.CanShare ?? false
+                };
+            }).Select(t => t.Result).ToList();
+
+            return Ok(result);
+        }
+
+        #endregion
+
+        #region Helper Methods
+
+        private EntityTypeHierarchyDto MapToEntityTypeHierarchyDto(EntityType entityType, string? userId)
+        {
+            return new EntityTypeHierarchyDto
+            {
+                EntityTypeId = entityType.EntityTypeId,
+                Name = entityType.Name,
+                DocumentTypes = entityType.RequiredDocuments
+                    .Select(rd => MapToDocumentTypeHierarchyDto(rd.DocumentType, rd.IsMandatory, userId))
+                    .ToList(),
+                UserHasAccess = true
+            };
+        }
+
+        private DocumentTypeHierarchyDto MapToDocumentTypeHierarchyDto(DocumentType documentType, bool isMandatory, string? userId)
+        {
+            // Get documents for this document type directly from database
+            var documents = _context.Documents
+                .Where(d => d.DocumentTypeId == documentType.DocumentTypeId)
+                .Include(d => d.SharedWith)
+                .ToList();
+
+            return new DocumentTypeHierarchyDto
+            {
+                DocumentTypeId = documentType.DocumentTypeId,
+                TypeName = documentType.TypeName,
+                Description = documentType.Description,
+                IsMandatory = isMandatory,
+                Documents = userId == null
+                    ? documents
+                        .Select(d => MapToDocumentItemDto(d, null))
+                        .ToList()
+                    : documents
+                        .Where(d => d.UserId == userId || d.SharedWith.Any(da => da.GrantedToUserId == userId))
+                        .Select(d => MapToDocumentItemDto(d, userId))
+                        .ToList()
+            };
+        }
+
+        private DocumentItemDto MapToDocumentItemDto(Document document, string? userId)
+        {
+            bool canView = userId == null || document.UserId == userId || document.SharedWith.Any(da => da.GrantedToUserId == userId);
+            bool canDownload = userId == null || document.UserId == userId;
+            bool canEdit = userId == null || document.UserId == userId;
+            bool canDelete = userId == null || document.UserId == userId;
+            bool canShare = userId == null || document.UserId == userId;
+
+            return new DocumentItemDto
+            {
+                DocumentId = document.DocumentId,
+                FileName = document.FileName,
+                CurrentStatus = document.CurrentStatus,
+                IsCertified = document.IsCertified,
+                UploadedDate = document.UploadedDate,
+                FileSizeBytes = document.FileSizeBytes,
+                UserCanView = canView,
+                UserCanDownload = canDownload,
+                UserCanEdit = canEdit,
+                UserCanDelete = canDelete,
+                UserCanShare = canShare
+            };
+        }
+
+        #endregion
     }
 
 }

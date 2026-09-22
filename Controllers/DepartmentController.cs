@@ -2,6 +2,7 @@
 using FourierIT_API.DTOs.Department;
 using FourierIT_API.Mappers;
 using FourierIT_API.Models;
+using FourierIT_API.Exceptions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
@@ -253,28 +254,38 @@ namespace FourierIT_API.Controllers
         [Route("{DepartmentId}")]
         public async Task<IActionResult> Delete([FromRoute] int DepartmentId)
         {
-            var departmentModel = await _context.Departments
-                .Include(d => d.Children)
-                .Include(d => d.DepartmentUsers)
-                .Include(d => d.DepartmentDocumentTypes)
-                .Include(d => d.ComplianceStatuses)
-                .FirstOrDefaultAsync(x => x.DepartmentId == DepartmentId);
-
-            if (departmentModel == null)
-            {
-                return NotFound();
-            }
-
-            if (departmentModel.Children.Any() || departmentModel.DepartmentUsers.Any() || departmentModel.DepartmentDocumentTypes.Any() || departmentModel.ComplianceStatuses.Any())
-                return Conflict(new
+            return await this.SafeDeleteAsync(
+                "Department",
+                DepartmentId.ToString(),
+                async () =>
                 {
-                    error = "Department cannot be deleted because it still has child departments, users, document assignments, or compliance records."
-                });
+                    var departmentModel = await _context.Departments
+                        .Include(d => d.Children)
+                        .Include(d => d.DepartmentUsers)
+                        .Include(d => d.DepartmentDocumentTypes)
+                        .Include(d => d.ComplianceStatuses)
+                        .FirstOrDefaultAsync(x => x.DepartmentId == DepartmentId);
 
-            //this removes the department which was deleted
-            _context.Departments.Remove(departmentModel);
-            await _context.SaveChangesAsync();
-            return NoContent();
+                    if (departmentModel == null)
+                        throw new KeyNotFoundException($"Department with ID {DepartmentId} not found");
+
+                    if (departmentModel.Children.Any() || departmentModel.DepartmentUsers.Any() || departmentModel.DepartmentDocumentTypes.Any() || departmentModel.ComplianceStatuses.Any())
+                        throw new DeletionConflictException(
+                            "Department",
+                            DepartmentId.ToString(),
+                            new List<string>
+                            {
+                                departmentModel.Children.Any() ? "Child Departments" : string.Empty,
+                                departmentModel.DepartmentUsers.Any() ? "Users" : string.Empty,
+                                departmentModel.DepartmentDocumentTypes.Any() ? "Document Type Assignments" : string.Empty,
+                                departmentModel.ComplianceStatuses.Any() ? "Compliance Records" : string.Empty
+                            }.Where(x => !string.IsNullOrEmpty(x)).ToList()
+                        );
+
+                    _context.Departments.Remove(departmentModel);
+                    await _context.SaveChangesAsync();
+                }
+            );
         }
 
         private static bool IsDescendantOf(int departmentId, int potentialParentId, IEnumerable<Department> allDepartments)

@@ -18,12 +18,12 @@ namespace FourierIT.API.Tests;
 
 /// <summary>
 /// Department Admin previously had explicit in-method allowances to edit or delete any
-/// user (UpdateManagedUser/DeleteManagedUser/DeleteUserById in UserController), which is
-/// no longer wanted - only Admin/Super Admin should be able to. Institution mutation
-/// endpoints were also loosely gated by the broad "Users.Manage" permission, which
-/// Department Admin holds; they're now restricted to the "Admin" role via
-/// [Authorize(Roles = "Admin")], which the SuperAdminRoleHandler still bypasses for the
-/// seeded Super Admin claim.
+/// user (UpdateManagedUser/DeleteManagedUser/DeleteUserById in UserController), which was
+/// restricted to only Admin/Super Admin, then partially reopened: Department Admin should
+/// be able to delete any user (just not edit them). Institution mutation endpoints were
+/// also loosely gated by the broad "Users.Manage" permission, which Department Admin holds;
+/// they're now restricted to the "Admin" role via [Authorize(Roles = "Admin")], which the
+/// SuperAdminRoleHandler still bypasses for the seeded Super Admin claim.
 /// </summary>
 public class DepartmentAdminRestrictionTests
 {
@@ -48,23 +48,23 @@ public class DepartmentAdminRestrictionTests
     }
 
     [Fact]
-    public async Task DeleteManagedUser_ByDepartmentAdmin_ReturnsForbidden()
+    public async Task DeleteManagedUser_ByDepartmentAdmin_Succeeds()
     {
         var (controller, targetProfile) = await CreateFixtureAsync(actingRole: "Department Admin");
 
         var result = await controller.DeleteManagedUser(targetProfile.ProfileId);
 
-        Assert.IsType<ForbidResult>(result);
+        Assert.IsType<NoContentResult>(result);
     }
 
     [Fact]
-    public async Task DeleteUserById_ByDepartmentAdmin_ReturnsForbidden()
+    public async Task DeleteUserById_ByDepartmentAdmin_Succeeds()
     {
         var (controller, _) = await CreateFixtureAsync(actingRole: "Department Admin", targetUserId: "target-user");
 
         var result = await controller.DeleteUserById("target-user");
 
-        Assert.IsType<ForbidResult>(result);
+        Assert.IsType<NoContentResult>(result);
     }
 
     private static UpdateUserManagementRequestDto ValidUpdateDto() => new()
@@ -121,6 +121,7 @@ public class DepartmentAdminRestrictionTests
         userManager.Setup(x => x.FindByIdAsync(actingUser.Id)).ReturnsAsync(actingUser);
         userManager.Setup(x => x.FindByIdAsync(targetUser.Id)).ReturnsAsync(targetUser);
         userManager.Setup(x => x.IsInRoleAsync(actingUser, "Admin")).ReturnsAsync(actingRole == "Admin");
+        userManager.Setup(x => x.IsInRoleAsync(actingUser, "Department Admin")).ReturnsAsync(actingRole == "Department Admin");
         userManager.Setup(x => x.GetRolesAsync(targetUser)).ReturnsAsync(new List<string>());
         userManager.Setup(x => x.RemoveFromRolesAsync(targetUser, It.IsAny<IEnumerable<string>>())).ReturnsAsync(IdentityResult.Success);
         userManager.Setup(x => x.AddToRoleAsync(targetUser, It.IsAny<string>())).ReturnsAsync(IdentityResult.Success);

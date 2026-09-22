@@ -3,6 +3,7 @@ using FourierIT_API.DTOs.User;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
 using FourierIT_API.Security;
+using FourierIT_API.Exceptions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -828,7 +829,8 @@ namespace FourierIT_API.Controllers
 
             var currentUserIsSuperAdmin = IsSuperAdminUser(currentUser);
             var currentUserIsAdmin = await _userManager.IsInRoleAsync(currentUser, "Admin");
-            if (!currentUserIsSuperAdmin && !currentUserIsAdmin)
+            var currentUserIsDepartmentAdmin = await _userManager.IsInRoleAsync(currentUser, "Department Admin");
+            if (!currentUserIsSuperAdmin && !currentUserIsAdmin && !currentUserIsDepartmentAdmin)
                 return Forbid();
 
             var profile = await _context.Profiles.Include(p => p.User).FirstOrDefaultAsync(p => p.ProfileId == profileId);
@@ -838,25 +840,28 @@ namespace FourierIT_API.Controllers
             if (user == null) return NotFound(new { error = "User not found for the profile." });
             if (IsSuperAdminUser(user)) return BadRequest(new { error = "The Super Admin account cannot be deleted." });
 
-            await DeleteUserRelatedRecordsAsync(user);
+            return await this.SafeDeleteAsync(
+                "User",
+                user.Id,
+                async () =>
+                {
+                    await DeleteUserRelatedRecordsAsync(user);
 
-            _context.Profiles.Remove(profile);
-            await _context.SaveChangesAsync();
+                    var deleteUserResult = await _userManager.DeleteAsync(user);
+                    if (!deleteUserResult.Succeeded)
+                        throw new Exception(string.Join(", ", deleteUserResult.Errors.Select(e => e.Description)));
 
-            var deleteUserResult = await _userManager.DeleteAsync(user);
-            if (!deleteUserResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, deleteUserResult.Errors);
-
-            await TryCreateAuditLogAsync(new AuditLog
-            {
-                UserId = currentUser.Id,
-                ActionCode = "USER_DELETED",
-                TimeStamp = DateTimeOffset.UtcNow,
-                Description = $"User {user.Id} and related records deleted by {(currentUserIsSuperAdmin ? "Super Admin" : "Admin")}",
-                TableAffected = "Users",
-                RecordID = int.TryParse(user.Id, out var parsedId) ? parsedId : (int?)null
-            });
-
-            return NoContent();
+                    await TryCreateAuditLogAsync(new AuditLog
+                    {
+                        UserId = currentUser.Id,
+                        ActionCode = "USER_DELETED",
+                        TimeStamp = DateTimeOffset.UtcNow,
+                        Description = $"User {user.Id} and related records deleted by {(currentUserIsSuperAdmin ? "Super Admin" : currentUserIsAdmin ? "Admin" : "Department Admin")}",
+                        TableAffected = "Users",
+                        RecordID = int.TryParse(user.Id, out var parsedId) ? parsedId : (int?)null
+                    });
+                }
+            );
         }
 
         [Authorize]
@@ -868,36 +873,36 @@ namespace FourierIT_API.Controllers
 
             var currentUserIsSuperAdmin = IsSuperAdminUser(currentUser);
             var currentUserIsAdmin = await _userManager.IsInRoleAsync(currentUser, "Admin");
-            if (!currentUserIsSuperAdmin && !currentUserIsAdmin)
+            var currentUserIsDepartmentAdmin = await _userManager.IsInRoleAsync(currentUser, "Department Admin");
+            if (!currentUserIsSuperAdmin && !currentUserIsAdmin && !currentUserIsDepartmentAdmin)
                 return Forbid();
 
             var user = await _userManager.FindByIdAsync(userId);
             if (user == null) return NotFound(new { error = "User not found." });
             if (IsSuperAdminUser(user)) return BadRequest(new { error = "The Super Admin account cannot be deleted." });
 
-            await DeleteUserRelatedRecordsAsync(user);
+            return await this.SafeDeleteAsync(
+                "User",
+                userId,
+                async () =>
+                {
+                    await DeleteUserRelatedRecordsAsync(user);
 
-            var profile = await _context.Profiles.FirstOrDefaultAsync(p => p.UserId == user.Id);
-            if (profile != null)
-            {
-                _context.Profiles.Remove(profile);
-                await _context.SaveChangesAsync();
-            }
+                    var deleteUserResult = await _userManager.DeleteAsync(user);
+                    if (!deleteUserResult.Succeeded)
+                        throw new Exception(string.Join(", ", deleteUserResult.Errors.Select(e => e.Description)));
 
-            var deleteUserResult = await _userManager.DeleteAsync(user);
-            if (!deleteUserResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, deleteUserResult.Errors);
-
-            await TryCreateAuditLogAsync(new AuditLog
-            {
-                UserId = currentUser.Id,
-                ActionCode = "USER_DELETED",
-                TimeStamp = DateTimeOffset.UtcNow,
-                Description = $"User {user.Id} and related records deleted by {(currentUserIsSuperAdmin ? "Super Admin" : "Admin")}",
-                TableAffected = "Users",
-                RecordID = int.TryParse(user.Id, out var parsedId) ? parsedId : (int?)null
-            });
-
-            return NoContent();
+                    await TryCreateAuditLogAsync(new AuditLog
+                    {
+                        UserId = currentUser.Id,
+                        ActionCode = "USER_DELETED",
+                        TimeStamp = DateTimeOffset.UtcNow,
+                        Description = $"User {user.Id} and related records deleted by {(currentUserIsSuperAdmin ? "Super Admin" : currentUserIsAdmin ? "Admin" : "Department Admin")}",
+                        TableAffected = "Users",
+                        RecordID = int.TryParse(user.Id, out var parsedId) ? parsedId : (int?)null
+                    });
+                }
+            );
         }
 
         [Authorize(Policy = "Users.Manage")]
@@ -1024,10 +1029,31 @@ namespace FourierIT_API.Controllers
                 _context.DocumentComplianceChecks.RemoveRange(_context.DocumentComplianceChecks.Where(dc => dc.ComplianceStatusId == complianceStatus.ComplianceStatusId));
                 _context.ComplianceResults.RemoveRange(_context.ComplianceResults.Where(cr => cr.ComplianceStatusId == complianceStatus.ComplianceStatusId));
                 _context.ComplianceHistories.RemoveRange(_context.ComplianceHistories.Where(ch => ch.ComplianceStatusId == complianceStatus.ComplianceStatusId));
-                _context.ComplianceAlerts.RemoveRange(_context.ComplianceAlerts.Where(ca => ca.UserId == user.Id));
-                _context.ComplianceAuditLogs.RemoveRange(_context.ComplianceAuditLogs.Where(al => al.PerformedBy == user.Id));
                 _context.ComplianceStatuses.Remove(complianceStatus);
             }
+
+            // The FK columns below use NO ACTION (or Restrict) so SQL Server won't cascade or null
+            // them automatically. They record who performed/reviewed/acknowledged something for
+            // ANOTHER user's records, so we preserve the historical rows and just null the actor
+            // reference, rather than deleting compliance/audit history.
+            _context.ComplianceAlerts.RemoveRange(_context.ComplianceAlerts.Where(ca => ca.UserId == user.Id));
+
+            foreach (var alert in await _context.ComplianceAlerts.Where(ca => ca.AcknowledgedBy == user.Id).ToListAsync())
+                alert.AcknowledgedBy = null;
+            foreach (var alert in await _context.ComplianceAlerts.Where(ca => ca.EscalatedTo == user.Id).ToListAsync())
+                alert.EscalatedTo = null;
+            foreach (var history in await _context.ComplianceHistories.Where(ch => ch.ChangedBy == user.Id).ToListAsync())
+                history.ChangedBy = null;
+            foreach (var history in await _context.ComplianceHistories.Where(ch => ch.ApprovedBy == user.Id).ToListAsync())
+                history.ApprovedBy = null;
+            foreach (var check in await _context.DocumentComplianceChecks.Where(dc => dc.ManuallyReviewedBy == user.Id).ToListAsync())
+                check.ManuallyReviewedBy = null;
+            foreach (var enquiry in await _context.InstitutionEnquiryRequests.Where(ier => ier.ApprovedByUserId == user.Id).ToListAsync())
+                enquiry.ApprovedByUserId = null;
+            _context.ComplianceAuditLogs.RemoveRange(_context.ComplianceAuditLogs.Where(al => al.PerformedBy == user.Id));
+
+            foreach (var log in await _context.AuditLogs.Where(al => al.UserId == user.Id).ToListAsync())
+                log.UserId = null;
 
             await _context.SaveChangesAsync();
         }

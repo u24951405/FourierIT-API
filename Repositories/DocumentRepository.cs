@@ -105,6 +105,8 @@ namespace FourierIT_API.Repositories
         public async Task<Document?> GetDocumentByIdAsync(int id)
         {
             return await _context.Documents
+            .Include(d => d.User)
+                .ThenInclude(u => u.Profile)
             .Include(d => d.SharedWith)
             .Include(d => d.DocumentBlob)
             .Include(d => d.DocumentType)

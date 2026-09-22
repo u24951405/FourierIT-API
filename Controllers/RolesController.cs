@@ -2,6 +2,7 @@
 using FourierIT_API.DTOs.Role;
 using FourierIT_API.DTOs.User;
 using FourierIT_API.Models;
+using FourierIT_API.Exceptions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
@@ -231,14 +232,25 @@ namespace FourierIT_API.Controllers
             var role = await _roleManager.FindByIdAsync(RoleId);
             if (role == null) return NotFound();
 
-            // Prevent deleting a role that still has users assigned
-            var usersInRole = await _userManager.GetUsersInRoleAsync(role.Name ?? string.Empty);
-            if (usersInRole.Any()) return BadRequest(new { error = "Role has assigned users. Remove users from the role before deleting" });
+            return await this.SafeDeleteAsync(
+                "Role",
+                RoleId,
+                async () =>
+                {
+                    // Prevent deleting a role that still has users assigned
+                    var usersInRole = await _userManager.GetUsersInRoleAsync(role.Name ?? string.Empty);
+                    if (usersInRole.Any())
+                        throw new DeletionConflictException(
+                            "Role",
+                            RoleId,
+                            new List<string> { $"Assigned to {usersInRole.Count} user(s)" }
+                        );
 
-            var result = await _roleManager.DeleteAsync(role);
-            if (!result.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, result.Errors);
-
-            return NoContent();
+                    var result = await _roleManager.DeleteAsync(role);
+                    if (!result.Succeeded)
+                        throw new Exception(string.Join(", ", result.Errors.Select(e => e.Description)));
+                }
+            );
         }
 
         private async Task ReplacePermissionsAsync(string roleId, IEnumerable<string>? permissionKeys)
@@ -266,6 +278,84 @@ namespace FourierIT_API.Controllers
                 PermissionId = permission.PermissionId
             }));
             await _context.SaveChangesAsync();
+        }
+
+        [HttpPost("{RoleId}/permissions/{PermissionId}")]
+        [Authorize(Policy = "Roles.Manage")]
+        public async Task<IActionResult> AddPermissionToRole([FromRoute] string RoleId, [FromRoute] int PermissionId)
+        {
+            var role = await _roleManager.FindByIdAsync(RoleId);
+            if (role == null) return NotFound(new { error = "Role not found" });
+
+            var permission = await _context.Permissions.FindAsync(PermissionId);
+            if (permission == null) return NotFound(new { error = "Permission not found" });
+
+            var exists = await _context.RolePermissions
+                .AnyAsync(rp => rp.RoleId == RoleId && rp.PermissionId == PermissionId);
+
+            if (exists) return BadRequest(new { error = "Role already has this permission" });
+
+            var rolePermission = new RolePermission
+            {
+                RoleId = RoleId,
+                PermissionId = PermissionId
+            };
+
+            _context.RolePermissions.Add(rolePermission);
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Permission added successfully" });
+        }
+
+        [HttpDelete("{RoleId}/permissions/{PermissionId}")]
+        [Authorize(Policy = "Roles.Manage")]
+        public async Task<IActionResult> RemovePermissionFromRole([FromRoute] string RoleId, [FromRoute] int PermissionId)
+        {
+            var role = await _roleManager.FindByIdAsync(RoleId);
+            if (role == null) return NotFound(new { error = "Role not found" });
+
+            var rolePermission = await _context.RolePermissions
+                .FirstOrDefaultAsync(rp => rp.RoleId == RoleId && rp.PermissionId == PermissionId);
+
+            if (rolePermission == null) return NotFound(new { error = "Role does not have this permission" });
+
+            _context.RolePermissions.Remove(rolePermission);
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Permission removed successfully" });
+        }
+
+        [HttpGet("{RoleId}/permissions")]
+        [Authorize(Policy = "Roles.Manage")]
+        public async Task<IActionResult> GetRoleWithAllPermissions([FromRoute] string RoleId)
+        {
+            var role = await _roleManager.FindByIdAsync(RoleId);
+            if (role == null) return NotFound();
+
+            var allPermissions = await _context.Permissions
+                .OrderBy(p => p.PermissionKey)
+                .ToListAsync();
+
+            var assignedPermissions = await _context.RolePermissions
+                .Where(rp => rp.RoleId == RoleId)
+                .Select(rp => rp.PermissionId)
+                .ToListAsync();
+
+            var permissionsDto = allPermissions.Select(p => new RolePermissionDto
+            {
+                PermissionId = p.PermissionId,
+                PermissionKey = p.PermissionKey,
+                IsAssigned = assignedPermissions.Contains(p.PermissionId)
+            }).ToList();
+
+            var roleDetailDto = new RoleDetailDto
+            {
+                RoleId = role.Id,
+                RoleName = role.Name ?? string.Empty,
+                Permissions = permissionsDto
+            };
+
+            return Ok(roleDetailDto);
         }
 
         private async Task<RoleDto> ToRoleDtoAsync(Role role)
