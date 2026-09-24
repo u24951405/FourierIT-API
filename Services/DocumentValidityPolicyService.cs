@@ -52,6 +52,7 @@ public class DocumentValidityPolicyService
 
         var documents = await _context.Documents
             .Include(d => d.CertificationDetails)
+            .Include(d => d.DocumentStatusHistories)
             .Where(d => d.DocumentTypeId == documentTypeId)
             .ToListAsync();
 
@@ -118,7 +119,7 @@ public class DocumentValidityPolicyService
             }
             else if (previousExpired)
             {
-                document.CurrentStatus = "Verified";
+                document.CurrentStatus = ResolveRestoredStatus(document);
             }
         }
 
@@ -161,6 +162,18 @@ public class DocumentValidityPolicyService
         }
 
         summary.ComplianceRecalculationFailed = complianceRecalculationFailed;
+    }
+
+    private static string ResolveRestoredStatus(Document document)
+    {
+        var priorStatus = document.DocumentStatusHistories
+            .OrderByDescending(history => history.DateArchived)
+            .Select(history => history.StatusName)
+            .FirstOrDefault(status => !string.Equals(status, "Expired", StringComparison.OrdinalIgnoreCase));
+
+        return !string.IsNullOrWhiteSpace(priorStatus)
+            ? priorStatus
+            : "Pending";
     }
 
     private sealed class DocumentValiditySettingsSnapshot
