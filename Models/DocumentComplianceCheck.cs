@@ -31,6 +31,9 @@ namespace FourierIT_API.Models
 
         // Individual Checks
         public bool IsExpiryValid { get; set; } = true;
+        // Derived from the document type validity policy and never persisted in the database,
+        // because it can go stale when a Super Admin changes the document-type settings.
+        [NotMapped]
         public bool NeverExpires { get; set; } = false;
         public DateTime? ExpiryCheckDate { get; set; }
         public int? DaysUntilExpiry { get; set; }

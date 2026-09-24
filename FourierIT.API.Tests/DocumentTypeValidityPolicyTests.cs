@@ -236,6 +236,81 @@ public class DocumentTypeValidityPolicyTests
         Assert.Equal("DOCUMENT_TYPE_VALIDITY_UPDATED", logs[0].ActionCode);
     }
 
+    [Fact]
+    public async Task SaveValidity_RestoresPreviousNonExpiredStatus_WhenDocumentWasPending()
+    {
+        await using var context = CreateContext();
+        var documentType = new DocumentType
+        {
+            DocumentTypeId = 1,
+            TypeName = "Type A",
+            Description = "desc",
+            ValidityMonths = 12,
+            WarningDays = 30,
+            ValidityBasis = ValidityBasis.UploadDate,
+            NeverExpires = false
+        };
+        var user = new User { Id = "u1", UserName = "user1" };
+        context.Users.Add(user);
+        context.DocumentTypes.Add(documentType);
+        context.Documents.Add(new Document
+        {
+            DocumentId = 1,
+            FileName = "doc.pdf",
+            UserId = "u1",
+            DocumentTypeId = 1,
+            CurrentStatus = "Pending",
+            UploadedDate = DateTime.UtcNow.AddDays(-100),
+            ExpiryDate = DateTimeOffset.UtcNow.AddDays(-1),
+            FileSizeBytes = 10,
+            EncryptionAlgorithm = "AES-256",
+            IsEncrypted = true,
+            CertificationDetails = new List<CertificationDetails>(),
+            DocumentStatusHistories = new List<DocumentStatusHistory>
+            {
+                new() { StatusName = "Pending", DateArchived = DateTimeOffset.UtcNow.AddDays(-50) },
+                new() { StatusName = "Expired", DateArchived = DateTimeOffset.UtcNow.AddDays(-10) }
+            }
+        });
+        await context.SaveChangesAsync();
+
+        var complianceMock = new Mock<IComplianceService>();
+        complianceMock.Setup(x => x.CheckUserComplianceAsync("u1", true)).ReturnsAsync(new ComplianceStatus { UserId = "u1" });
+        var auditLogService = new Mock<IAuditLogService>();
+        auditLogService.Setup(x => x.CreateAuditLogAsync(It.IsAny<AuditLog>())).ReturnsAsync(new AuditLogDto());
+
+        var service = new DocumentValidityPolicyService(
+            context,
+            new DocumentValidityCalculator(),
+            complianceMock.Object,
+            auditLogService.Object,
+            new LoggerFactory().CreateLogger<DocumentValidityPolicyService>());
+
+        var controller = new DocumentTypesController(context, service);
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("superadmin", "true") }, "TestAuth"))
+            }
+        };
+
+        var request = new DocumentTypeValidityUpdateRequest
+        {
+            ValidityMonths = 6,
+            NeverExpires = false,
+            ValidityBasis = ValidityBasis.UploadDate,
+            WarningDays = 15
+        };
+
+        var result = await controller.UpdateValidity(1, request);
+        Assert.IsType<OkObjectResult>(result.Result);
+
+        var savedDocument = await context.Documents.AsNoTracking().SingleAsync(d => d.DocumentId == 1);
+        Assert.Equal("Pending", savedDocument.CurrentStatus);
+        Assert.NotEqual("Verified", savedDocument.CurrentStatus);
+    }
+
     [Theory]
     [InlineData(0, false, ValidityBasis.UploadDate, 10)]
     [InlineData(121, false, ValidityBasis.UploadDate, 10)]
