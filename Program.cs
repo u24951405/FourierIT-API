@@ -117,6 +117,7 @@ builder.Services.AddScoped<IDocumentService, DocumentService>();
 builder.Services.AddScoped<IFileScanService, FileScanService>();
 builder.Services.AddScoped<IComplianceService, ComplianceService>();
 builder.Services.AddSingleton<DocumentValidityCalculator>();
+builder.Services.AddScoped<DocumentValidityPolicyService>();
 
 // Register Audit Log Service
 builder.Services.AddScoped<FourierIT_API.Interfaces.IAuditLogService, FourierIT_API.Services.AuditLogService>();
