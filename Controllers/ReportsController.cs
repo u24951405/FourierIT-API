@@ -21,12 +21,14 @@ namespace FourierIT_API.Controllers
         private readonly AppDbContext _context;
         private readonly IConfiguration _configuration;
         private readonly ReportPdfService _pdfService;
+        private readonly DocumentValidityCalculator _documentValidityCalculator;
 
-        public ReportsController(AppDbContext context, IConfiguration? configuration = null)
+        public ReportsController(AppDbContext context, IConfiguration? configuration = null, DocumentValidityCalculator? documentValidityCalculator = null)
         {
             _context = context;
             _configuration = configuration ?? new ConfigurationBuilder().Build();
             _pdfService = new ReportPdfService();
+            _documentValidityCalculator = documentValidityCalculator ?? new DocumentValidityCalculator();
         }
 
         [HttpGet("monthly")]
@@ -174,7 +176,7 @@ namespace FourierIT_API.Controllers
                     CategoryColor = documentColors[(document.DocumentTypeId - 1) % documentColors.Length],
                     UploadDate = document.UploadedDate.ToString("yyyy-MM-dd"),
                     ExpiryDate = document.ExpiryDate != default ? document.ExpiryDate.UtcDateTime.ToString("yyyy-MM-dd") : null,
-                    VerificationStatus = ResolveDocumentVerificationStatus(document.CurrentStatus, document.ExpiryDate)
+                    VerificationStatus = ResolveDocumentVerificationStatus(document.CurrentStatus, document.DocumentType, document.ExpiryDate)
                 })
                 .ToList();
 
@@ -251,7 +253,7 @@ namespace FourierIT_API.Controllers
                 })
                 .ToList();
 
-            var activeDocuments = documents.Count(document => ResolveDocumentStatusState(document.CurrentStatus, document.ExpiryDate) == "Active");
+            var activeDocuments = documents.Count(document => ResolveDocumentStatusState(document.CurrentStatus, document.DocumentType, document.ExpiryDate) == "Active");
             var inactiveDocuments = documents.Count - activeDocuments;
 
             var clientRelationships = await _context.DocumentAccessApprovals.AsNoTracking()
@@ -319,17 +321,26 @@ namespace FourierIT_API.Controllers
             return string.IsNullOrWhiteSpace(name) ? "Unknown User" : name;
         }
 
-        private static string ResolveDocumentVerificationStatus(string currentStatus, DateTimeOffset expiryDate)
+        private string ResolveDocumentVerificationStatus(string currentStatus, DocumentType? documentType, DateTimeOffset expiryDate)
         {
             var normalized = currentStatus?.Trim() ?? string.Empty;
             if (string.IsNullOrWhiteSpace(normalized))
                 return "Pending";
 
+            if (DocumentValidityCalculator.IsNeverExpires(documentType, expiryDate))
+                return "Verified";
+
             if (normalized.Equals("Verified", StringComparison.OrdinalIgnoreCase)
                 || normalized.Equals("Approved", StringComparison.OrdinalIgnoreCase)
                 || normalized.Equals("Compliant", StringComparison.OrdinalIgnoreCase)
                 || normalized.Equals("Active", StringComparison.OrdinalIgnoreCase))
-                return expiryDate <= DateTimeOffset.UtcNow ? "Expired" : (expiryDate <= DateTimeOffset.UtcNow.AddDays(30) ? "Expiring Soon" : "Verified");
+            {
+                var now = DateTimeOffset.UtcNow;
+                if (expiryDate <= now)
+                    return "Expired";
+
+                return _documentValidityCalculator.IsExpiringSoon(documentType, expiryDate, now) ? "Expiring Soon" : "Verified";
+            }
 
             if (normalized.Equals("Pending", StringComparison.OrdinalIgnoreCase)
                 || normalized.Contains("Review", StringComparison.OrdinalIgnoreCase)
@@ -339,15 +350,15 @@ namespace FourierIT_API.Controllers
             if (normalized.Equals("Expired", StringComparison.OrdinalIgnoreCase) || expiryDate <= DateTimeOffset.UtcNow)
                 return "Expired";
 
-            if (expiryDate <= DateTimeOffset.UtcNow.AddDays(30))
-                return "Expiring Soon";
+            if (DocumentValidityCalculator.IsNeverExpires(documentType, expiryDate))
+                return "Verified";
 
-            return "Verified";
+            return _documentValidityCalculator.IsExpiringSoon(documentType, expiryDate, DateTimeOffset.UtcNow) ? "Expiring Soon" : "Verified";
         }
 
-        private static string ResolveDocumentStatusState(string currentStatus, DateTimeOffset expiryDate)
+        private string ResolveDocumentStatusState(string currentStatus, DocumentType? documentType, DateTimeOffset expiryDate)
         {
-            var verification = ResolveDocumentVerificationStatus(currentStatus, expiryDate);
+            var verification = ResolveDocumentVerificationStatus(currentStatus, documentType, expiryDate);
             return verification == "Verified" || verification == "Expiring Soon" ? "Active" : "Inactive";
         }
 

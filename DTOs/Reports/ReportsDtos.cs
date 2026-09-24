@@ -205,6 +205,7 @@ namespace FourierIT_API.DTOs.Reports
         public string Department { get; set; } = string.Empty;
         public string DocumentType { get; set; } = string.Empty;
         public DateTimeOffset ExpiryDate { get; set; }
+        public bool NeverExpires { get; set; }
         public int DaysRemaining { get; set; }
     }
 
