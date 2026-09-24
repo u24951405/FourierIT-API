@@ -4,6 +4,7 @@ using FourierIT_API.Controllers;
 using FourierIT_API.Data;
 using FourierIT_API.DTOs.Reports;
 using FourierIT_API.Models;
+using FourierIT_API.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using UglyToad.PdfPig;
@@ -95,6 +96,98 @@ public class MonthlyReportTests
         Assert.Contains("\"failedLogins\":1", firstJson);
         Assert.Contains("\"verified\":1", firstJson);
         Assert.Contains("\"peakDay\":5", firstJson);
+    }
+
+    [Fact]
+    public async Task ActivityReport_UsesDocumentTypeWarningDaysForStatus()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase($"ActivityReportValidityTests_{Guid.NewGuid():N}")
+            .Options;
+        await using var context = new AppDbContext(options);
+
+        context.Users.Add(new User
+        {
+            Id = "user-activity-validity",
+            UserName = "validity-user",
+            Profile = new Profile
+            {
+                FirstName = "Validity",
+                LastName = "User"
+            }
+        });
+
+        var expiredType = new DocumentType { DocumentTypeId = 1, TypeName = "Expired Type", WarningDays = 30 };
+        var warningType = new DocumentType { DocumentTypeId = 2, TypeName = "Warning Type", WarningDays = 30 };
+        var outsideType = new DocumentType { DocumentTypeId = 3, TypeName = "Outside Type", WarningDays = 30 };
+        var neverType = new DocumentType { DocumentTypeId = 4, TypeName = "Never Type", WarningDays = 30, NeverExpires = true };
+        context.DocumentTypes.AddRange(expiredType, warningType, outsideType, neverType);
+
+        var now = DateTimeOffset.UtcNow;
+        context.Documents.AddRange(
+            new Document
+            {
+                DocumentId = 101,
+                FileName = "expired.pdf",
+                UserId = "user-activity-validity",
+                DocumentTypeId = 1,
+                CurrentStatus = "Verified",
+                UploadedDate = now.AddDays(-90).UtcDateTime,
+                ExpiryDate = now.AddDays(-1),
+                FileSizeBytes = 1024,
+                EncryptionAlgorithm = "AES-256",
+                IsEncrypted = true
+            },
+            new Document
+            {
+                DocumentId = 102,
+                FileName = "warning.pdf",
+                UserId = "user-activity-validity",
+                DocumentTypeId = 2,
+                CurrentStatus = "Verified",
+                UploadedDate = now.AddDays(-90).UtcDateTime,
+                ExpiryDate = now.AddDays(15),
+                FileSizeBytes = 1024,
+                EncryptionAlgorithm = "AES-256",
+                IsEncrypted = true
+            },
+            new Document
+            {
+                DocumentId = 103,
+                FileName = "outside.pdf",
+                UserId = "user-activity-validity",
+                DocumentTypeId = 3,
+                CurrentStatus = "Verified",
+                UploadedDate = now.AddDays(-90).UtcDateTime,
+                ExpiryDate = now.AddDays(45),
+                FileSizeBytes = 1024,
+                EncryptionAlgorithm = "AES-256",
+                IsEncrypted = true
+            },
+            new Document
+            {
+                DocumentId = 104,
+                FileName = "never.pdf",
+                UserId = "user-activity-validity",
+                DocumentTypeId = 4,
+                CurrentStatus = "Verified",
+                UploadedDate = now.AddDays(-90).UtcDateTime,
+                ExpiryDate = DateTimeOffset.MaxValue,
+                FileSizeBytes = 1024,
+                EncryptionAlgorithm = "AES-256",
+                IsEncrypted = true
+            });
+
+        await context.SaveChangesAsync();
+
+        var controller = new ReportsController(context, null, new DocumentValidityCalculator());
+        var result = await controller.GetActivityReport("user-activity-validity");
+        var report = Assert.IsType<ActivityReportDto>(Assert.IsType<OkObjectResult>(result.Result).Value);
+
+        Assert.Equal("Expired", report.Inventory.Single(d => d.DocumentName == "expired.pdf").VerificationStatus);
+        Assert.Equal("Expiring Soon", report.Inventory.Single(d => d.DocumentName == "warning.pdf").VerificationStatus);
+        Assert.Equal("Verified", report.Inventory.Single(d => d.DocumentName == "outside.pdf").VerificationStatus);
+        Assert.Equal("Verified", report.Inventory.Single(d => d.DocumentName == "never.pdf").VerificationStatus);
     }
 
     [Fact]

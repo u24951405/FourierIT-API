@@ -2,6 +2,7 @@
 using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
 using FourierIT_API.Security;
+using FourierIT_API.Services;
 using Microsoft.EntityFrameworkCore;
 using System.IO;
 using System.Linq;
@@ -19,6 +20,7 @@ namespace FourierIT_API.Service
         private readonly AppDbContext _context;
         private readonly IFileScanService _fileScanService;
         private readonly IAuditLogService _auditLogService;
+        private readonly DocumentValidityCalculator _documentValidityCalculator;
 
         private static readonly string[] AllowedExtensions = new[]
         {
@@ -31,7 +33,8 @@ namespace FourierIT_API.Service
             IConfiguration config,
             AppDbContext context,
             IFileScanService fileScanService,
-            IAuditLogService auditLogService)
+            IAuditLogService auditLogService,
+            DocumentValidityCalculator? documentValidityCalculator = null)
         {
             _repo = repo;
             _encryptionService = encryptionService;
@@ -39,6 +42,7 @@ namespace FourierIT_API.Service
             _context = context;
             _fileScanService = fileScanService;
             _auditLogService = auditLogService;
+            _documentValidityCalculator = documentValidityCalculator ?? new DocumentValidityCalculator();
         }
 
         public async Task<byte[]> DownloadDocumentAsync(int documentId, string userId)
@@ -77,7 +81,7 @@ namespace FourierIT_API.Service
             return await _repo.GetUserDocumentAsync(userId);
         }
 
-        public async Task<Document> UploadDocumentAsync(string userId, string fileName, byte[] fileData, int documentTypeId)
+        public async Task<Document> UploadDocumentAsync(string userId, string fileName, byte[] fileData, int documentTypeId, DateTimeOffset? certificationDate = null)
         {
             ValidateFileExtension(fileName);
 
@@ -125,16 +129,18 @@ namespace FourierIT_API.Service
                 throw new ArgumentException($"Invalid DocumentTypeId. The document type '{documentTypeId}' does not exist.");
             }
 
+            var uploadedDate = DateTime.UtcNow;
             var document = new Document
             {
                 FileName = fileName,
                 FileSizeBytes = fileData.Length,
-                UploadedDate = DateTime.UtcNow,
+                UploadedDate = uploadedDate,
                 CurrentStatus = "Uploaded",
                 UserId = userId,
                 IsEncrypted = true,
                 EncryptionAlgorithm = "AES-256",
                 DocumentTypeId = documentTypeId,
+                ExpiryDate = _documentValidityCalculator.Calculate(documentType, uploadedDate, certificationDate?.UtcDateTime).ExpiryDate,
                 DocumentBlob = new DocumentBlob
                 {
                     FileData = encryptedData,

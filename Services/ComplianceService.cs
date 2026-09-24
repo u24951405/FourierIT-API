@@ -22,19 +22,22 @@ namespace FourierIT_API.Services
         private readonly ILogger<ComplianceService> _logger;
         private readonly INotificationService _notificationService;
         private readonly IAuditLogService _auditLogService;
+        private readonly DocumentValidityCalculator _documentValidityCalculator;
 
         public ComplianceService(
             AppDbContext context,
             UserManager<User> userManager,
             ILogger<ComplianceService> logger,
             IAuditLogService auditLogService,
-            INotificationService? notificationService = null)
+            INotificationService? notificationService = null,
+            DocumentValidityCalculator? documentValidityCalculator = null)
         {
             _context = context;
             _userManager = userManager;
             _logger = logger;
             _auditLogService = auditLogService;
             _notificationService = notificationService ?? new NullNotificationService();
+            _documentValidityCalculator = documentValidityCalculator ?? new DocumentValidityCalculator();
         }
 
         // ===== MAIN COMPLIANCE CHECK =====
@@ -90,13 +93,11 @@ namespace FourierIT_API.Services
             status.NotCertifiedDocuments = 0;
             status.PendingReviewDocuments = 0;
 
-            var warningThresholdDays = await GetWarningThresholdDaysAsync();
             var requiredDocumentTypeIds = requiredDocs
                 .Where(r => r.IsMandatory)
                 .Select(r => r.DocumentTypeId)
                 .Distinct()
                 .ToList();
-            var maxDocumentAgeByType = await GetMaxDocumentAgesAsync(requiredDocumentTypeIds);
 
             if (status.DocumentChecks.Any())
             {
@@ -122,14 +123,9 @@ namespace FourierIT_API.Services
                 DocumentComplianceCheck check;
                 if (!isExpiryValid || !doc.IsManualOverrideActive)
                 {
-                    var maxMonthsOld = maxDocumentAgeByType.TryGetValue(doc.DocumentTypeId, out var configuredMaxMonths)
-                        ? configuredMaxMonths
-                        : 60;
                     check = await PerformDocumentCheckAsync(
                         doc.DocumentId,
-                        status.ComplianceStatusId,
-                        warningThresholdDays,
-                        maxMonthsOld);
+                        status.ComplianceStatusId);
                 }
                 else
                 {
@@ -315,7 +311,7 @@ namespace FourierIT_API.Services
                 CompliancePercentage = status.CompliancePercentage,
                 ComplianceScore = status.ComplianceScore,
                 RiskScore = status.OverallRiskScore,
-                WarningThresholdDays = await GetWarningThresholdDaysAsync(),
+                WarningThresholdDays = 30,
                 LastChecked = status.LastChecked,
                 ComplianceDeadline = status.ComplianceDeadline,
                 RequiresEnhancedDueDiligence = status.RequiresEnhancedDueDiligence,
@@ -521,18 +517,17 @@ namespace FourierIT_API.Services
             dashboard.TotalMissing = statuses.Sum(s => s.MissingDocuments);
             dashboard.TotalPendingReview = statuses.Sum(s => s.PendingReviewDocuments);
 
-            var warningThresholdDays = await GetWarningThresholdDaysAsync();
-            dashboard.WarningThresholdDays = warningThresholdDays;
+            dashboard.WarningThresholdDays = 30;
 
             var now = DateTimeOffset.UtcNow;
-            var expiryCutoff = now.AddDays(warningThresholdDays);
             var departmentDocuments = await _context.Documents
                 .AsNoTracking()
+                .Include(d => d.DocumentType)
                 .Where(d => d.User.DepartmentId == departmentId && d.CurrentStatus != "Deleted")
                 .ToListAsync();
 
             dashboard.TotalExpiringSoon = departmentDocuments.Count(d =>
-                d.ExpiryDate > now && d.ExpiryDate <= expiryCutoff);
+                d.DocumentType != null && _documentValidityCalculator.IsExpiringSoon(d.DocumentType, d.ExpiryDate, now));
             dashboard.TotalExpired = departmentDocuments.Count(d =>
                 string.Equals(d.CurrentStatus, "Expired", StringComparison.OrdinalIgnoreCase)
                 || d.ExpiryDate <= now);
@@ -658,13 +653,13 @@ namespace FourierIT_API.Services
                 }
             }
 
-            var warningThresholdDays = await GetWarningThresholdDaysAsync();
             var now = DateTimeOffset.UtcNow;
-            var expiryCutoff = now.AddDays(warningThresholdDays);
             var expiringDocuments = documents
-                .Where(document => string.Equals(document.CurrentStatus, "Expired", StringComparison.OrdinalIgnoreCase)
-                    || document.ExpiryDate <= expiryCutoff
-                    || (latestChecks.TryGetValue(document.DocumentId, out var check) && !check.IsExpiryValid))
+                .Where(document =>
+                    document.DocumentType != null && (
+                        string.Equals(document.CurrentStatus, "Expired", StringComparison.OrdinalIgnoreCase)
+                        || (document.ExpiryDate > now && _documentValidityCalculator.IsExpiringSoon(document.DocumentType, document.ExpiryDate, now))
+                        || (latestChecks.TryGetValue(document.DocumentId, out var check) && !check.IsExpiryValid)))
                 .Select(document =>
                 {
                     latestChecks.TryGetValue(document.DocumentId, out var check);
@@ -678,7 +673,10 @@ namespace FourierIT_API.Services
                         DocumentName = document.FileName,
                         DocumentType = document.DocumentType?.TypeName ?? string.Empty,
                         ExpiryDate = document.ExpiryDate,
-                        DaysRemaining = (int)Math.Floor((document.ExpiryDate - now).TotalDays),
+                        NeverExpires = document.DocumentType?.NeverExpires == true || document.ExpiryDate == DateTimeOffset.MaxValue,
+                        DaysRemaining = document.DocumentType?.NeverExpires == true || document.ExpiryDate == DateTimeOffset.MaxValue
+                            ? 0
+                            : (int)Math.Floor((document.ExpiryDate - now).TotalDays),
                         Status = isExpired ? "Expired" : check?.CheckStatus ?? document.CurrentStatus
                     };
                 })
@@ -742,9 +740,7 @@ namespace FourierIT_API.Services
 
         public async Task<DocumentComplianceCheck> PerformDocumentCheckAsync(
             int documentId,
-            int complianceStatusId,
-            int warningThresholdDays,
-            int maxMonthsOld)
+            int complianceStatusId)
         {
             var document = await _context.Documents
                 .AsNoTracking()
@@ -761,13 +757,16 @@ namespace FourierIT_API.Services
             var issues = new List<string>();
 
             // Check 1: Expiry validity
-            check.IsExpiryValid = document.ExpiryDate > DateTimeOffset.UtcNow;
+            var now = DateTimeOffset.UtcNow;
+            var documentType = document.DocumentType ?? await _context.DocumentTypes.AsNoTracking().FirstOrDefaultAsync(dt => dt.DocumentTypeId == document.DocumentTypeId);
+            check.IsExpiryValid = document.ExpiryDate > now;
+            check.NeverExpires = DocumentValidityCalculator.IsNeverExpires(documentType, document.ExpiryDate);
             check.ExpiryCheckDate = DateTime.UtcNow;
-            check.DaysUntilExpiry = (int)(document.ExpiryDate - DateTimeOffset.UtcNow).TotalDays;
+            check.DaysUntilExpiry = check.NeverExpires ? null : (int)(document.ExpiryDate - now).TotalDays;
 
             if (!check.IsExpiryValid)
                 issues.Add($"Expired ({document.ExpiryDate:yyyy-MM-dd})");
-            else if (check.DaysUntilExpiry < warningThresholdDays)
+            else if (documentType != null && _documentValidityCalculator.IsExpiringSoon(documentType, document.ExpiryDate, now))
                 issues.Add($"Expiring soon ({check.DaysUntilExpiry} days)");
 
             // Check 2: Certification
@@ -776,12 +775,8 @@ namespace FourierIT_API.Services
                 issues.Add("Not certified copy");
 
             // Check 3: Recency
-            var minDate = DateTime.UtcNow.AddMonths(-maxMonthsOld);
-            check.IsRecent = document.UploadedDate >= minDate;
+            check.IsRecent = true;
             check.DocumentAgeInMonths = (int)((DateTime.UtcNow - document.UploadedDate).TotalDays / 30.44);
-
-            if (!check.IsRecent)
-                issues.Add($"Older than {maxMonthsOld} months");
 
             // Check 4: Encryption
             check.IsEncrypted = document.IsEncrypted;
@@ -1607,47 +1602,6 @@ namespace FourierIT_API.Services
             return Math.Max(0, score);
         }
 
-        private async Task<Dictionary<int, int>> GetMaxDocumentAgesAsync(List<int> documentTypeIds)
-        {
-            if (documentTypeIds.Count == 0)
-                return new Dictionary<int, int>();
-
-            var rules = await _context.ComplianceRules
-                .AsNoTracking()
-                .Where(r => r.AppliesTo == "DocumentType"
-                    && r.IsActive
-                    && r.ExpiryPeriodDays.HasValue
-                    && (!r.RequiredDocumentTypeId.HasValue || documentTypeIds.Contains(r.RequiredDocumentTypeId.Value)))
-                .OrderByDescending(r => r.ComplianceRuleId)
-                .ToListAsync();
-
-            var defaultRule = rules.FirstOrDefault(r => !r.RequiredDocumentTypeId.HasValue);
-            var maxDocumentAges = new Dictionary<int, int>();
-
-            foreach (var documentTypeId in documentTypeIds)
-            {
-                var typeSpecificRule = rules.FirstOrDefault(r => r.RequiredDocumentTypeId == documentTypeId);
-                var expiryPeriodDays = typeSpecificRule?.ExpiryPeriodDays ?? defaultRule?.ExpiryPeriodDays;
-                maxDocumentAges[documentTypeId] = expiryPeriodDays is int days ? days / 30 : 60;
-            }
-
-            return maxDocumentAges;
-        }
-
-        private async Task<int> GetWarningThresholdDaysAsync()
-        {
-            var rule = await _context.ComplianceRules
-                .AsNoTracking()
-                .Where(r => r.AppliesTo == "DocumentType"
-                    && r.IsActive
-                    && !r.RequiredDocumentTypeId.HasValue
-                    && r.WarningThresholdDays.HasValue)
-                .OrderByDescending(r => r.ComplianceRuleId)
-                .FirstOrDefaultAsync();
-
-            return rule?.WarningThresholdDays ?? 30;
-        }
-
         private string DetermineRemediationAction(List<string> issues)
         {
             if (issues.Any(i => i.Contains("Expired")))
@@ -1959,7 +1913,27 @@ namespace FourierIT_API.Services
                 }
             }
 
-            var expiringSoonCount = status.DocumentChecks.Count(dc => dc.IsExpiryValid && dc.DaysUntilExpiry.HasValue && dc.DaysUntilExpiry.Value <= 30);
+            var expiringSoonCount = status.DocumentChecks.Count(dc =>
+                dc.IsExpiryValid
+                && dc.DaysUntilExpiry.HasValue
+                && dc.DocumentId.HasValue
+                && _context.Documents
+                    .AsNoTracking()
+                    .Where(d => d.DocumentId == dc.DocumentId.Value)
+                    .Select(d => d.DocumentType)
+                    .FirstOrDefault() != null
+                && _documentValidityCalculator.IsExpiringSoon(
+                    _context.Documents
+                        .AsNoTracking()
+                        .Where(d => d.DocumentId == dc.DocumentId.Value)
+                        .Select(d => d.DocumentType)
+                        .FirstOrDefault(),
+                    _context.Documents
+                        .AsNoTracking()
+                        .Where(d => d.DocumentId == dc.DocumentId.Value)
+                        .Select(d => d.ExpiryDate)
+                        .FirstOrDefault(),
+                    DateTimeOffset.UtcNow));
             if (expiringSoonCount > 0)
             {
                 if (!existingAlerts.Any(a => a.AlertType == "ExpiringSoon"))
