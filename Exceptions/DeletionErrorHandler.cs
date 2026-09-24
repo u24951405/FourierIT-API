@@ -12,10 +12,9 @@ namespace FourierIT_API.Exceptions
         public static ErrorResponseDto HandleDeletionError(Exception ex, string entityType, string entityId)
         {
             // Check for SQL Server foreign key constraint violation
-            if (ex is DbUpdateException dbEx &&
-                dbEx.InnerException?.Message.Contains("FOREIGN KEY constraint") == true)
+            if (ex is DbUpdateException dbEx && ContainsForeignKeyMessage(dbEx))
             {
-                var dependencies = ExtractForeignKeyDependencies(dbEx.InnerException.Message);
+                var dependencies = ExtractForeignKeyDependencies(GetExceptionMessages(dbEx));
                 return new DeletionConflictResponseDto(entityType, entityId, dependencies);
             }
 
@@ -29,10 +28,35 @@ namespace FourierIT_API.Exceptions
             return new ErrorResponseDto
             {
                 Error = "DELETION_ERROR",
-                Message = $"Failed to delete {entityType}",
-                Details = new List<string> { ex.Message },
+                Message = $"We could not delete this {entityType.ToLowerInvariant()}.",
+                Details = new List<string> { "Please try again. If the problem continues, contact an administrator." },
                 StatusCode = 500
             };
+        }
+
+        private static bool ContainsForeignKeyMessage(Exception exception)
+        {
+            for (var current = exception; current != null; current = current.InnerException)
+            {
+                if (current.Message.Contains("FOREIGN KEY", StringComparison.OrdinalIgnoreCase)
+                    || current.Message.Contains("REFERENCE constraint", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string GetExceptionMessages(Exception exception)
+        {
+            var messages = new List<string>();
+            for (var current = exception; current != null; current = current.InnerException)
+            {
+                messages.Add(current.Message);
+            }
+
+            return string.Join("\n", messages);
         }
 
         /// <summary>

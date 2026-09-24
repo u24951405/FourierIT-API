@@ -12,7 +12,6 @@ namespace FourierIT_API.Models
         public string Description { get; set; } = string.Empty;
 
         [Required]
-        [Obsolete("Document validity is configured on DocumentType")]
         public int ValidityMonths { get; set; } = 0;
 
         public ICollection<DocumentFicaRule> DocumentFicaRules { get; set; } = new List<DocumentFicaRule>();

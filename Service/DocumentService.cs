@@ -104,6 +104,9 @@ namespace FourierIT_API.Service
                 rawKey = _config["JWT:SigningKey"];
             }
 
+            if (string.IsNullOrWhiteSpace(rawKey))
+                throw new InvalidOperationException("Document encryption key is not configured.");
+
             // 2. Hash the raw key ensuring exactly 32 bytes (256 bits) for AES
             var keyBytes = Encoding.UTF8.GetBytes(rawKey);
             var hashedBytes = SHA256.HashData(keyBytes);

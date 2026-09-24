@@ -115,7 +115,7 @@ public class DepartmentAdminRestrictionTests
             Array.Empty<IPasswordValidator<User>>(),
             new UpperInvariantLookupNormalizer(),
             new IdentityErrorDescriber(),
-            null,
+            null!,
             NullLogger<UserManager<User>>.Instance);
         userManager.Setup(x => x.GetUserAsync(It.IsAny<ClaimsPrincipal>())).ReturnsAsync(actingUser);
         userManager.Setup(x => x.FindByIdAsync(actingUser.Id)).ReturnsAsync(actingUser);

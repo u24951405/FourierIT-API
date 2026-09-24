@@ -71,7 +71,7 @@ SELECT @backupdir as BackupDir;";
 
             var response = new BackupResponseDto
             {
-                UserId = request.UserId,
+                UserId = request.UserId ?? string.Empty,
                 IsManualBackup = request.IsManualBackup,
                 DateBackedUp = DateTimeOffset.UtcNow
             };
@@ -282,7 +282,7 @@ SELECT @backupdir as BackupDir;";
         // =========================================================================
         public async Task<RestoreResponseDto> RestoreDatabaseAsync(int backupId)
         {
-            string tempFilePath = null;
+            string? tempFilePath = null;
             try
             {
                 _logger.LogInformation("Starting database restore for BackupId={BackupId}", backupId);

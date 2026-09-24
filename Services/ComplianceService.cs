@@ -286,7 +286,7 @@ namespace FourierIT_API.Services
             var status = await _context.ComplianceStatuses
                 .Include(cs => cs.DocumentChecks)
                     .ThenInclude(dc => dc.Document)
-                        .ThenInclude(d => d.DocumentType)
+                        .ThenInclude(d => d!.DocumentType)
                 .Include(cs => cs.ComplianceAlerts)
                 .FirstOrDefaultAsync(cs => cs.UserId == userId);
 
@@ -856,7 +856,7 @@ namespace FourierIT_API.Services
                 .AsNoTracking()
                 .Where(dc => dc.ComplianceStatusId == status.ComplianceStatusId && dc.CheckStatus != "Compliant")
                 .Include(dc => dc.Document)
-                    .ThenInclude(d => d.DocumentType)
+                    .ThenInclude(d => d!.DocumentType)
                 .Select(dc => new DocumentComplianceIssueDto
                 {
                     DocumentId = dc.DocumentId,
@@ -1168,7 +1168,7 @@ namespace FourierIT_API.Services
                 .Select(s => new UserComplianceSummaryDto
                 {
                     UserId = s.UserId,
-                    UserName = s.User.UserName,
+                    UserName = s.User!.UserName ?? s.UserId,
                     Status = s.OverallStatus,
                     RiskLevel = s.RiskLevel,
                     CompliancePercentage = s.CompliancePercentage,
@@ -1248,14 +1248,14 @@ namespace FourierIT_API.Services
 
         // ===== REPORTING =====
 
-        public async Task<byte[]> GenerateComplianceReportAsync(DateTime startDate, DateTime endDate, int? departmentId = null)
+        public Task<byte[]> GenerateComplianceReportAsync(DateTime startDate, DateTime endDate, int? departmentId = null)
         {
             // This would generate a PDF report - simplified for now
             // In production, use iText, PdfSharp, or similar library
             throw new NotImplementedException("PDF generation would use iText or similar library");
         }
 
-        public async Task<byte[]> GenerateAuditReportAsync(int complianceStatusId)
+        public Task<byte[]> GenerateAuditReportAsync(int complianceStatusId)
         {
             throw new NotImplementedException("PDF generation would use iText or similar library");
         }
@@ -1510,14 +1510,14 @@ namespace FourierIT_API.Services
 
         // ===== CONFIGURATION =====
 
-        public async Task<bool> ConfigureComplianceRulesAsync(string complianceCategory, Dictionary<string, object> rules)
+        public Task<bool> ConfigureComplianceRulesAsync(string complianceCategory, Dictionary<string, object> rules)
         {
             // This would store compliance rules in database or cache
             // Implementation depends on specific requirements
             throw new NotImplementedException("Rule configuration storage not yet implemented");
         }
 
-        public async Task<Dictionary<string, object>> GetComplianceRulesAsync(string complianceCategory)
+        public Task<Dictionary<string, object>> GetComplianceRulesAsync(string complianceCategory)
         {
             throw new NotImplementedException("Rule retrieval not yet implemented");
         }

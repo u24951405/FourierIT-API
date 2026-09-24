@@ -19,10 +19,8 @@ namespace FourierIT_API.Models
 
         public bool IsMandatory { get; set; } = true;
 
-        [Obsolete("Document validity is configured on DocumentType")]
         public int? ExpiryPeriodDays { get; set; }
 
-        [Obsolete("Document validity is configured on DocumentType")]
         public int? WarningThresholdDays { get; set; }
 
         [StringLength(500)]

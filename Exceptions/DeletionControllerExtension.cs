@@ -24,7 +24,7 @@ namespace FourierIT_API.Exceptions
                 await deletionOperation();
                 return controller.Ok(new { message = $"{entityType} deleted successfully" });
             }
-            catch (DbUpdateException dbEx) when (dbEx.InnerException?.Message.Contains("FOREIGN KEY constraint") == true)
+            catch (DbUpdateException dbEx) when (ContainsForeignKeyMessage(dbEx))
             {
                 var errorResponse = DeletionErrorHandler.HandleDeletionError(dbEx, entityType, entityId);
                 return controller.Conflict(errorResponse);
@@ -55,7 +55,7 @@ namespace FourierIT_API.Exceptions
                 var result = await deletionOperation();
                 return controller.Ok(new { message = $"{entityType} deleted successfully", data = result });
             }
-            catch (DbUpdateException dbEx) when (dbEx.InnerException?.Message.Contains("FOREIGN KEY constraint") == true)
+            catch (DbUpdateException dbEx) when (ContainsForeignKeyMessage(dbEx))
             {
                 var errorResponse = DeletionErrorHandler.HandleDeletionError(dbEx, entityType, entityId);
                 return controller.Conflict(errorResponse);
@@ -70,6 +70,20 @@ namespace FourierIT_API.Exceptions
                 var errorResponse = DeletionErrorHandler.HandleDeletionError(ex, entityType, entityId);
                 return controller.StatusCode(500, errorResponse);
             }
+        }
+
+        private static bool ContainsForeignKeyMessage(Exception exception)
+        {
+            for (var current = exception; current != null; current = current.InnerException)
+            {
+                if (current.Message.Contains("FOREIGN KEY", StringComparison.OrdinalIgnoreCase)
+                    || current.Message.Contains("REFERENCE constraint", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }

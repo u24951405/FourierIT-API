@@ -241,7 +241,7 @@ namespace FourierIT_API.Controllers
                 .Include(r => r.Institution)
                 .Include(r => r.TargetDepartment)
                 .Include(r => r.TargetUser)
-                    .ThenInclude(u => u.Profile)
+                    .ThenInclude(u => u!.Profile)
                 .Include(r => r.RequestedDocumentTypes)
                     .ThenInclude(rdt => rdt.DocumentType)
                 .Where(r => r.InstitutionId == institutionId && (r.Status == "Pending" || r.Status == "Department_Pending"))
@@ -263,7 +263,7 @@ namespace FourierIT_API.Controllers
                 r.RequestType,
                 Recipient = r.RequestType == "Department"
                     ? new { Type = "Department", Name = r.TargetDepartment?.DepartmentName ?? "-" }
-                    : new { Type = "Individual", Name = r.TargetUser != null ? (string.IsNullOrWhiteSpace(r.TargetUser.Profile.FirstName) && string.IsNullOrWhiteSpace(r.TargetUser.Profile.LastName) ? (r.TargetUser.UserName ?? r.TargetUser.Id) : (r.TargetUser.Profile.FirstName + " " + r.TargetUser.Profile.LastName).Trim()) : (r.TargetUserId ?? "-") },
+                    : new { Type = "Individual", Name = r.TargetUser != null ? (string.IsNullOrWhiteSpace(r.TargetUser.Profile!.FirstName) && string.IsNullOrWhiteSpace(r.TargetUser.Profile.LastName) ? (r.TargetUser.UserName ?? r.TargetUser.Id) : (r.TargetUser.Profile.FirstName + " " + r.TargetUser.Profile.LastName).Trim()) : (r.TargetUserId ?? "-") },
                 r.Status,
                 r.PurposeNote,
                 r.RequestDate,
@@ -289,7 +289,7 @@ namespace FourierIT_API.Controllers
             var request = await _context.InstitutionEnquiryRequests
                 .AsNoTracking()
                 .Include(r => r.TargetDepartment)
-                .Include(r => r.TargetUser).ThenInclude(u => u.Profile)
+                .Include(r => r.TargetUser).ThenInclude(u => u!.Profile)
                 .Include(r => r.RequestedDocumentTypes).ThenInclude(rdt => rdt.DocumentType)
                 .FirstOrDefaultAsync(r => r.EnquiryRequestId == requestId && r.InstitutionId == sessionToken.InstitutionId);
             if (request == null) return NotFound(new { error = "Request not found." });
@@ -303,7 +303,7 @@ namespace FourierIT_API.Controllers
                 request.TargetUserId,
                 RecipientName = request.RequestType == "Department"
                     ? request.TargetDepartment?.DepartmentName
-                    : request.TargetUser?.Profile == null ? request.TargetUserId : $"{request.TargetUser.Profile.FirstName} {request.TargetUser.Profile.LastName}".Trim(),
+                    : request.TargetUser?.Profile == null ? request.TargetUserId : $"{request.TargetUser.Profile!.FirstName} {request.TargetUser.Profile.LastName}".Trim(),
                 request.Status,
                 request.PurposeNote,
                 request.SubmissionDeadline,
@@ -439,7 +439,7 @@ namespace FourierIT_API.Controllers
                 .AsNoTracking()
                 .Include(r => r.TargetDepartment)
                 .Include(r => r.TargetUser)
-                    .ThenInclude(u => u.Profile)
+                    .ThenInclude(u => u!.Profile)
                 .Include(r => r.RequestedDocumentTypes)
                     .ThenInclude(rdt => rdt.DocumentType)
                 .FirstOrDefaultAsync(r => r.EnquiryRequestId == requestId && r.InstitutionId == sessionToken.InstitutionId);
@@ -456,7 +456,7 @@ namespace FourierIT_API.Controllers
                 request.Status,
                 Recipient = request.RequestType == "Department"
                     ? new { Type = "Department", Name = request.TargetDepartment?.DepartmentName ?? "-" }
-                    : new { Type = "Individual", Name = request.TargetUser != null ? (string.IsNullOrWhiteSpace(request.TargetUser.Profile.FirstName) && string.IsNullOrWhiteSpace(request.TargetUser.Profile.LastName) ? (request.TargetUser.UserName ?? request.TargetUser.Id) : (request.TargetUser.Profile.FirstName + " " + request.TargetUser.Profile.LastName).Trim()) : (request.TargetUserId ?? "-") },
+                    : new { Type = "Individual", Name = request.TargetUser != null ? (string.IsNullOrWhiteSpace(request.TargetUser.Profile!.FirstName) && string.IsNullOrWhiteSpace(request.TargetUser.Profile.LastName) ? (request.TargetUser.UserName ?? request.TargetUser.Id) : (request.TargetUser.Profile.FirstName + " " + request.TargetUser.Profile.LastName).Trim()) : (request.TargetUserId ?? "-") },
                 checklist.IsComplete,
                 checklist.MissingCount,
                 checklist.RequestedDocumentStatuses
@@ -800,7 +800,7 @@ namespace FourierIT_API.Controllers
                 .AsNoTracking()
                 .Include(r => r.Institution)
                 .Include(r => r.TargetUser)
-                    .ThenInclude(u => u.Profile)
+                    .ThenInclude(u => u!.Profile)
                 .Include(r => r.TargetDepartment)
                 .Include(r => r.RequestedDocumentTypes)
                     .ThenInclude(rdt => rdt.DocumentType)
@@ -1329,7 +1329,7 @@ namespace FourierIT_API.Controllers
                         .ThenInclude(r => r.TargetDepartment)
                     .Include(daa => daa.InstitutionEnquiryRequest)
                         .ThenInclude(r => r.TargetUser)
-                            .ThenInclude(u => u.Profile)
+                            .ThenInclude(u => u!.Profile)
                     .Where(daa => daa.InstitutionEnquiryRequest.InstitutionId == sessionToken.InstitutionId
                         && daa.InstitutionEnquiryRequest.Status == "Approved"
                         && !daa.IsRevoked
@@ -1341,7 +1341,7 @@ namespace FourierIT_API.Controllers
                         RecipientName = daa.InstitutionEnquiryRequest.RequestType == "Department"
                             ? (daa.InstitutionEnquiryRequest.TargetDepartment != null ? daa.InstitutionEnquiryRequest.TargetDepartment.DepartmentName : "-")
                             : (daa.InstitutionEnquiryRequest.TargetUser != null
-                                ? ((!string.IsNullOrWhiteSpace(daa.InstitutionEnquiryRequest.TargetUser.Profile.FirstName) || !string.IsNullOrWhiteSpace(daa.InstitutionEnquiryRequest.TargetUser.Profile.LastName))
+                                ? ((!string.IsNullOrWhiteSpace(daa.InstitutionEnquiryRequest.TargetUser.Profile!.FirstName) || !string.IsNullOrWhiteSpace(daa.InstitutionEnquiryRequest.TargetUser.Profile.LastName))
                                     ? (daa.InstitutionEnquiryRequest.TargetUser.Profile.FirstName + " " + daa.InstitutionEnquiryRequest.TargetUser.Profile.LastName).Trim()
                                     : (daa.InstitutionEnquiryRequest.TargetUser.UserName ?? daa.InstitutionEnquiryRequest.TargetUser.Id))
                                 : (daa.InstitutionEnquiryRequest.TargetUserId ?? "-")),
@@ -1388,7 +1388,7 @@ namespace FourierIT_API.Controllers
                     .ThenInclude(r => r.TargetDepartment)
                 .Include(daa => daa.InstitutionEnquiryRequest)
                     .ThenInclude(r => r.TargetUser)
-                        .ThenInclude(u => u.Profile)
+                            .ThenInclude(u => u!.Profile)
                 .Where(daa => daa.EnquiryRequestId == request.EnquiryRequestId
                     && !daa.IsRevoked
                     && (!daa.ExpiresAt.HasValue || daa.ExpiresAt.Value > DateTime.UtcNow))
@@ -1399,7 +1399,7 @@ namespace FourierIT_API.Controllers
                     RecipientName = daa.InstitutionEnquiryRequest.RequestType == "Department"
                         ? (daa.InstitutionEnquiryRequest.TargetDepartment != null ? daa.InstitutionEnquiryRequest.TargetDepartment.DepartmentName : "-")
                         : (daa.InstitutionEnquiryRequest.TargetUser != null
-                            ? ((!string.IsNullOrWhiteSpace(daa.InstitutionEnquiryRequest.TargetUser.Profile.FirstName) || !string.IsNullOrWhiteSpace(daa.InstitutionEnquiryRequest.TargetUser.Profile.LastName))
+                            ? ((!string.IsNullOrWhiteSpace(daa.InstitutionEnquiryRequest.TargetUser.Profile!.FirstName) || !string.IsNullOrWhiteSpace(daa.InstitutionEnquiryRequest.TargetUser.Profile.LastName))
                                 ? (daa.InstitutionEnquiryRequest.TargetUser.Profile.FirstName + " " + daa.InstitutionEnquiryRequest.TargetUser.Profile.LastName).Trim()
                                 : (daa.InstitutionEnquiryRequest.TargetUser.UserName ?? daa.InstitutionEnquiryRequest.TargetUser.Id))
                             : (daa.InstitutionEnquiryRequest.TargetUserId ?? "-")),
@@ -1435,7 +1435,7 @@ namespace FourierIT_API.Controllers
                 .AsNoTracking()
                 .Include(r => r.TargetDepartment)
                 .Include(r => r.TargetUser)
-                    .ThenInclude(u => u.Profile)
+                    .ThenInclude(u => u!.Profile)
                 .Where(r => r.InstitutionId == sessionToken.InstitutionId
                     && (r.Status == "Approved" || r.Status == "Denied")
                     && r.RespondedAt != null)
@@ -1449,7 +1449,7 @@ namespace FourierIT_API.Controllers
                     RecipientName = r.RequestType == "Department"
                         ? (r.TargetDepartment != null ? r.TargetDepartment.DepartmentName : "-")
                         : (r.TargetUser != null
-                            ? ((!string.IsNullOrWhiteSpace(r.TargetUser.Profile.FirstName) || !string.IsNullOrWhiteSpace(r.TargetUser.Profile.LastName))
+                            ? ((!string.IsNullOrWhiteSpace(r.TargetUser.Profile!.FirstName) || !string.IsNullOrWhiteSpace(r.TargetUser.Profile.LastName))
                                 ? (r.TargetUser.Profile.FirstName + " " + r.TargetUser.Profile.LastName).Trim()
                                 : (r.TargetUser.UserName ?? r.TargetUserId ?? "-"))
                             : (r.TargetUserId ?? "-")),

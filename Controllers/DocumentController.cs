@@ -247,9 +247,9 @@ namespace FourierIT_API.Controllers
                 .GroupBy(irdt => irdt.DocumentTypeId)
                 .Select(g => (
                     DocumentTypeId: g.Key,
-                    DocumentTypeName: g.First().DocumentType.TypeName,
+                    DocumentTypeName: g.First().DocumentType!.TypeName,
                     IsMandatory: g.Any(irdt => irdt.isMandatory),
-                    DocumentTypeDescription: g.First().DocumentType.Description
+                    DocumentTypeDescription: g.First().DocumentType?.Description
                 ))
                 .ToList();
         }

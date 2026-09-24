@@ -28,13 +28,6 @@ public class DocumentAccessRequestUploadRequirementTests
     {
         await using var context = CreateContext();
         var institution = new Institution { InstitutionId = 1, InstitutionName = "Test Institution" };
-        var sessionToken = new InstitutionSessionToken
-        {
-            InstitutionId = institution.InstitutionId,
-            TokenString = "session-token-1",
-            IssuedAt = DateTime.UtcNow.AddMinutes(-1),
-            ExpiresAt = DateTime.UtcNow.AddMinutes(30)
-        };
         var actor = CreateUser("actor-user", "Actor", "Person");
         var targetUser = CreateUser("target-user", "Target", "Owner");
         var documentType = new DocumentType { DocumentTypeId = 901, TypeName = "South African ID Book", Description = "ID document" };
@@ -51,7 +44,6 @@ public class DocumentAccessRequestUploadRequirementTests
         context.InstitutionSessionTokens.Add(sessionToken);
         context.Users.AddRange(actor, targetUser);
         context.DocumentTypes.Add(documentType);
-        context.InstitutionSessionTokens.Add(sessionToken);
         await context.SaveChangesAsync();
 
         var controller = CreateController(context, actor);
@@ -92,14 +84,6 @@ public class DocumentAccessRequestUploadRequirementTests
         var documentType = new DocumentType { DocumentTypeId = 902, TypeName = "Utility Bill", Description = "Proof of address" };
         var departmentUser = CreateUser("dept-user", "Dept", "User");
         departmentUser.DepartmentId = department.DepartmentId;
-        var sessionToken = new InstitutionSessionToken
-        {
-            InstitutionId = institution.InstitutionId,
-            Institution = institution,
-            TokenString = "test-session-token-2",
-            IssuedAt = DateTime.UtcNow,
-            ExpiresAt = DateTime.UtcNow.AddHours(1)
-        };
 
         context.Institutions.Add(institution);
         context.InstitutionSessionTokens.Add(sessionToken);
@@ -331,7 +315,7 @@ public class DocumentAccessRequestUploadRequirementTests
             Array.Empty<IPasswordValidator<User>>(),
             new UpperInvariantLookupNormalizer(),
             new IdentityErrorDescriber(),
-            null,
+            null!,
             NullLogger<UserManager<User>>.Instance);
         userManager.Setup(m => m.GetUserAsync(It.IsAny<ClaimsPrincipal>())).ReturnsAsync(actor);
         userManager.Setup(m => m.FindByIdAsync(It.IsAny<string>()))

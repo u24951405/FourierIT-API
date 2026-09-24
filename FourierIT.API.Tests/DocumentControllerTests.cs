@@ -57,7 +57,7 @@ public class DocumentControllerTests
         var userManagerMock = new Mock<UserManager<User>>(MockBehavior.Loose,
             userStore.Object, Options.Create(new IdentityOptions()), new PasswordHasher<User>(),
             Array.Empty<IUserValidator<User>>(), Array.Empty<IPasswordValidator<User>>(),
-            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null, NullLogger<UserManager<User>>.Instance);
+            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null!, NullLogger<UserManager<User>>.Instance);
         userManagerMock.Setup(x => x.GetUserAsync(It.IsAny<System.Security.Claims.ClaimsPrincipal>()))
             .ReturnsAsync(user);
         userManagerMock.Setup(x => x.IsInRoleAsync(user, "Department Admin"))
@@ -127,7 +127,7 @@ public class DocumentControllerTests
         var userManagerMock = new Mock<UserManager<User>>(MockBehavior.Loose,
             userStore.Object, Options.Create(new IdentityOptions()), new PasswordHasher<User>(),
             Array.Empty<IUserValidator<User>>(), Array.Empty<IPasswordValidator<User>>(),
-            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null, NullLogger<UserManager<User>>.Instance);
+            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null!, NullLogger<UserManager<User>>.Instance);
         userManagerMock.Setup(x => x.GetUserAsync(It.IsAny<System.Security.Claims.ClaimsPrincipal>()))
             .ReturnsAsync(user);
 
@@ -195,7 +195,7 @@ public class DocumentControllerTests
         var userManagerMock = new Mock<UserManager<User>>(MockBehavior.Loose,
             userStore.Object, Options.Create(new IdentityOptions()), new PasswordHasher<User>(),
             Array.Empty<IUserValidator<User>>(), Array.Empty<IPasswordValidator<User>>(),
-            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null, NullLogger<UserManager<User>>.Instance);
+            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null!, NullLogger<UserManager<User>>.Instance);
         userManagerMock.Setup(x => x.GetUserAsync(It.IsAny<System.Security.Claims.ClaimsPrincipal>()))
             .ReturnsAsync(user);
 
@@ -264,7 +264,7 @@ public class DocumentControllerTests
         var userManagerMock = new Mock<UserManager<User>>(MockBehavior.Loose,
             userStore.Object, Options.Create(new IdentityOptions()), new PasswordHasher<User>(),
             Array.Empty<IUserValidator<User>>(), Array.Empty<IPasswordValidator<User>>(),
-            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null, NullLogger<UserManager<User>>.Instance);
+            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null!, NullLogger<UserManager<User>>.Instance);
         userManagerMock.Setup(x => x.GetUserAsync(It.IsAny<System.Security.Claims.ClaimsPrincipal>()))
             .ReturnsAsync(user);
         userManagerMock.Setup(x => x.IsInRoleAsync(user, "Department Admin"))
@@ -335,7 +335,7 @@ public class DocumentControllerTests
         var userManagerMock = new Mock<UserManager<User>>(MockBehavior.Loose,
             userStore.Object, Options.Create(new IdentityOptions()), new PasswordHasher<User>(),
             Array.Empty<IUserValidator<User>>(), Array.Empty<IPasswordValidator<User>>(),
-            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null, NullLogger<UserManager<User>>.Instance);
+            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null!, NullLogger<UserManager<User>>.Instance);
         userManagerMock.Setup(x => x.GetUserAsync(It.IsAny<System.Security.Claims.ClaimsPrincipal>()))
             .ReturnsAsync(user);
         userManagerMock.Setup(x => x.IsInRoleAsync(user, "Department Admin"))

@@ -212,7 +212,7 @@ public class AuditLogInstitutionAttributionTests : IDisposable
             Array.Empty<IPasswordValidator<User>>(),
             new UpperInvariantLookupNormalizer(),
             new IdentityErrorDescriber(),
-            null,
+            null!,
             NullLogger<UserManager<User>>.Instance);
         var documentService = new Mock<IDocumentService>();
         var departmentValidation = new DepartmentRequestValidationService();

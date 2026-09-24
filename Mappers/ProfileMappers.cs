@@ -9,7 +9,8 @@ namespace FourierIT_API.Mappers
         public static ProfileDto ToProfileDto(this Profile profileModel)
         {
             // Pick the first role assigned to the user (if any)
-            var roleNames = profileModel?.User?.UserRoles?
+            var user = profileModel.User;
+            var roleNames = user?.UserRoles?
                 .Where(ur => ur?.Role?.Name != null)
                 .Select(ur => ur!.Role!.Name!)
                 .Where(n => !string.IsNullOrWhiteSpace(n))
@@ -18,14 +19,14 @@ namespace FourierIT_API.Mappers
             return new ProfileDto
             {
                 ProfileId = profileModel.ProfileId,
-                JobTitle = profileModel.JobTitle,
-                FirstName = profileModel.FirstName,
-                LastName = profileModel.LastName,
+                JobTitle = profileModel.JobTitle ?? string.Empty,
+                FirstName = profileModel.FirstName ?? string.Empty,
+                LastName = profileModel.LastName ?? string.Empty,
                 // Try to populate username from the loaded navigation; controller will override if necessary
                 UserName = profileModel.User?.UserName ?? string.Empty,
                 DateOfBirth = profileModel.DateOfBirth,
-                PhoneNumber = profileModel.PhoneNumber,
-                Email = profileModel.User.Email,
+                PhoneNumber = profileModel.PhoneNumber ?? string.Empty,
+                Email = profileModel.User?.Email ?? string.Empty,
                 Role = roleNames,
 
             };

@@ -62,7 +62,12 @@ namespace FourierIT_API.Controllers
             return Ok(await _context.Permissions
                 .AsNoTracking()
                 .OrderBy(permission => permission.PermissionKey)
-                .Select(permission => permission.PermissionKey)
+                .Select(permission => new RolePermissionDto
+                {
+                    PermissionId = permission.PermissionId,
+                    PermissionKey = permission.PermissionKey,
+                    IsAssigned = false
+                })
                 .ToListAsync());
         }
 

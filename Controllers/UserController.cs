@@ -403,6 +403,18 @@ namespace FourierIT_API.Controllers
 
                 if (!isSuperAdminRequest)
                 {
+                    var privilegedRoles = requestedRoles
+                        .Where(role => !string.Equals(role, "Document Owner", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    if (privilegedRoles.Count > 0)
+                    {
+                        return StatusCode(StatusCodes.Status403Forbidden, new
+                        {
+                            error = "Only a Super Admin can register Department Admin, Compliance Officer, or Stakeholder accounts."
+                        });
+                    }
+
                     // Normal user registration: always Document Owner, ignore any requested roles
                     requestedRoles = new List<string> { "Document Owner" };
                 }
@@ -524,9 +536,12 @@ namespace FourierIT_API.Controllers
                 }
                 catch
                 {
-                    _context.PendingRegistrations.Remove(pending);
-                    await _context.SaveChangesAsync();
-                    throw;
+                    // Keep the pending registration so a corrected SMTP configuration can
+                    // retry the same email without creating a partially registered user.
+                    return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+                    {
+                        error = "We could not send the verification email. Please check the API email settings and try registering again."
+                    });
                 }
 
                 await TryCreateAuditLogAsync(new AuditLog
@@ -787,6 +802,20 @@ namespace FourierIT_API.Controllers
             if (!isSelfEdit && !User.IsInRole("Admin") && !User.HasClaim("superadmin", "true"))
                 return Forbid();
 
+            if (IsSuperAdminUser(user) && currentUser?.Id != user.Id)
+            {
+                return BadRequest(new { error = "The Super Admin account cannot be edited from User Management." });
+            }
+
+            var requestedEmail = dto.EmailAddress.Trim();
+            if (!string.Equals(user.Email, requestedEmail, StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new
+                {
+                    error = "Email address changes require a separate verification process and cannot be made here."
+                });
+            }
+
             var roleName = dto.Role.Trim();
             if (!isSelfEdit && !await _roleManager.RoleExistsAsync(roleName))
             {
@@ -794,22 +823,36 @@ namespace FourierIT_API.Controllers
                 return BadRequest(new { error = "Invalid role", allowedRoles });
             }
 
-            profile.FirstName = dto.FirstName.Trim();
-            profile.LastName = dto.LastName.Trim();
-            profile.DateOfBirth = dto.DateOfBirth;
-            profile.PhoneNumber = dto.PhoneNumber.Trim();
-            profile.JobTitle = dto.JobTitle.Trim();
+            if (isSelfEdit)
+            {
+                profile.FirstName = dto.FirstName.Trim();
+                profile.LastName = dto.LastName.Trim();
+                profile.DateOfBirth = dto.DateOfBirth;
+                profile.PhoneNumber = dto.PhoneNumber.Trim();
+                profile.JobTitle = dto.JobTitle.Trim();
+            }
 
-            user.Email = dto.EmailAddress.Trim();
-            user.NormalizedEmail = dto.EmailAddress.Trim().ToUpperInvariant();
-            user.AccountStatus = string.IsNullOrWhiteSpace(dto.AccountStatus) ? "Active" : dto.AccountStatus.Trim();
+            var previousRoles = await _userManager.GetRolesAsync(user);
+            if (user.DepartmentId.HasValue
+                && previousRoles.Any(role => string.Equals(role, "Department Admin", StringComparison.OrdinalIgnoreCase))
+                && !string.Equals(roleName, "Department Admin", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new
+                {
+                    error = "Unassign the Department Admin from its department before changing this role."
+                });
+            }
+
+            var previousRoleText = string.Join(", ", previousRoles);
+            var previousStatus = user.AccountStatus;
+            var updatedStatus = string.IsNullOrWhiteSpace(dto.AccountStatus) ? "Active" : dto.AccountStatus.Trim();
+            user.AccountStatus = updatedStatus;
             var userUpdateResult = await _userManager.UpdateAsync(user);
             if (!userUpdateResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, userUpdateResult.Errors);
 
             if (!isSelfEdit)
             {
-                var existingRoles = await _userManager.GetRolesAsync(user);
-                var removeRolesResult = await _userManager.RemoveFromRolesAsync(user, existingRoles);
+                var removeRolesResult = await _userManager.RemoveFromRolesAsync(user, previousRoles);
                 if (!removeRolesResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, removeRolesResult.Errors);
 
                 var addRoleResult = await _userManager.AddToRoleAsync(user, roleName);
@@ -817,6 +860,27 @@ namespace FourierIT_API.Controllers
             }
 
             await _context.SaveChangesAsync();
+
+            var changedValues = new List<string>();
+            var updatedRoleText = isSelfEdit ? previousRoleText : roleName;
+            if (!string.Equals(previousRoleText, updatedRoleText, StringComparison.OrdinalIgnoreCase))
+                changedValues.Add($"role: '{previousRoleText}' -> '{updatedRoleText}'");
+            if (!string.Equals(previousStatus, updatedStatus, StringComparison.OrdinalIgnoreCase))
+                changedValues.Add($"account status: '{previousStatus}' -> '{updatedStatus}'");
+
+            if (changedValues.Count > 0 && currentUser != null)
+            {
+                await TryCreateAuditLogAsync(new AuditLog
+                {
+                    UserId = currentUser.Id,
+                    ActionCode = "USER_MANAGEMENT_UPDATED",
+                    TimeStamp = DateTimeOffset.UtcNow,
+                    Description = $"Updated user '{user.UserName ?? user.Id}': {string.Join("; ", changedValues)}",
+                    TableAffected = "Users",
+                    RecordID = int.TryParse(user.Id, out var parsedId) ? parsedId : (int?)null
+                });
+            }
+
             return Ok(new { message = "User and profile updated." });
         }
 
@@ -845,6 +909,7 @@ namespace FourierIT_API.Controllers
                 user.Id,
                 async () =>
                 {
+                    await EnsureUserCanBeDeletedAsync(user);
                     await DeleteUserRelatedRecordsAsync(user);
 
                     var deleteUserResult = await _userManager.DeleteAsync(user);
@@ -886,6 +951,7 @@ namespace FourierIT_API.Controllers
                 userId,
                 async () =>
                 {
+                    await EnsureUserCanBeDeletedAsync(user);
                     await DeleteUserRelatedRecordsAsync(user);
 
                     var deleteUserResult = await _userManager.DeleteAsync(user);
@@ -905,6 +971,20 @@ namespace FourierIT_API.Controllers
             );
         }
 
+        private async Task EnsureUserCanBeDeletedAsync(User user)
+        {
+            var conflicts = new List<string>();
+
+            if (user.DepartmentId.HasValue)
+                conflicts.Add("Department assignment");
+
+            if (await _context.Documents.AsNoTracking().AnyAsync(document => document.UserId == user.Id))
+                conflicts.Add("Uploaded documents");
+
+            if (conflicts.Count > 0)
+                throw new DeletionConflictException("User", user.Id, conflicts);
+        }
+
         [Authorize(Policy = "Users.Manage")]
         [HttpGet("all")]
         public async Task<IActionResult> GetAllUsers()
@@ -921,6 +1001,20 @@ namespace FourierIT_API.Controllers
                 var profile = await _context.Profiles
                     .AsNoTracking()
                     .FirstOrDefaultAsync(p => p.UserId == user.Id);
+                var entityTypeName = user.EntityTypeId.HasValue
+                    ? await _context.EntityTypes
+                        .AsNoTracking()
+                        .Where(entityType => entityType.EntityTypeId == user.EntityTypeId.Value)
+                        .Select(entityType => entityType.Name)
+                        .FirstOrDefaultAsync()
+                    : null;
+                var departmentName = user.DepartmentId.HasValue
+                    ? await _context.Departments
+                        .AsNoTracking()
+                        .Where(department => department.DepartmentId == user.DepartmentId.Value)
+                        .Select(department => department.DepartmentName)
+                        .FirstOrDefaultAsync()
+                    : null;
 
                 userDtos.Add(new
                 {
@@ -931,6 +1025,10 @@ namespace FourierIT_API.Controllers
                     user.PhoneNumber,
                     user.AccountStatus,
                     user.DepartmentId,
+                    DepartmentName = departmentName,
+                    user.EntityTypeId,
+                    EntityTypeName = entityTypeName,
+                    user.EntityIdentificationNumber,
                     Roles = roles,
                     Profile = new
                     {
@@ -948,6 +1046,14 @@ namespace FourierIT_API.Controllers
         private async Task DeleteUserRelatedRecordsAsync(User user)
         {
             // Delete related document access, compliance, and audit records for the user.
+            var userRoles = await _userManager.GetRolesAsync(user);
+            if (userRoles.Count > 0)
+            {
+                var removeRolesResult = await _userManager.RemoveFromRolesAsync(user, userRoles);
+                if (!removeRolesResult.Succeeded)
+                    throw new Exception(string.Join(", ", removeRolesResult.Errors.Select(error => error.Description)));
+            }
+
             var documents = await _context.Documents
                 .Include(d => d.DocumentBlob)
                 .Include(d => d.CertificationDetails)
@@ -1077,7 +1183,19 @@ namespace FourierIT_API.Controllers
             foreach (var user in allUsers)
             {
                 var roles = await _userManager.GetRolesAsync(user);
-                if (roles.Contains("Department Admin"))
+                var hasDepartmentAdminHistory = await _context.AuditLogs
+                    .AsNoTracking()
+                    .AnyAsync(log => (log.UserId == user.Id
+                            || (!string.IsNullOrWhiteSpace(user.Email)
+                                && log.Description != null
+                                && log.Description.Contains(user.Email)))
+                        && (log.ActionCode == "DEPARTMENT_ADMIN_ASSIGNED"
+                            || log.ActionCode == "DEPARTMENT_ADMIN_UNASSIGNED"));
+
+                // Include legacy admins whose role was removed by the previous
+                // unassignment behavior so they can be recovered and reassigned.
+                if (!IsSuperAdminUser(user)
+                    && (roles.Contains("Department Admin") || (user.DepartmentId == null && hasDepartmentAdminHistory)))
                 {
                     // Get department name if assigned
                     string? departmentName = null;
@@ -1180,6 +1298,9 @@ namespace FourierIT_API.Controllers
             if (targetUser == null)
                 return NotFound(new { error = "User not found." });
 
+            if (IsSuperAdminUser(targetUser))
+                return BadRequest(new { error = "The Super Admin account cannot be assigned to a department." });
+
             if (!targetUser.EmailConfirmed && !targetUser.EmailVerified)
                 return BadRequest(new { error = "The user must complete email verification before department assignment." });
 
@@ -1192,7 +1313,9 @@ namespace FourierIT_API.Controllers
             if (departmentChanged)
             {
                 targetUser.DepartmentId = departmentId;
-                await _userManager.UpdateAsync(targetUser);
+                var targetUpdateResult = await _userManager.UpdateAsync(targetUser);
+                if (!targetUpdateResult.Succeeded)
+                    return StatusCode(StatusCodes.Status500InternalServerError, targetUpdateResult.Errors);
 
                 var complianceStatus = await _context.ComplianceStatuses
                     .FirstOrDefaultAsync(cs => cs.UserId == targetUser.Id);
@@ -1210,18 +1333,19 @@ namespace FourierIT_API.Controllers
 
             foreach (var departmentAdminUser in departmentAdminUsers)
             {
-                var isCurrentAdmin = await _userManager.IsInRoleAsync(departmentAdminUser, "Department Admin");
-                if (isCurrentAdmin)
-                {
-                    await _userManager.RemoveFromRoleAsync(departmentAdminUser, "Department Admin");
-                }
+                departmentAdminUser.DepartmentId = null;
+                var formerAdminUpdateResult = await _userManager.UpdateAsync(departmentAdminUser);
+                if (!formerAdminUpdateResult.Succeeded)
+                    return StatusCode(StatusCodes.Status500InternalServerError, formerAdminUpdateResult.Errors);
             }
 
             // Remove any existing Department Admin role
             var existingRoles = await _userManager.GetRolesAsync(targetUser);
             if (existingRoles.Any())
             {
-                await _userManager.RemoveFromRolesAsync(targetUser, existingRoles);
+                var removeRolesResult = await _userManager.RemoveFromRolesAsync(targetUser, existingRoles);
+                if (!removeRolesResult.Succeeded)
+                    return StatusCode(StatusCodes.Status500InternalServerError, removeRolesResult.Errors);
             }
 
             // Assign Department Admin role
@@ -1283,9 +1407,22 @@ namespace FourierIT_API.Controllers
             if (admin == null)
                 return NotFound(new { error = "No Department Admin assigned to this department." });
 
-            var removeResult = await _userManager.RemoveFromRoleAsync(admin, "Department Admin");
-            if (!removeResult.Succeeded)
-                return StatusCode(StatusCodes.Status500InternalServerError, removeResult.Errors);
+            // Keep the Department Admin role so this verified account remains
+            // available for reassignment. Only clear its department placement.
+            admin.DepartmentId = null;
+            var updateResult = await _userManager.UpdateAsync(admin);
+            if (!updateResult.Succeeded)
+                return StatusCode(StatusCodes.Status500InternalServerError, updateResult.Errors);
+
+            await _auditLogService.CreateAuditLogAsync(new AuditLog
+            {
+                UserId = currentUser.Id,
+                ActionCode = "DEPARTMENT_ADMIN_UNASSIGNED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = $"Removed Department Admin '{admin.UserName}' ({admin.Email}) from department '{department.DepartmentName}' (DepartmentId={departmentId}). The user account was retained.",
+                TableAffected = "Departments",
+                RecordID = departmentId
+            });
 
             return Ok(new { message = "Department Admin removed successfully." });
         }

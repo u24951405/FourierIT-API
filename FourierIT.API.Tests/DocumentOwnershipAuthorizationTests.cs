@@ -154,7 +154,7 @@ public class DocumentOwnershipAuthorizationTests
             Array.Empty<IPasswordValidator<User>>(),
             new UpperInvariantLookupNormalizer(),
             new IdentityErrorDescriber(),
-            null,
+            null!,
             NullLogger<UserManager<User>>.Instance);
         userManager.Setup(x => x.GetUserAsync(It.IsAny<System.Security.Claims.ClaimsPrincipal>())).ReturnsAsync(currentUser);
 

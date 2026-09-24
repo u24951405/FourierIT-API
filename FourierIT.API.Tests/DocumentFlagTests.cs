@@ -234,7 +234,7 @@ public class DocumentFlagTests
         var userManager = new Mock<UserManager<User>>(MockBehavior.Loose,
             userStore.Object, Options.Create(new IdentityOptions()), new PasswordHasher<User>(),
             Array.Empty<IUserValidator<User>>(), Array.Empty<IPasswordValidator<User>>(),
-            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null, NullLogger<UserManager<User>>.Instance);
+            new UpperInvariantLookupNormalizer(), new IdentityErrorDescriber(), null!, NullLogger<UserManager<User>>.Instance);
         userManager.Setup(x => x.GetUserAsync(It.IsAny<ClaimsPrincipal>())).ReturnsAsync(currentUser);
 
         var documentRepository = new FourierIT_API.Repositories.DocumentRepository(context);

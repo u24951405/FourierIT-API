@@ -62,7 +62,7 @@ public class DepartmentHierarchyControllerTests
             Array.Empty<IPasswordValidator<User>>(),
             new UpperInvariantLookupNormalizer(),
             new IdentityErrorDescriber(),
-            null,
+            null!,
             NullLogger<UserManager<User>>.Instance);
 
         var controller = new DepartmentController(context, userManager.Object);
