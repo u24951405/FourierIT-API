@@ -6,6 +6,29 @@ public sealed record DocumentValidityResult(DateTimeOffset ExpiryDate, bool Miss
 
 public class DocumentValidityCalculator
 {
+    public static bool IsNeverExpires(DocumentType? documentType, DateTimeOffset expiryDate)
+    {
+        return documentType?.NeverExpires == true || expiryDate == DateTimeOffset.MaxValue;
+    }
+
+    public bool IsExpiringSoon(DocumentType? documentType, DateTimeOffset expiryDate, DateTimeOffset? asOf = null)
+    {
+        var now = asOf ?? DateTimeOffset.UtcNow;
+
+        if (IsNeverExpires(documentType, expiryDate))
+            return false;
+
+        if (expiryDate <= now)
+            return false;
+
+        var warningDays = documentType?.WarningDays ?? 30;
+        if (warningDays <= 0)
+            return false;
+
+        var daysRemaining = (int)Math.Floor((expiryDate - now).TotalDays);
+        return daysRemaining <= warningDays;
+    }
+
     public DocumentValidityResult Calculate(
         DocumentType documentType,
         DateTime uploadedDate,

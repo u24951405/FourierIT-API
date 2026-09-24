@@ -29,7 +29,10 @@ namespace FourierIT_API.DTOs.Compliance
         public int? TotalPendingReview { get; set; }
         public int? TotalExpiringSoon { get; set; }
         public int? TotalExpired { get; set; }
-        public int? WarningThresholdDays { get; set; }
+        /// <summary>
+        /// Warning thresholds are now per DocumentType; this is preserved for Angular compatibility.
+        /// </summary>
+        public int? WarningThresholdDays { get; set; } = 30;
 
         // Risk Metrics
         public int CriticalRiskUsers { get; set; }
@@ -104,7 +107,10 @@ namespace FourierIT_API.DTOs.Compliance
         public int CompliancePercentage { get; set; }
         public decimal ComplianceScore { get; set; }
         public int RiskScore { get; set; }
-        public int? WarningThresholdDays { get; set; }
+        /// <summary>
+        /// Warning thresholds are now per DocumentType; this is preserved for Angular compatibility.
+        /// </summary>
+        public int? WarningThresholdDays { get; set; } = 30;
 
         // Flags
         public bool RequiresEnhancedDueDiligence { get; set; }
@@ -135,6 +141,7 @@ namespace FourierIT_API.DTOs.Compliance
 
         public int QualityScore { get; set; }
         public bool IsExpiryValid { get; set; }
+        public bool NeverExpires { get; set; }
         public int? DaysUntilExpiry { get; set; }
         public bool IsCertified { get; set; }
         public bool IsRecent { get; set; }

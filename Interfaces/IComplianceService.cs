@@ -29,9 +29,7 @@ namespace FourierIT_API.Interfaces
         // ===== DOCUMENT CHECKS =====
         Task<DocumentComplianceCheck> PerformDocumentCheckAsync(
             int documentId,
-            int complianceStatusId,
-            int warningThresholdDays,
-            int maxMonthsOld);
+            int complianceStatusId);
         Task<List<DocumentComplianceIssueDto>> GetDocumentIssuesAsync(string userId);
         Task<List<MissingDocumentDto>> IdentifyMissingDocumentsAsync(string userId);
 

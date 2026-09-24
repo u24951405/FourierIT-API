@@ -380,16 +380,20 @@ namespace FourierIT_API.Controllers
             Document document;
             try
             {
-                document = await _documentService.UploadDocumentAsync(user.Id, dto.File.FileName, fileBytes, dto.DocumentTypeId);
+                DateTimeOffset? certificationDate = dto.CertificationDate.HasValue
+                    ? new DateTimeOffset(dto.CertificationDate.Value)
+                    : null;
+
+                document = await _documentService.UploadDocumentAsync(user.Id, dto.File.FileName, fileBytes, dto.DocumentTypeId, certificationDate);
                 document.IsCertified = dto.IsCertified;
 
-                if (dto.IsCertified && !string.IsNullOrEmpty(dto.CommissionerName) && dto.CertificationDate.HasValue)
+                if (dto.IsCertified && !string.IsNullOrEmpty(dto.CommissionerName) && certificationDate.HasValue)
                 {
                     document.CertificationDetails.Add(new CertificationDetails
                     {
                         CertificationID = Guid.NewGuid().ToString(),
                         CommissionerName = dto.CommissionerName,
-                        CertificationDate = dto.CertificationDate.Value,
+                        CertificationDate = certificationDate.Value,
                         DocumentId = document.DocumentId
                     });
                 }
@@ -404,18 +408,6 @@ namespace FourierIT_API.Controllers
             {
                 return BadRequest(new { error = ex.Message });
             }
-
-            var documentTypePolicy = await _context.DocumentTypes.FindAsync(dto.DocumentTypeId);
-            if (documentTypePolicy == null)
-                return BadRequest(new { error = "The specified document type could not be found." });
-
-            var validityResult = _documentValidityCalculator.Calculate(
-                documentTypePolicy,
-                document.UploadedDate,
-                dto.CertificationDate.HasValue ? new DateTimeOffset(dto.CertificationDate.Value) : null);
-            document.ExpiryDate = validityResult.ExpiryDate;
-
-            await _documentRepository.UpdateDocumentAsync(document);
 
             try
             {
@@ -730,6 +722,33 @@ namespace FourierIT_API.Controllers
             doc.IsCertified = dto.IsCertified;
             doc.LastModifiedDate = DateTime.UtcNow;
 
+            if (dto.IsCertified && !string.IsNullOrWhiteSpace(dto.CommissionerName) && dto.CertificationDate.HasValue)
+            {
+                var certificationDate = new DateTimeOffset(dto.CertificationDate.Value);
+                var existingCertification = doc.CertificationDetails.FirstOrDefault();
+                if (existingCertification == null)
+                {
+                    doc.CertificationDetails.Add(new CertificationDetails
+                    {
+                        CertificationID = Guid.NewGuid().ToString(),
+                        CommissionerName = dto.CommissionerName,
+                        CertificationDate = certificationDate,
+                        DocumentId = doc.DocumentId
+                    });
+                }
+                else
+                {
+                    existingCertification.CommissionerName = dto.CommissionerName;
+                    existingCertification.CertificationDate = certificationDate;
+                }
+
+                var documentTypePolicy = await _context.DocumentTypes.FindAsync(dto.DocumentTypeId);
+                if (documentTypePolicy != null)
+                {
+                    doc.ExpiryDate = _documentValidityCalculator.Calculate(documentTypePolicy, doc.UploadedDate, certificationDate).ExpiryDate;
+                }
+            }
+
             var updateValidation = await ValidateDocumentTypeForUserContextAsync(user, dto.DocumentTypeId, dto.EntityTypeId ?? user.EntityTypeId);
             if (!updateValidation.IsValid)
             {
@@ -903,6 +922,7 @@ namespace FourierIT_API.Controllers
             FileSizeBytes = doc.FileSizeBytes,
             UploadedDate = doc.UploadedDate,
             ExpiryDate = doc.ExpiryDate,
+            NeverExpires = doc.DocumentType?.NeverExpires == true || doc.ExpiryDate == DateTimeOffset.MaxValue,
             LastModifiedDate = doc.LastModifiedDate,
             DocumentTypeId = doc.DocumentTypeId,
             DocumentTypeName = doc.DocumentType?.TypeName ?? string.Empty

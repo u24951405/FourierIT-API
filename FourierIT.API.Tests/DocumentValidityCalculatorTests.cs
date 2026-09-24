@@ -105,4 +105,63 @@ public class DocumentValidityCalculatorTests
 
         Assert.Equal(new DateTimeOffset(2026, 2, 28, 0, 0, 0, TimeSpan.Zero), result.ExpiryDate);
     }
+
+    [Fact]
+    public void IsExpiringSoon_ExpiredDocument_IsFalse()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var policy = new DocumentType { WarningDays = 30 };
+
+        Assert.False(_calculator.IsExpiringSoon(policy, now.AddDays(-1), now));
+    }
+
+    [Fact]
+    public void IsExpiringSoon_WithinWarningDays_IsTrue()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var policy = new DocumentType { WarningDays = 30 };
+
+        Assert.True(_calculator.IsExpiringSoon(policy, now.AddDays(15), now));
+    }
+
+    [Fact]
+    public void IsExpiringSoon_OutsideWarningDays_IsFalse()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var policy = new DocumentType { WarningDays = 30 };
+
+        Assert.False(_calculator.IsExpiringSoon(policy, now.AddDays(45), now));
+    }
+
+    [Fact]
+    public void IsExpiringSoon_WarningDaysZero_IsFalse()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var policy = new DocumentType { WarningDays = 0 };
+
+        Assert.False(_calculator.IsExpiringSoon(policy, now.AddDays(5), now));
+    }
+
+    [Fact]
+    public void IsExpiringSoon_NeverExpires_IsFalse()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var policy = new DocumentType { WarningDays = 30, NeverExpires = true };
+
+        Assert.False(_calculator.IsExpiringSoon(policy, now.AddDays(365), now));
+    }
+
+    [Fact]
+    public void FutureExpiry_WithOldUploadedDate_IsStillCurrent()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var document = new Document
+        {
+            UploadedDate = now.AddYears(-5).UtcDateTime,
+            ExpiryDate = now.AddDays(60)
+        };
+
+        Assert.True(document.ExpiryDate > now);
+        Assert.False(_calculator.IsExpiringSoon(new DocumentType { WarningDays = 30 }, document.ExpiryDate, now));
+    }
 }
