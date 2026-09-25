@@ -68,9 +68,14 @@ public class DocumentValidityPolicyService
 
         if (_context.Database.IsRelational())
         {
-            using var transaction = await _context.Database.BeginTransactionAsync();
-            await ApplyValidityChangesAsync(documentType, documents, request, now, actingUserId, oldSettings, summary);
-            await transaction.CommitAsync();
+            var strategy = _context.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
+            {
+                using var transaction = await _context.Database.BeginTransactionAsync();
+                await ApplyValidityChangesAsync(documentType, documents, request, now, actingUserId, oldSettings, summary);
+                await transaction.CommitAsync();
+            });
+
             return summary;
         }
 
