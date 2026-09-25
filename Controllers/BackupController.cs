@@ -31,9 +31,19 @@ namespace FourierIT_API.Controllers
 
             var result = await _backupService.CreateDatabaseBackupAsync(request);
 
-            if (string.IsNullOrWhiteSpace(result.StatusMessage) || result.StatusMessage.Contains("error", StringComparison.OrdinalIgnoreCase))
+            if (!string.IsNullOrWhiteSpace(result.StatusMessage))
             {
-                _logger.LogWarning("Backup creation returned status: {Status}", result.StatusMessage);
+                _logger.LogInformation("Backup creation returned status: {Status}", result.StatusMessage);
+            }
+
+            // If status indicates an error or failure, return 400 so frontend knows the operation failed.
+            if (!string.IsNullOrWhiteSpace(result.StatusMessage) &&
+                (result.StatusMessage.Contains("error", StringComparison.OrdinalIgnoreCase)
+                 || result.StatusMessage.Contains("failed", StringComparison.OrdinalIgnoreCase)
+                 || result.StatusMessage.Contains("not configured", StringComparison.OrdinalIgnoreCase)))
+            {
+                _logger.LogWarning("Backup creation failed: {Status}", result.StatusMessage);
+                return BadRequest(result);
             }
 
             return Ok(result);
