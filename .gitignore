@@ -69,6 +69,10 @@ ScaffoldingReadMe.txt
 # StyleCop
 StyleCopReport.xml
 
+# Diagnostic run output files
+run-output.txt
+run-error.txt
+
 # Files built by Visual Studio
 *_i.c
 *_p.c
