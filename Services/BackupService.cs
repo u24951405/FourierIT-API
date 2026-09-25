@@ -43,6 +43,8 @@ namespace FourierIT_API.Services
                 await conn.OpenAsync();
                 using (var cmd = conn.CreateCommand())
                 {
+                    // Ensure long-running registry read has a generous timeout
+                    cmd.CommandTimeout = 300; // 5 minutes
                     cmd.CommandText = @"DECLARE @backupdir NVARCHAR(4000); 
 IF (OBJECT_ID('tempdb..#t') IS NOT NULL) DROP TABLE #t; 
 EXEC master.dbo.xp_instance_regread N'HKEY_LOCAL_MACHINE', N'Software\\Microsoft\\MSSQLServer\\MSSQLServer', N'BackupDirectory', @backupdir OUTPUT; 
@@ -125,6 +127,8 @@ SELECT @backupdir as BackupDir;";
                 _logger.LogInformation("Starting database backup to local file {FilePath}", tempFilePath);
 
                 string sql = $"BACKUP DATABASE [{dbName}] TO DISK = '{tempFilePath.Replace("'", "''")}' WITH FORMAT, INIT, COMPRESSION, MAXTRANSFERSIZE = 1048576, BUFFERCOUNT = 8;";
+                // Backups can take a long time; ensure the EF Core command timeout is large enough
+                _context.Database.SetCommandTimeout(3600); // 1 hour
                 await _context.Database.ExecuteSqlRawAsync(sql);
 
                 _logger.LogInformation("Database backup finished, uploading to Azure Blob Storage container '{Container}'", containerName);
@@ -136,7 +140,9 @@ SELECT @backupdir as BackupDir;";
 
                 using (var fileStream = File.OpenRead(tempFilePath))
                 {
-                    await blobClient.UploadAsync(fileStream, overwrite: true);
+                    // Use a cancellation token with a long timeout to avoid indefinite hangs during upload
+                    using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
+                    await blobClient.UploadAsync(fileStream, overwrite: true, cancellationToken: cts.Token);
                 }
 
                 string blobUrl = blobClient.Uri.ToString();
@@ -187,6 +193,7 @@ SELECT @backupdir as BackupDir;";
                             _logger.LogInformation("Attempting backup to SQL Server default backup directory: {AltPath}", altFilePath);
 
                             string altSql = $"BACKUP DATABASE [{dbName}] TO DISK = '{altFilePath.Replace("'", "''")}' WITH FORMAT, INIT, COMPRESSION, MAXTRANSFERSIZE = 1048576, BUFFERCOUNT = 8;";
+                            _context.Database.SetCommandTimeout(3600); // 1 hour for fallback as well
                             await _context.Database.ExecuteSqlRawAsync(altSql);
 
                             // try upload from altFilePath
@@ -199,7 +206,8 @@ SELECT @backupdir as BackupDir;";
                             {
                                 using (var fileStream = File.OpenRead(altFilePath))
                                 {
-                                    await blobClient.UploadAsync(fileStream, overwrite: true);
+                                    using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
+                                    await blobClient.UploadAsync(fileStream, overwrite: true, cancellationToken: cts.Token);
                                 }
 
                                 string blobUrl = blobClient.Uri.ToString();
@@ -309,7 +317,11 @@ SELECT @backupdir as BackupDir;";
                 tempFilePath = Path.Combine(tempDir, backup.FileName);
 
                 _logger.LogInformation("Downloading backup blob {FileName} to {TempFilePath}", backup.FileName, tempFilePath);
-                await blobClient.DownloadToAsync(tempFilePath);
+                // Use cancellation token to avoid indefinite hangs when downloading large backups
+                using (var downloadCts = new CancellationTokenSource(TimeSpan.FromMinutes(30)))
+                {
+                    await blobClient.DownloadToAsync(tempFilePath, downloadCts.Token);
+                }
                 _logger.LogInformation("Download complete for backup id {BackupId}", backupId);
 
                 string? currentConnectionString = _context.Database.GetDbConnection().ConnectionString;
@@ -348,6 +360,7 @@ SELECT @backupdir as BackupDir;";
 
                     using (var cmd = conn.CreateCommand())
                     {
+                        cmd.CommandTimeout = 3600; // 1 hour
                         cmd.CommandText = $"ALTER DATABASE [{targetDbName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;";
                         _logger.LogInformation("Executing: {Sql}", cmd.CommandText);
                         await cmd.ExecuteNonQueryAsync();
@@ -357,6 +370,7 @@ SELECT @backupdir as BackupDir;";
                     {
                         using (var cmd = conn.CreateCommand())
                         {
+                            cmd.CommandTimeout = 3600; // 1 hour
                             var escapedPath = tempFilePath.Replace("'", "''");
                             cmd.CommandText = $"RESTORE DATABASE [{targetDbName}] FROM DISK = '{escapedPath}' WITH REPLACE;";
                             _logger.LogInformation("Executing: {Sql}", cmd.CommandText);
@@ -367,6 +381,7 @@ SELECT @backupdir as BackupDir;";
                     {
                         using (var cmd = conn.CreateCommand())
                         {
+                            cmd.CommandTimeout = 3600; // 1 hour
                             cmd.CommandText = $"ALTER DATABASE [{targetDbName}] SET MULTI_USER;";
                             _logger.LogInformation("Executing: {Sql}", cmd.CommandText);
                             await cmd.ExecuteNonQueryAsync();
