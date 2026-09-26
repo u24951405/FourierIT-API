@@ -17,5 +17,13 @@ namespace FourierIT_API.DTOs.User
         public string? ProfileImageUrl { get; set; }
         public int? DepartmentId { get; set; }
         public string? DepartmentName { get; set; }
+
+        public int? EntityTypeId { get; set; }
+
+        // The identification number with all but the last four characters hidden; it can't be changed.
+        public string? MaskedIdentificationNumber { get; set; }
+
+        // True for South African ID holders: their date of birth is read from the ID number and can't be edited.
+        public bool DateOfBirthFromIdNumber { get; set; }
     }
 }

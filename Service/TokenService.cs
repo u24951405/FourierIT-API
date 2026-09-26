@@ -1,5 +1,6 @@
 ﻿using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
+using FourierIT_API.Services;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
@@ -14,12 +15,14 @@ namespace FourierIT_API.Service
         private readonly IConfiguration _config;
         private readonly SymmetricSecurityKey _key;
         private readonly UserManager<User> _userManager;
-        public TokenService(IConfiguration config, UserManager<User> userManager)
+        private readonly ISystemSettingsService _settings;
+        public TokenService(IConfiguration config, UserManager<User> userManager, ISystemSettingsService settings)
         {
             _config = config;
             var signingKey = _config["JWT:SigningKey"] ?? throw new System.InvalidOperationException("JWT:SigningKey is required.");
             _key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey));
             _userManager = userManager;
+            _settings = settings;
         }
         public async Task<string> CreateTokenAsync(User user)
         {
@@ -46,11 +49,13 @@ namespace FourierIT_API.Service
             }
 
             var creds = new SigningCredentials(_key, SecurityAlgorithms.HmacSha512Signature);
+            // The Super Admin sets how long staff stay signed in (System Settings > Sessions).
+            var sessionHours = await _settings.GetAsync(SystemSettingDefinitions.StaffSessionTimeoutHours);
 
             var tokenDescriptor = new SecurityTokenDescriptor
             {
                 Subject = new ClaimsIdentity(claims),
-                Expires = DateTime.Now.AddDays(7),
+                Expires = DateTime.UtcNow.AddHours(sessionHours),
                 SigningCredentials = creds,
                 Issuer = _config["JWT:Issuer"],
                 Audience = _config["JWT:Audience"]

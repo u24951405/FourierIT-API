@@ -50,5 +50,8 @@ public class PendingRegistration
 
     public DateTimeOffset OtpExpiry { get; set; }
 
+    // Wrong codes entered for the current code; reset whenever a new code is sent.
+    public int FailedAttempts { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

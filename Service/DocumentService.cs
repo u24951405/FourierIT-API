@@ -83,6 +83,75 @@ namespace FourierIT_API.Service
 
         public async Task<Document> UploadDocumentAsync(string userId, string fileName, byte[] fileData, int documentTypeId, DateTimeOffset? certificationDate = null)
         {
+            var encryptedData = await ScanAndEncryptAsync(userId, fileName, fileData, documentTypeId);
+
+            // Validate document type
+            var documentType = await _context.DocumentTypes.FindAsync(documentTypeId);
+            if (documentType == null)
+            {
+                // Handle the error gracefully, e.g., throw a custom exception or return an error result
+                throw new ArgumentException($"Invalid DocumentTypeId. The document type '{documentTypeId}' does not exist.");
+            }
+
+            var uploadedDate = DateTime.UtcNow;
+            var document = new Document
+            {
+                FileName = fileName,
+                FileSizeBytes = fileData.Length,
+                UploadedDate = uploadedDate,
+                CurrentStatus = "Uploaded",
+                UserId = userId,
+                IsEncrypted = true,
+                EncryptionAlgorithm = "AES-256",
+                DocumentTypeId = documentTypeId,
+                ExpiryDate = _documentValidityCalculator.Calculate(documentType, uploadedDate, certificationDate?.UtcDateTime).ExpiryDate,
+                DocumentBlob = new DocumentBlob
+                {
+                    FileData = encryptedData,
+                    FileHash = Convert.ToBase64String(SHA256.HashData(fileData)),
+                    VersionNumber = 1
+                }
+            };
+            return await _repo.AddDocumentAsync(document);
+        }
+
+        public async Task ReplaceDocumentFileAsync(Document document, string fileName, byte[] fileData, int documentTypeId)
+        {
+            var encryptedData = await ScanAndEncryptAsync(document.UserId, fileName, fileData, documentTypeId);
+
+            if (await _context.DocumentTypes.FindAsync(documentTypeId) == null)
+                throw new ArgumentException($"Invalid DocumentTypeId. The document type '{documentTypeId}' does not exist.");
+
+            // Overwrite the existing blob in place (one blob per document) and keep a record of the replacement.
+            var blob = document.DocumentBlob;
+            if (blob == null)
+            {
+                document.DocumentBlob = new DocumentBlob
+                {
+                    FileData = encryptedData,
+                    FileHash = Convert.ToBase64String(SHA256.HashData(fileData)),
+                    VersionNumber = 1
+                };
+            }
+            else
+            {
+                blob.FileData = encryptedData;
+                blob.FileHash = Convert.ToBase64String(SHA256.HashData(fileData));
+                blob.VersionNumber++;
+                blob.BlobHistories.Add(new BlobHistory
+                {
+                    ActionTaken = $"Replaced (v{blob.VersionNumber})",
+                    ArchivedDate = DateTimeOffset.UtcNow
+                });
+            }
+
+            document.FileName = fileName;
+            document.FileSizeBytes = fileData.Length;
+            document.UploadedDate = DateTime.UtcNow;
+        }
+
+        private async Task<byte[]> ScanAndEncryptAsync(string userId, string fileName, byte[] fileData, int documentTypeId)
+        {
             ValidateFileExtension(fileName);
 
             using var fileStream = new MemoryStream(fileData);
@@ -119,36 +188,7 @@ namespace FourierIT_API.Service
             var base64Key = Convert.ToBase64String(hashedBytes);
 
             // 4. Encrypt the document data
-            var encryptedData = _encryptionService.EncryptData(fileData, base64Key);
-
-            // Validate document type
-            var documentType = await _context.DocumentTypes.FindAsync(documentTypeId);
-            if (documentType == null)
-            {
-                // Handle the error gracefully, e.g., throw a custom exception or return an error result
-                throw new ArgumentException($"Invalid DocumentTypeId. The document type '{documentTypeId}' does not exist.");
-            }
-
-            var uploadedDate = DateTime.UtcNow;
-            var document = new Document
-            {
-                FileName = fileName,
-                FileSizeBytes = fileData.Length,
-                UploadedDate = uploadedDate,
-                CurrentStatus = "Uploaded",
-                UserId = userId,
-                IsEncrypted = true,
-                EncryptionAlgorithm = "AES-256",
-                DocumentTypeId = documentTypeId,
-                ExpiryDate = _documentValidityCalculator.Calculate(documentType, uploadedDate, certificationDate?.UtcDateTime).ExpiryDate,
-                DocumentBlob = new DocumentBlob
-                {
-                    FileData = encryptedData,
-                    FileHash = Convert.ToBase64String(SHA256.HashData(fileData)),
-                    VersionNumber = 1
-                }
-            };
-            return await _repo.AddDocumentAsync(document);
+            return _encryptionService.EncryptData(fileData, base64Key);
         }
 
         private static void ValidateFileExtension(string fileName)

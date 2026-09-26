@@ -44,4 +44,52 @@ public class DocumentServiceTests
         Assert.Equal("Uploaded", stored.CurrentStatus);
         Assert.Equal(content, downloaded);
     }
+
+    [Fact]
+    public async Task ReplaceDocumentFile_UpdatesExistingDocumentWithoutCreatingDuplicate()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase($"DocumentServiceTests_{Guid.NewGuid():N}")
+            .Options;
+        await using var context = new AppDbContext(options);
+        context.DocumentTypes.Add(new DocumentType { DocumentTypeId = 901, TypeName = "Test Document" });
+        context.Users.Add(new User { Id = "user-1", UserName = "owner@test.local" });
+        context.Documents.Add(new Document
+        {
+            DocumentId = 50,
+            FileName = "original.pdf",
+            CurrentStatus = "Rejected",
+            UserId = "user-1",
+            DocumentTypeId = 901,
+            FileSizeBytes = 3,
+            DocumentBlob = new DocumentBlob { FileData = new byte[] { 1, 2, 3 }, FileHash = "old", VersionNumber = 1 }
+        });
+        await context.SaveChangesAsync();
+
+        var scanner = new Mock<IFileScanService>();
+        scanner.Setup(x => x.ScanFileAsync(It.IsAny<Stream>()))
+            .ReturnsAsync(FileScanResult.Clean());
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["JWT:SigningKey"] = "test-signing-key-that-is-long-enough-for-jwt-and-aes"
+            })
+            .Build();
+        var repository = new DocumentRepository(context);
+        var service = new DocumentService(repository, new AesEncryptionService(), configuration, context, scanner.Object, new Mock<IAuditLogService>().Object);
+        var replacement = System.Text.Encoding.UTF8.GetBytes("replacement file");
+
+        var document = await repository.GetDocumentByIdAsync(50);
+        await service.ReplaceDocumentFileAsync(document!, "replacement.pdf", replacement, 901);
+        await repository.UpdateDocumentAsync(document!);
+
+        var stored = await context.Documents.Include(d => d.DocumentBlob).ThenInclude(b => b.BlobHistories).SingleAsync();
+        Assert.Equal(50, stored.DocumentId);
+        Assert.Equal("replacement.pdf", stored.FileName);
+        Assert.Equal(replacement.Length, stored.FileSizeBytes);
+        Assert.Equal(2, stored.DocumentBlob.VersionNumber);
+        Assert.Single(stored.DocumentBlob.BlobHistories);
+        Assert.Equal(1, await context.DocumentBlobs.CountAsync());
+        Assert.Equal(replacement, await service.DownloadDocumentAsync(50, "user-1"));
+    }
 }

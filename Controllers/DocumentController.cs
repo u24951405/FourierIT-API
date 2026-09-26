@@ -410,6 +410,23 @@ namespace FourierIT_API.Controllers
             {
                 return BadRequest(new { error = ex.Message });
             }
+            catch (Exception ex)
+            {
+                var traceId = HttpContext.TraceIdentifier;
+                _logger.LogError(
+                    ex,
+                    "Document upload failed while processing file {FileName} for user {UserId}, document type {DocumentTypeId}. TraceId: {TraceId}",
+                    dto.File.FileName,
+                    user.Id,
+                    dto.DocumentTypeId,
+                    traceId);
+
+                return StatusCode(StatusCodes.Status500InternalServerError, new
+                {
+                    message = "The document could not be saved due to a server error. Contact support with the reference below.",
+                    traceId
+                });
+            }
 
             try
             {
@@ -701,10 +718,9 @@ namespace FourierIT_API.Controllers
                 await dto.File.CopyToAsync(ms);
                 var fileBytes = ms.ToArray();
 
-                Document updated;
                 try
                 {
-                    updated = await _documentService.UploadDocumentAsync(user.Id, dto.File.FileName, fileBytes, dto.DocumentTypeId);
+                    await _documentService.ReplaceDocumentFileAsync(doc, dto.File.FileName, fileBytes, dto.DocumentTypeId);
                 }
                 catch (ArgumentException ex)
                 {
@@ -715,9 +731,23 @@ namespace FourierIT_API.Controllers
                     return BadRequest(new { error = ex.Message });
                 }
 
-                doc.DocumentBlob = updated.DocumentBlob;
-                doc.FileName = dto.File.FileName;
-                doc.FileSizeBytes = fileBytes.Length;
+                var replacedFileType = await _context.DocumentTypes.FindAsync(dto.DocumentTypeId);
+                if (replacedFileType != null)
+                {
+                    var existingCertificationDate = doc.CertificationDetails
+                        .OrderByDescending(detail => detail.CertificationDate)
+                        .Select(detail => (DateTimeOffset?)detail.CertificationDate)
+                        .FirstOrDefault();
+                    doc.ExpiryDate = _documentValidityCalculator.Calculate(replacedFileType, doc.UploadedDate, existingCertificationDate).ExpiryDate;
+                }
+
+                // A new file must be reviewed on its own merits: drop any previous approval or rejection
+                // and send every replacement to a Compliance Officer.
+                doc.CurrentStatus = "Under Review";
+                doc.IsManualOverrideActive = false;
+                doc.ManualOverrideBy = null;
+                doc.ManualOverrideAt = null;
+                doc.ManualOverrideReason = null;
             }
 
             doc.DocumentTypeId = dto.DocumentTypeId;
@@ -760,11 +790,12 @@ namespace FourierIT_API.Controllers
             await _documentRepository.UpdateDocumentAsync(doc);
             try
             {
-                await _complianceService.CheckUserComplianceAsync(user.Id);
+                // Recalculate for the document's owner (who may not be the caller): this puts a replaced file back into review.
+                await _complianceService.CheckUserComplianceAsync(doc.UserId);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to recalculate compliance after document update for user {UserId}", user.Id);
+                _logger.LogError(ex, "Failed to recalculate compliance after document update for user {UserId}", doc.UserId);
             }
 
             await TryCreateAuditLogAsync(new AuditLog
@@ -910,24 +941,39 @@ namespace FourierIT_API.Controllers
             return Ok(users);
         }
 
-        private static DocumentResponseDto ToResponseDto(Document doc) => new()
+        private static DocumentResponseDto ToResponseDto(Document doc)
         {
-            DocumentId = doc.DocumentId,
-            FileName = doc.FileName,
-            CurrentStatus = doc.CurrentStatus,
-            IsCertified = doc.IsCertified,
-            IsEncrypted = doc.IsEncrypted,
-            EncryptionAlgorithm = doc.EncryptionAlgorithm,
-            FileSizeBytes = doc.FileSizeBytes,
-            UploadedDate = doc.UploadedDate,
-            ExpiryDate = doc.ExpiryDate,
-            NeverExpires = doc.DocumentType?.NeverExpires == true || doc.ExpiryDate == DateTimeOffset.MaxValue,
-            LastModifiedDate = doc.LastModifiedDate,
-            DocumentTypeId = doc.DocumentTypeId,
-            DocumentTypeName = doc.DocumentType?.TypeName ?? string.Empty,
-            UploadedByFirstName = doc.User?.Profile?.FirstName ?? string.Empty,
-            UploadedByLastName = doc.User?.Profile?.LastName ?? string.Empty
-        };
+            var reviewStatus = ResolveReviewStatus(doc);
+            return new DocumentResponseDto
+            {
+                DocumentId = doc.DocumentId,
+                FileName = doc.FileName,
+                CurrentStatus = doc.CurrentStatus,
+                IsCertified = doc.IsCertified,
+                IsEncrypted = doc.IsEncrypted,
+                EncryptionAlgorithm = doc.EncryptionAlgorithm,
+                FileSizeBytes = doc.FileSizeBytes,
+                UploadedDate = doc.UploadedDate,
+                ExpiryDate = doc.ExpiryDate,
+                NeverExpires = doc.DocumentType?.NeverExpires == true || doc.ExpiryDate == DateTimeOffset.MaxValue,
+                LastModifiedDate = doc.LastModifiedDate,
+                DocumentTypeId = doc.DocumentTypeId,
+                DocumentTypeName = doc.DocumentType?.TypeName ?? string.Empty,
+                UploadedByFirstName = doc.User?.Profile?.FirstName ?? string.Empty,
+                UploadedByLastName = doc.User?.Profile?.LastName ?? string.Empty,
+                ReviewStatus = reviewStatus,
+                ReviewedAt = reviewStatus == null ? null : doc.ManualOverrideAt,
+                ReviewNotes = reviewStatus == null ? null : doc.ManualOverrideReason
+            };
+        }
+
+        // Approvals set the manual override; rejections mark the document Rejected (see ComplianceService).
+        private static string? ResolveReviewStatus(Document doc)
+        {
+            if (doc.IsManualOverrideActive) return "Approved";
+            if (string.Equals(doc.CurrentStatus, "Rejected", StringComparison.OrdinalIgnoreCase) && doc.ManualOverrideAt != null) return "Rejected";
+            return null;
+        }
 
         private async Task TryCreateAuditLogAsync(AuditLog auditLog)
         {
@@ -1028,11 +1074,19 @@ namespace FourierIT_API.Controllers
 
             List<EntityType> entityTypes;
             string? userIdForMapping;
+            var readOnly = false;
 
             if (User.HasClaim("superadmin", "true"))
             {
                 entityTypes = await hierarchyRepository.GetFullHierarchyAsync();
                 userIdForMapping = null; // SuperAdmin sees all documents
+            }
+            else if (IsStakeholderViewer())
+            {
+                // Stakeholders oversee the whole system: they see every document but can't change any.
+                entityTypes = await hierarchyRepository.GetFullHierarchyAsync();
+                userIdForMapping = null;
+                readOnly = true;
             }
             else
             {
@@ -1040,7 +1094,7 @@ namespace FourierIT_API.Controllers
                 userIdForMapping = user.Id; // Regular users see only their documents
             }
 
-            var result = entityTypes.Select(et => MapToEntityTypeHierarchyDto(et, userIdForMapping)).ToList();
+            var result = entityTypes.Select(et => MapToEntityTypeHierarchyDto(et, userIdForMapping, readOnly)).ToList();
             return Ok(result);
         }
 
@@ -1071,14 +1125,19 @@ namespace FourierIT_API.Controllers
             var hierarchyRepository = new DocumentHierarchyRepository(_context);
             List<Document> results;
 
-            if (User.HasClaim("superadmin", "true"))
+            var stakeholderViewer = IsStakeholderViewer();
+            if (User.HasClaim("superadmin", "true") || stakeholderViewer)
             {
+                // Stakeholders search the whole system, read-only.
                 results = await hierarchyRepository.SearchDocumentsAsync(q);
             }
             else
             {
                 results = await hierarchyRepository.SearchDocumentsForUserAsync(user.Id, q);
             }
+
+            var canManageDocuments = !stakeholderViewer
+                && (User.HasClaim("superadmin", "true") || await HasDocumentManagePermissionAsync(user.Id));
 
             var searchResults = results.Select(doc => new SearchResultDto
             {
@@ -1091,7 +1150,8 @@ namespace FourierIT_API.Controllers
                 UploadedDate = doc.UploadedDate,
                 FileSizeBytes = doc.FileSizeBytes,
                 UserCanView = true,
-                UserCanDownload = doc.UserId == user.Id
+                UserCanDownload = stakeholderViewer || doc.UserId == user.Id,
+                UserCanDelete = !stakeholderViewer && (canManageDocuments || doc.UserId == user.Id)
             }).ToList();
 
             return Ok(searchResults);
@@ -1156,20 +1216,24 @@ namespace FourierIT_API.Controllers
 
         #region Helper Methods
 
-        private EntityTypeHierarchyDto MapToEntityTypeHierarchyDto(EntityType entityType, string? userId)
+        /// <summary>Stakeholders (who aren't also Department Admins) view everything and change nothing.</summary>
+        private bool IsStakeholderViewer() =>
+            User.IsInRole("Stakeholder") && !User.IsInRole("Department Admin") && !User.HasClaim("superadmin", "true");
+
+        private EntityTypeHierarchyDto MapToEntityTypeHierarchyDto(EntityType entityType, string? userId, bool readOnly = false)
         {
             return new EntityTypeHierarchyDto
             {
                 EntityTypeId = entityType.EntityTypeId,
                 Name = entityType.Name,
                 DocumentTypes = entityType.RequiredDocuments
-                    .Select(rd => MapToDocumentTypeHierarchyDto(rd.DocumentType, rd.IsMandatory, userId))
+                    .Select(rd => MapToDocumentTypeHierarchyDto(rd.DocumentType, rd.IsMandatory, userId, readOnly))
                     .ToList(),
                 UserHasAccess = true
             };
         }
 
-        private DocumentTypeHierarchyDto MapToDocumentTypeHierarchyDto(DocumentType documentType, bool isMandatory, string? userId)
+        private DocumentTypeHierarchyDto MapToDocumentTypeHierarchyDto(DocumentType documentType, bool isMandatory, string? userId, bool readOnly = false)
         {
             // Get documents for this document type directly from database
             var documents = _context.Documents
@@ -1185,7 +1249,7 @@ namespace FourierIT_API.Controllers
                 IsMandatory = isMandatory,
                 Documents = userId == null
                     ? documents
-                        .Select(d => MapToDocumentItemDto(d, null))
+                        .Select(d => MapToDocumentItemDto(d, null, readOnly))
                         .ToList()
                     : documents
                         .Where(d => d.UserId == userId || d.SharedWith.Any(da => da.GrantedToUserId == userId))
@@ -1194,13 +1258,14 @@ namespace FourierIT_API.Controllers
             };
         }
 
-        private DocumentItemDto MapToDocumentItemDto(Document document, string? userId)
+        private DocumentItemDto MapToDocumentItemDto(Document document, string? userId, bool readOnly = false)
         {
             bool canView = userId == null || document.UserId == userId || document.SharedWith.Any(da => da.GrantedToUserId == userId);
             bool canDownload = userId == null || document.UserId == userId;
-            bool canEdit = userId == null || document.UserId == userId;
-            bool canDelete = userId == null || document.UserId == userId;
-            bool canShare = userId == null || document.UserId == userId;
+            // Read-only viewers (Stakeholders) can open and download, but never edit, delete or share.
+            bool canEdit = !readOnly && (userId == null || document.UserId == userId);
+            bool canDelete = !readOnly && (userId == null || document.UserId == userId);
+            bool canShare = !readOnly && (userId == null || document.UserId == userId);
 
             return new DocumentItemDto
             {

@@ -81,7 +81,12 @@ namespace FourierIT_API.Services
             int pageSize,
             string? query)
         {
-            var q = _context.AuditLogs.AsNoTracking().Include(a => a.User).Include(a => a.Institution).AsQueryable();
+            var q = _context.AuditLogs
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Include(a => a.User)
+                .Include(a => a.Institution)
+                .AsQueryable();
 
             if (!string.IsNullOrWhiteSpace(userId))
             {

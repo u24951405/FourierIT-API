@@ -9,5 +9,7 @@ namespace FourierIT_API.Interfaces
         Task SendInstitutionOtpEmailAsync(string toEmail, string institutionName, string otpCode, DateTimeOffset expiresAt);
         Task SendOtpEmailAsync(string toEmail, string institutionName, string otpCode, DateTimeOffset expiresAt);
         Task SendPasswordResetEmailAsync(string toEmail, string resetLink, DateTimeOffset expiresAt);
+        Task SendEmailChangeOtpEmailAsync(string toEmail, string otpCode, DateTimeOffset expiresAt);
+        Task SendEmailChangedNoticeAsync(string oldEmail, string newEmail);
     }
 }

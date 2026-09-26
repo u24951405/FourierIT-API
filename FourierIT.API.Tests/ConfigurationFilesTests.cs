@@ -14,8 +14,12 @@ public class ConfigurationFilesTests
         using var document = JsonDocument.Parse(File.ReadAllText(settingsPath));
         var emailSettings = document.RootElement.GetProperty("EmailSettings");
 
-        Assert.Equal("smtp.sendgrid.net", emailSettings.GetProperty("Host").GetString());
+        Assert.Equal("smtp.gmail.com", emailSettings.GetProperty("Host").GetString());
         Assert.True(emailSettings.GetProperty("Port").GetInt32() > 0);
         Assert.Equal("DocuVault", emailSettings.GetProperty("FromDisplayName").GetString());
+        // Gmail only sends as the signed-in account, so the sender must be the SMTP username.
+        Assert.Equal(emailSettings.GetProperty("Username").GetString(), emailSettings.GetProperty("FromAddress").GetString());
+        // The app password must come from User Secrets or an environment variable, never this file.
+        Assert.True(string.IsNullOrEmpty(emailSettings.GetProperty("Password").GetString()));
     }
 }

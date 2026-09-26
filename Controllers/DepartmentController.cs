@@ -44,11 +44,54 @@ namespace FourierIT_API.Controllers
                     .Where(d => d.DepartmentId == user.DepartmentId.Value)
                     .ToListAsync();
 
-                return Ok(department.Select(d => d.ToDepartmentDto()));
+                return Ok(await WithAdminDetailsAsync(department.Select(d => d.ToDepartmentDto()).ToList()));
             }
 
             var departments = await _context.Departments.AsNoTracking().ToListAsync();
-            return Ok(departments.Select(d => d.ToDepartmentDto()));
+            return Ok(await WithAdminDetailsAsync(departments.Select(d => d.ToDepartmentDto()).ToList()));
+        }
+
+        /// <summary>Adds each department's Department Admin (its only user) and document count.</summary>
+        private async Task<List<DepartmentDto>> WithAdminDetailsAsync(List<DepartmentDto> departments)
+        {
+            var departmentIds = departments.Select(d => d.DepartmentId).ToList();
+            if (departmentIds.Count == 0) return departments;
+
+            var admins = await _context.Users
+                .AsNoTracking()
+                .Where(u => u.DepartmentId.HasValue && departmentIds.Contains(u.DepartmentId.Value))
+                .Select(u => new
+                {
+                    u.Id,
+                    DepartmentId = u.DepartmentId!.Value,
+                    u.Email,
+                    u.UserName,
+                    FirstName = u.Profile != null ? u.Profile.FirstName : null,
+                    LastName = u.Profile != null ? u.Profile.LastName : null
+                })
+                .ToListAsync();
+
+            var adminIds = admins.Select(a => a.Id).ToList();
+            var documentCounts = await _context.Documents
+                .AsNoTracking()
+                .Where(d => adminIds.Contains(d.UserId) && d.CurrentStatus != "Deleted")
+                .GroupBy(d => d.UserId)
+                .Select(g => new { UserId = g.Key, Count = g.Count() })
+                .ToDictionaryAsync(x => x.UserId, x => x.Count);
+
+            foreach (var department in departments)
+            {
+                var admin = admins.FirstOrDefault(a => a.DepartmentId == department.DepartmentId);
+                if (admin == null) continue;
+
+                var fullName = $"{admin.FirstName} {admin.LastName}".Trim();
+                department.AdminUserId = admin.Id;
+                department.AdminName = string.IsNullOrWhiteSpace(fullName) ? admin.UserName : fullName;
+                department.AdminEmail = admin.Email;
+                department.DocumentCount = documentCounts.GetValueOrDefault(admin.Id);
+            }
+
+            return departments;
         }
 
 
@@ -73,10 +116,11 @@ namespace FourierIT_API.Controllers
             {
                 return NotFound();
             }
-            return Ok(department.ToDepartmentDto());
+            return Ok((await WithAdminDetailsAsync(new List<DepartmentDto> { department.ToDepartmentDto() }))[0]);
         }
 
-        [Authorize(Policy = "Users.Manage")]
+        // Departments are registered by the Super Admin only.
+        [Authorize(Policy = "SuperAdminOnly")]
         [HttpPost]
         public async Task<IActionResult> create([FromBody] CreateDepartmentRequestDto DepartmentDto)
         {
@@ -109,7 +153,8 @@ namespace FourierIT_API.Controllers
             return Ok(roots);
         }
 
-        [Authorize(Policy = "Users.Manage")]
+        // Departments are registered by the Super Admin only.
+        [Authorize(Policy = "SuperAdminOnly")]
         [HttpPost("hierarchy")]
         public async Task<IActionResult> CreateHierarchyNode([FromBody] DepartmentHierarchyRequestDto request)
         {
@@ -143,7 +188,8 @@ namespace FourierIT_API.Controllers
             return Ok(BuildHierarchyNode(department, allDepartments));
         }
 
-        [Authorize(Policy = "Users.Manage")]
+        // Only the Super Admin manages departments; Department Admins cannot edit or delete them.
+        [Authorize(Policy = "SuperAdminOnly")]
         [HttpPut("hierarchy/{departmentId:int}")]
         public async Task<IActionResult> UpdateHierarchyNode([FromRoute] int departmentId, [FromBody] DepartmentHierarchyRequestDto request)
         {
@@ -187,7 +233,8 @@ namespace FourierIT_API.Controllers
             return Ok(BuildHierarchyNode(department, allDepartmentsAfter));
         }
 
-        [Authorize(Policy = "Users.Manage")]
+        // Only the Super Admin manages departments; Department Admins cannot edit or delete them.
+        [Authorize(Policy = "SuperAdminOnly")]
         [HttpDelete("hierarchy/{departmentId:int}")]
         public async Task<IActionResult> DeleteHierarchyNode([FromRoute] int departmentId)
         {
@@ -213,7 +260,8 @@ namespace FourierIT_API.Controllers
         }
 
 
-        [Authorize(Policy = "Users.Manage")]
+        // Only the Super Admin manages departments; Department Admins cannot edit or delete them.
+        [Authorize(Policy = "SuperAdminOnly")]
         [HttpPut]
         [Route("{DepartmentId}")]
         public async Task<IActionResult> Update([FromRoute] int DepartmentId, [FromBody] UpdateDepartmentRequestDto UpdateDto)
@@ -249,7 +297,8 @@ namespace FourierIT_API.Controllers
 
         }
 
-        [Authorize(Policy = "Users.Manage")]
+        // Only the Super Admin manages departments; Department Admins cannot edit or delete them.
+        [Authorize(Policy = "SuperAdminOnly")]
         [HttpDelete]
         [Route("{DepartmentId}")]
         public async Task<IActionResult> Delete([FromRoute] int DepartmentId)

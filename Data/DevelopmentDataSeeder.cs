@@ -112,7 +112,7 @@ namespace FourierIT_API.Data
                         PhoneNumber = $"08100000{(index * 2) + ownerIndex + 1:00}",
                         AccountStatus = "Active",
                         EmailConfirmed = true,
-                        DepartmentId = department.DepartmentId,
+                        // A department's only user is its Department Admin, so owners are not placed in departments.
                         EntityTypeId = 3,
                         EntityIdentificationNumber = $"DEMO-OWNER-{index + 1:00}{ownerIndex + 1:00}"
                     }, $"DemoOwner{index + 1}{ownerIndex + 1}", "Analyst", SeedPassword, cancellationToken);

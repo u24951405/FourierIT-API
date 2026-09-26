@@ -17,5 +17,10 @@
         public string DocumentTypeName { get; set; } = string.Empty;
         public string UploadedByFirstName { get; set; } = string.Empty;
         public string UploadedByLastName { get; set; } = string.Empty;
+
+        // Compliance review outcome: "Approved", "Rejected" or null when no decision has been made on the current file.
+        public string? ReviewStatus { get; set; }
+        public DateTime? ReviewedAt { get; set; }
+        public string? ReviewNotes { get; set; }
     }
 }

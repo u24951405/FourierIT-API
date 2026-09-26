@@ -177,12 +177,14 @@ public class DocumentAccessRequestControllerTests
         var documentService = new Mock<IDocumentService>();
         var departmentValidation = new FourierIT_API.Services.DepartmentRequestValidationService();
         var auditLog = new Mock<IAuditLogService>();
+        var compliance = new Mock<IComplianceService>();
 
         return new DocumentAccessRequestsController(
             context,
             userManager.Object,
             documentService.Object,
             departmentValidation,
-            auditLog.Object);
+            auditLog.Object,
+            compliance.Object);
     }
 }

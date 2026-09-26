@@ -115,6 +115,8 @@ builder.Services.AddScoped<IEncryptionService, AesEncryptionService>();
 builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 builder.Services.AddScoped<IFileScanService, FileScanService>();
+builder.Services.AddScoped<IInAppNotificationService, InAppNotificationService>();
+builder.Services.AddScoped<ISystemSettingsService, SystemSettingsService>();
 builder.Services.AddScoped<IComplianceService, ComplianceService>();
 builder.Services.AddSingleton<DocumentValidityCalculator>();
 builder.Services.AddScoped<DocumentValidityPolicyService>();
@@ -285,7 +287,6 @@ if (runDbInit)
     if (runDevSeed)
     {
         // Seed lookup data: institutions and departments (without demo data)
-        await DevLookupSeed.EnsureRolesExistAsync(db);
         await DevLookupSeed.EnsureBranchesExistAsync(db);
         await DevLookupSeed.EnsureDepartmentsAndRequirementsAsync(db);
 

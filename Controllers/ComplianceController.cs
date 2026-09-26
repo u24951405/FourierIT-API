@@ -196,9 +196,16 @@ namespace FourierIT_API.Controllers
         /// Get system-wide compliance dashboard
         /// </summary>
         [HttpGet("dashboard")]
-        [Authorize(Policy = "Compliance.Manage")]
+        // Read-only summary: viewing needs Compliance.View (e.g. Stakeholders); changes still need Compliance.Manage.
+        [Authorize(Policy = "Compliance.View")]
         public async Task<IActionResult> GetSystemDashboard()
         {
+            // Department Admins see only their own department's figures (the department dashboard), never
+            // organisation-wide totals. They hold Compliance.Manage, so this has to be a role check.
+            var isOrganisationWideViewer = User.HasClaim("superadmin", "true") || User.IsInRole("Admin");
+            if (User.IsInRole("Department Admin") && !isOrganisationWideViewer)
+                return Forbid();
+
             try
             {
                 var dashboard = await _complianceService.GetSystemDashboardAsync();

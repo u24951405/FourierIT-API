@@ -84,6 +84,19 @@ public class AdHocExcelExportTests
             OverallRiskScore = 8,
             LastChecked = new DateTime(2026, 2, 20, 12, 0, 0, DateTimeKind.Utc)
         });
+        // A stakeholder's leftover record must not appear: compliance only applies to document uploaders.
+        context.ComplianceStatuses.Add(new ComplianceStatus
+        {
+            ComplianceStatusId = 10,
+            UserId = "stakeholder-10",
+            OverallStatus = "Non-Compliant",
+            RiskLevel = "High",
+            CompliancePercentage = 0,
+            OverallRiskScore = 100,
+            LastChecked = new DateTime(2026, 2, 21, 12, 0, 0, DateTimeKind.Utc)
+        });
+        AssignRole(context, "user-9", "Document Owner");
+        AssignRole(context, "stakeholder-10", "Stakeholder");
         context.AdHocReports.Add(new AdHocReport
         {
             AdHocReportId = 43,
@@ -142,6 +155,7 @@ public class AdHocExcelExportTests
             OverallRiskScore = 59,
             LastChecked = new DateTime(2026, 2, 20, 12, 0, 0, DateTimeKind.Utc)
         });
+        AssignRole(context, "compliance-user", "Document Owner");
         await context.SaveChangesAsync();
 
         var controller = new ReportsController(context)
@@ -182,5 +196,17 @@ public class AdHocExcelExportTests
         Assert.Empty(data.DistributionResults);
         Assert.Null(data.StorageResult);
         Assert.DoesNotContain(data.DocumentResults, item => item.FileName == "should-not-appear.pdf");
+    }
+
+    private static void AssignRole(AppDbContext context, string userId, string roleName)
+    {
+        var role = context.Roles.Local.FirstOrDefault(existing => existing.Name == roleName);
+        if (role == null)
+        {
+            role = new Role { Id = Guid.NewGuid().ToString(), Name = roleName, NormalizedName = roleName.ToUpperInvariant() };
+            context.Roles.Add(role);
+        }
+
+        context.UserRoles.Add(new UserRole { UserId = userId, RoleId = role.Id });
     }
 }

@@ -22,19 +22,25 @@ namespace FourierIT_API.Controllers
         private readonly IDocumentService _documentService;
         private readonly DepartmentRequestValidationService _departmentRequestValidationService;
         private readonly IAuditLogService _auditLogService;
+        private readonly IComplianceService _complianceService;
+        private readonly ISystemSettingsService _settings;
 
         public DocumentAccessRequestsController(
             AppDbContext context,
             UserManager<User> userManager,
             IDocumentService documentService,
             DepartmentRequestValidationService departmentRequestValidationService,
-            IAuditLogService auditLogService)
+            IAuditLogService auditLogService,
+            IComplianceService complianceService,
+            ISystemSettingsService? settings = null)
         {
             _context = context;
             _userManager = userManager;
             _documentService = documentService;
             _departmentRequestValidationService = departmentRequestValidationService;
             _auditLogService = auditLogService;
+            _complianceService = complianceService;
+            _settings = settings ?? new SystemSettingsService(context);
         }
 
         /// <summary>
@@ -1043,13 +1049,42 @@ namespace FourierIT_API.Controllers
                 });
             }
 
+            await _complianceService.CheckUserComplianceAsync(request.TargetUserId!);
+
+            var uploadedDocumentIds = approvedDocuments.Select(document => document.DocumentId).ToList();
+            var latestChecks = await _context.DocumentComplianceChecks
+                .AsNoTracking()
+                .Where(check => check.DocumentId.HasValue && uploadedDocumentIds.Contains(check.DocumentId.Value))
+                .OrderByDescending(check => check.CheckedAt)
+                .ThenByDescending(check => check.CheckId)
+                .ToListAsync();
+
+            var latestCheckByDocument = latestChecks
+                .GroupBy(check => check.DocumentId!.Value)
+                .ToDictionary(group => group.Key, group => group.First());
+            var documentsAwaitingReview = approvedDocuments
+                .Where(document => !latestCheckByDocument.TryGetValue(document.DocumentId, out var check)
+                    || !check.IsManuallyApproved
+                    || !string.Equals(check.CheckStatus, "Compliant", StringComparison.OrdinalIgnoreCase))
+                .Select(document => new { document.DocumentId, document.FileName })
+                .ToList();
+
+            if (documentsAwaitingReview.Count > 0)
+            {
+                return Conflict(new
+                {
+                    error = "A Compliance Officer must approve every requested document before this request can be accepted.",
+                    documents = documentsAwaitingReview
+                });
+            }
+
             var existingToken = await _context.AccessTokens
                 .FirstOrDefaultAsync(at => at.UserId == request.TargetUserId);
 
             if (existingToken != null)
                 existingToken.IsRevoked = true;
 
-            var expiry = DateTimeOffset.UtcNow.AddHours(48);
+            var expiry = DateTimeOffset.UtcNow.AddHours(await _settings.GetAsync(SystemSettingDefinitions.DocumentAccessLinkExpiryHours));
             var tokenString = GenerateTokenString();
 
             var accessToken = new AccessToken

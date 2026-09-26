@@ -4,6 +4,7 @@ using FourierIT_API.Data;
 using FourierIT_API.DTOs.Institution;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
+using FourierIT_API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -17,12 +18,18 @@ namespace FourierIT_API.Controllers
         private readonly AppDbContext _context;
         private readonly ILogger<InstitutionAuthController> _logger;
         private readonly IEmailService _emailService;
+        private readonly ISystemSettingsService _settings;
 
-        public InstitutionAuthController(AppDbContext context, ILogger<InstitutionAuthController> logger, IEmailService emailService)
+        public InstitutionAuthController(
+            AppDbContext context,
+            ILogger<InstitutionAuthController> logger,
+            IEmailService emailService,
+            ISystemSettingsService? settings = null)
         {
             _context = context;
             _logger = logger;
             _emailService = emailService;
+            _settings = settings ?? new SystemSettingsService(context);
         }
 
         [Authorize]
@@ -39,9 +46,7 @@ namespace FourierIT_API.Controllers
             if (institution == null)
                 return NotFound(new { error = "Institution not found." });
 
-            // Do not revoke prior invitations. Access links are permanent and any previously issued token
-            // should remain valid until manually revoked or a new token is explicitly requested.
-
+            // Prior invitations stay usable until they expire or are revoked.
             var tokenString = GenerateTokenString();
             var now = DateTimeOffset.UtcNow;
             var invitation = new InstitutionInvitation
@@ -50,7 +55,7 @@ namespace FourierIT_API.Controllers
                 Email = dto.Email.Trim(),
                 TokenString = tokenString,
                 OtpCodeHash = string.Empty,
-                TokenExpiryTimeStamp = DateTimeOffset.MaxValue,
+                TokenExpiryTimeStamp = now.AddDays(await _settings.GetAsync(SystemSettingDefinitions.InstitutionInvitationExpiryDays)),
                 OtpExpiryTimeStamp = now,
                 IsRevoked = false,
                 IsUsed = false,
@@ -67,8 +72,9 @@ namespace FourierIT_API.Controllers
             try
             {
                 await _emailService.SendInvitationEmailAsync(invitation.Email, institution.InstitutionName, accessLink, invitation.TokenExpiryTimeStamp);
-                _logger.LogInformation("Institution invitation email sent for institution {InstitutionId}. Email={Email}, token={Token}",
-                    dto.InstitutionId, invitation.Email, supportedToken);
+                // Never log the access token: anyone who can read the logs could use the link.
+                _logger.LogInformation("Institution invitation email sent for institution {InstitutionId}. Email={Email}",
+                    dto.InstitutionId, invitation.Email);
             }
             catch (Exception ex)
             {
@@ -102,20 +108,26 @@ namespace FourierIT_API.Controllers
 
             if (invitation.IsUsed)
             {
-                return BadRequest(new { error = "This invitation has already been used." });
+                return BadRequest(new { error = "This invitation has already been used.", reason = "used", institutionId = invitation.InstitutionId });
             }
 
-            var otpCode = GenerateOtpCode();
-            invitation.OtpCodeHash = HashValue(otpCode);
-            invitation.OtpExpiryTimeStamp = DateTimeOffset.UtcNow.AddMinutes(await GetSettingMinutesAsync("InstitutionOtpExpiryMinutes", 10));
-            invitation.OtpSendCount += 1;
-            await _context.SaveChangesAsync();
+            var unusable = await CheckInvitationUsableAsync(invitation);
+            if (unusable != null) return unusable;
+
+            // Reopening the link shortly after a code was sent reuses that code instead of emailing another.
+            if (await ResendWaitAsync(invitation) > TimeSpan.Zero && invitation.OtpExpiryTimeStamp > DateTimeOffset.UtcNow)
+            {
+                return Ok(ValidationResponse(invitation));
+            }
+
+            var otpCode = await IssueOtpAsync(invitation);
 
             try
             {
                 await _emailService.SendInstitutionOtpEmailAsync(invitation.Email, invitation.Institution.InstitutionName, otpCode, invitation.OtpExpiryTimeStamp);
-                _logger.LogInformation("OTP sent for institution invitation {InvitationId}. Email={Email}, otp={Otp}",
-                    invitation.InvitationId, invitation.Email, otpCode);
+                // Never log the code itself: anyone who can read the logs could use it to sign in.
+                _logger.LogInformation("OTP sent for institution invitation {InvitationId}. Email={Email}",
+                    invitation.InvitationId, invitation.Email);
             }
             catch (Exception ex)
             {
@@ -123,15 +135,17 @@ namespace FourierIT_API.Controllers
                 return StatusCode(500, new { error = "OTP generated but delivery failed. Please try again or contact support." });
             }
 
-            return Ok(new TokenValidationResponseDto
-            {
-                Valid = true,
-                InstitutionId = invitation.InstitutionId.ToString(),
-                InstitutionName = invitation.Institution.InstitutionName,
-                InstitutionCode = invitation.Institution.VerifiedDomain,
-                MaskedEmail = MaskEmail(invitation.Email)
-            });
+            return Ok(ValidationResponse(invitation));
         }
+
+        private static TokenValidationResponseDto ValidationResponse(InstitutionInvitation invitation) => new()
+        {
+            Valid = true,
+            InstitutionId = invitation.InstitutionId.ToString(),
+            InstitutionName = invitation.Institution.InstitutionName,
+            InstitutionCode = invitation.Institution.VerifiedDomain,
+            MaskedEmail = MaskEmail(invitation.Email)
+        };
 
         [AllowAnonymous]
         [HttpPost("verify-otp")]
@@ -159,17 +173,37 @@ namespace FourierIT_API.Controllers
 
                 if (invitation.IsUsed)
                 {
-                    return BadRequest(new { error = "This invitation has already been used." });
+                    return BadRequest(new { error = "This invitation has already been used.", reason = "used", institutionId = invitation.InstitutionId });
                 }
 
-                if (invitation.OtpExpiryTimeStamp <= DateTimeOffset.UtcNow)
+                var unusable = await CheckInvitationUsableAsync(invitation);
+                if (unusable != null) return unusable;
+
+                if (string.IsNullOrWhiteSpace(invitation.OtpCodeHash) || invitation.OtpExpiryTimeStamp <= DateTimeOffset.UtcNow)
                 {
-                    return BadRequest(new { error = "OTP expired. Please request a new code." });
+                    return BadRequest(new { error = "This code has expired. Request a new code." });
                 }
 
-                if (string.IsNullOrWhiteSpace(invitation.OtpCodeHash) || !VerifyHash(dto.Otp.Trim(), invitation.OtpCodeHash))
+                if (!VerifyHash(dto.Otp.Trim(), invitation.OtpCodeHash))
                 {
-                    return BadRequest(new { error = "Invalid OTP." });
+                    invitation.OtpFailedAttempts++;
+                    var attemptsRemaining = await _settings.GetAsync(SystemSettingDefinitions.MaxCodeAttempts) - invitation.OtpFailedAttempts;
+                    if (attemptsRemaining <= 0)
+                    {
+                        // Too many wrong guesses: cancel this code so it cannot be brute-forced.
+                        invitation.OtpCodeHash = string.Empty;
+                        invitation.OtpExpiryTimeStamp = DateTimeOffset.UtcNow;
+                        await _context.SaveChangesAsync();
+                        _logger.LogWarning("Institution code cancelled after too many incorrect attempts for invitation {InvitationId}.", invitation.InvitationId);
+                        return BadRequest(new { error = "Too many incorrect codes. Request a new code to try again.", attemptsRemaining = 0 });
+                    }
+
+                    await _context.SaveChangesAsync();
+                    return BadRequest(new
+                    {
+                        error = $"Incorrect code. {attemptsRemaining} attempt{(attemptsRemaining == 1 ? "" : "s")} left.",
+                        attemptsRemaining
+                    });
                 }
 
                 invitation.IsUsed = true;
@@ -177,7 +211,7 @@ namespace FourierIT_API.Controllers
                 invitation.OtpExpiryTimeStamp = DateTimeOffset.UtcNow;
 
                 var sessionToken = GenerateSessionToken();
-                var expiresAt = DateTimeOffset.UtcNow.AddMinutes(await GetSettingMinutesAsync("InstitutionSessionTimeoutMinutes", 480));
+                var expiresAt = DateTimeOffset.UtcNow.AddMinutes(await _settings.GetAsync(SystemSettingDefinitions.InstitutionSessionTimeoutMinutes));
 
                 // Store session token in database
                 var sessionRecord = new InstitutionSessionToken
@@ -222,20 +256,24 @@ namespace FourierIT_API.Controllers
 
             if (invitation.IsUsed)
             {
-                return BadRequest(new { error = "This invitation has already been used." });
+                return BadRequest(new { error = "This invitation has already been used.", reason = "used", institutionId = invitation.InstitutionId });
             }
 
-            var otpCode = GenerateOtpCode();
-            invitation.OtpCodeHash = HashValue(otpCode);
-            invitation.OtpExpiryTimeStamp = DateTimeOffset.UtcNow.AddMinutes(await GetSettingMinutesAsync("InstitutionOtpExpiryMinutes", 10));
-            invitation.OtpSendCount += 1;
-            await _context.SaveChangesAsync();
+            var unusable = await CheckInvitationUsableAsync(invitation);
+            if (unusable != null) return unusable;
+
+            var wait = await ResendWaitAsync(invitation);
+            if (wait > TimeSpan.Zero)
+                return TooSoon(wait, "requesting another code");
+
+            var otpCode = await IssueOtpAsync(invitation);
 
             try
             {
                 await _emailService.SendInstitutionOtpEmailAsync(invitation.Email, invitation.Institution?.InstitutionName ?? string.Empty, otpCode, invitation.OtpExpiryTimeStamp);
-                _logger.LogInformation("OTP resent for institution invitation {InvitationId}. Email={Email}, otp={Otp}",
-                    invitation.InvitationId, invitation.Email, otpCode);
+                // Never log the code itself: anyone who can read the logs could use it to sign in.
+                _logger.LogInformation("OTP resent for institution invitation {InvitationId}. Email={Email}",
+                    invitation.InvitationId, invitation.Email);
             }
             catch (Exception ex)
             {
@@ -265,7 +303,13 @@ namespace FourierIT_API.Controllers
             if (existingInvitation == null)
                 return BadRequest(new { error = "No active invitation found for this institution." });
 
-            // Keep existing invitations valid. New tokens are additional permanent invite links.
+            // Anyone can call this, so limit how often a new link can be emailed.
+            var cooldown = TimeSpan.FromSeconds(await _settings.GetAsync(SystemSettingDefinitions.CodeResendCooldownSeconds));
+            var linkWait = cooldown - (DateTimeOffset.UtcNow - existingInvitation.CreatedAt);
+            if (linkWait > TimeSpan.Zero)
+                return TooSoon(linkWait, "requesting another link");
+
+            // Earlier links stay usable until they expire or are revoked.
             var tokenString = GenerateTokenString();
             var now = DateTimeOffset.UtcNow;
             var newInvitation = new InstitutionInvitation
@@ -274,7 +318,7 @@ namespace FourierIT_API.Controllers
                 Email = existingInvitation.Email,
                 TokenString = tokenString,
                 OtpCodeHash = string.Empty,
-                TokenExpiryTimeStamp = DateTimeOffset.MaxValue,
+                TokenExpiryTimeStamp = now.AddDays(await _settings.GetAsync(SystemSettingDefinitions.InstitutionInvitationExpiryDays)),
                 OtpExpiryTimeStamp = now,
                 IsRevoked = false,
                 IsUsed = false,
@@ -289,8 +333,9 @@ namespace FourierIT_API.Controllers
             try
             {
                 await _emailService.SendInvitationEmailAsync(newInvitation.Email, existingInvitation.Institution?.InstitutionName ?? string.Empty, accessLink, newInvitation.TokenExpiryTimeStamp);
-                _logger.LogInformation("New institution invitation email sent for institution {InstitutionId}. Email={Email}, token={Token}",
-                    existingInvitation.InstitutionId, newInvitation.Email, tokenString);
+                // Never log the access token: anyone who can read the logs could use the link.
+                _logger.LogInformation("New institution invitation email sent for institution {InstitutionId}. Email={Email}",
+                    existingInvitation.InstitutionId, newInvitation.Email);
             }
             catch (Exception ex)
             {
@@ -301,15 +346,54 @@ namespace FourierIT_API.Controllers
             return Ok(new { AccessToken = tokenString });
         }
 
-        private async Task<int> GetSettingMinutesAsync(string key, int fallback)
+        /// <summary>Refuses revoked or expired invitation links; returns null when the link can be used.</summary>
+        private async Task<IActionResult?> CheckInvitationUsableAsync(InstitutionInvitation invitation)
         {
-            var setting = await _context.SystemSettings
-                .AsNoTracking()
-                .SingleOrDefaultAsync(item => item.Key == key);
+            if (invitation.IsRevoked)
+                return BadRequest(new { error = "This invitation link has been revoked. Request a new link.", reason = "revoked" });
 
-            return int.TryParse(setting?.Value, out var minutes) && minutes > 0
-                ? minutes
-                : fallback;
+            // Links created before expiry was introduced were stored without one; they expire the same way,
+            // counted from when they were created.
+            var expiresAt = invitation.TokenExpiryTimeStamp == DateTimeOffset.MaxValue
+                ? invitation.CreatedAt.AddDays(await _settings.GetAsync(SystemSettingDefinitions.InstitutionInvitationExpiryDays))
+                : invitation.TokenExpiryTimeStamp;
+
+            return expiresAt <= DateTimeOffset.UtcNow
+                ? BadRequest(new { error = "This invitation link has expired. Request a new link.", reason = "expired", institutionId = invitation.InstitutionId })
+                : null;
+        }
+
+        /// <summary>How long until another code may be emailed for this invitation (zero when allowed now).</summary>
+        private async Task<TimeSpan> ResendWaitAsync(InstitutionInvitation invitation)
+        {
+            if (invitation.OtpLastSentAt == null) return TimeSpan.Zero;
+            var cooldown = TimeSpan.FromSeconds(await _settings.GetAsync(SystemSettingDefinitions.CodeResendCooldownSeconds));
+            var wait = cooldown - (DateTimeOffset.UtcNow - invitation.OtpLastSentAt.Value);
+            return wait > TimeSpan.Zero ? wait : TimeSpan.Zero;
+        }
+
+        /// <summary>Creates a fresh code for the invitation, resetting the wrong-attempt count.</summary>
+        private async Task<string> IssueOtpAsync(InstitutionInvitation invitation)
+        {
+            var otpCode = GenerateOtpCode();
+            var now = DateTimeOffset.UtcNow;
+            invitation.OtpCodeHash = HashValue(otpCode);
+            invitation.OtpExpiryTimeStamp = now.AddMinutes(await _settings.GetAsync(SystemSettingDefinitions.InstitutionOtpExpiryMinutes));
+            invitation.OtpFailedAttempts = 0;
+            invitation.OtpLastSentAt = now;
+            invitation.OtpSendCount += 1;
+            await _context.SaveChangesAsync();
+            return otpCode;
+        }
+
+        private ObjectResult TooSoon(TimeSpan wait, string action)
+        {
+            var seconds = (int)Math.Ceiling(wait.TotalSeconds);
+            return StatusCode(StatusCodes.Status429TooManyRequests, new
+            {
+                error = $"Please wait {seconds} seconds before {action}.",
+                retryAfterSeconds = seconds
+            });
         }
 
         private static string GenerateTokenString()

@@ -68,9 +68,15 @@ public class DocumentValidityPolicyService
 
         if (_context.Database.IsRelational())
         {
-            using var transaction = await _context.Database.BeginTransactionAsync();
-            await ApplyValidityChangesAsync(documentType, documents, request, now, actingUserId, oldSettings, summary);
-            await transaction.CommitAsync();
+            // The database connection retries on transient failures, and EF Core only allows a manual
+            // transaction when it runs inside that retry strategy (otherwise the save throws every time).
+            var strategy = _context.Database.CreateExecutionStrategy();
+            await strategy.ExecuteAsync(async () =>
+            {
+                await using var transaction = await _context.Database.BeginTransactionAsync();
+                await ApplyValidityChangesAsync(documentType, documents, request, now, actingUserId, oldSettings, summary);
+                await transaction.CommitAsync();
+            });
             return summary;
         }
 

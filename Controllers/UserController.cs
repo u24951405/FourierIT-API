@@ -10,6 +10,10 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.AspNetCore.DataProtection;
+using FourierIT_API.Services;
 using System.Linq.Expressions;
 using System.Net;
 using System.Security.Claims;
@@ -34,6 +38,10 @@ namespace FourierIT_API.Controllers
         private readonly IAuditLogService _auditLogService;
         private readonly IEmailService _emailService;
         private readonly IFileScanService _fileScanService;
+        private readonly IAuthorizationService? _authorizationService;
+        private readonly ILogger<UserController> _logger;
+        private readonly ISystemSettingsService _settings;
+        private readonly ITimeLimitedDataProtector? _resetLinkProtector;
 
         public UserController(
             UserManager<User> userManager,
@@ -45,7 +53,11 @@ namespace FourierIT_API.Controllers
             IConfiguration configuration,
             IAuditLogService auditLogService,
             IEmailService emailService,
-            IFileScanService fileScanService)
+            IFileScanService fileScanService,
+            IAuthorizationService? authorizationService = null,
+            ILogger<UserController>? logger = null,
+            ISystemSettingsService? settings = null,
+            IDataProtectionProvider? dataProtection = null)
         {
             _userManager = userManager;
             _tokenService = tokenService;
@@ -57,6 +69,10 @@ namespace FourierIT_API.Controllers
             _auditLogService = auditLogService;
             _emailService = emailService;
             _fileScanService = fileScanService;
+            _authorizationService = authorizationService;
+            _logger = logger ?? NullLogger<UserController>.Instance;
+            _settings = settings ?? new SystemSettingsService(context);
+            _resetLinkProtector = dataProtection?.CreateProtector("FourierIT.PasswordResetLink").ToTimeLimitedDataProtector();
         }
 
         [AllowAnonymous]
@@ -176,8 +192,15 @@ namespace FourierIT_API.Controllers
                     ? BuildProfileImageUrl(user.Id)
                     : null,
                 DepartmentId = user.DepartmentId,
-                DepartmentName = department?.DepartmentName
+                DepartmentName = department?.DepartmentName,
+                EntityTypeId = user.EntityTypeId,
+                MaskedIdentificationNumber = MaskIdentificationNumber(user.EntityIdentificationNumber),
+                DateOfBirthFromIdNumber = TryGetIdDateOfBirth(user, out _)
             };
+
+            // Show the date of birth from the ID number even if an older profile stored something else.
+            if (TryGetIdDateOfBirth(user, out var idDateOfBirth))
+                dto.DateOfBirth = idDateOfBirth;
 
             return Ok(dto);
         }
@@ -291,6 +314,19 @@ namespace FourierIT_API.Controllers
 
         private async Task<User?> ResolveCurrentUserAsync()
         {
+            // Resolve by user id first: it never changes, whereas the email in an older token may now belong to
+            // someone else after an email change.
+            var userId =
+                User.FindFirstValue(ClaimTypes.NameIdentifier)
+                ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+                ?? User.Claims.FirstOrDefault(c => c.Type.Equals("sub", StringComparison.OrdinalIgnoreCase))?.Value;
+
+            if (!string.IsNullOrWhiteSpace(userId))
+            {
+                var byId = await _userManager.FindByIdAsync(userId);
+                if (byId != null) return byId;
+            }
+
             var email =
                 User.FindFirstValue(ClaimTypes.Email)
                 ?? User.FindFirstValue(JwtRegisteredClaimNames.Email)
@@ -299,18 +335,8 @@ namespace FourierIT_API.Controllers
             if (!string.IsNullOrWhiteSpace(email))
             {
                 // Trim email to handle cases where email has leading/trailing whitespace
-                var trimmedEmail = email.Trim();
-                var byEmail = await _userManager.FindByEmailAsync(trimmedEmail);
-                if (byEmail != null) return byEmail;
+                return await _userManager.FindByEmailAsync(email.Trim());
             }
-
-            var userId =
-                User.FindFirstValue(ClaimTypes.NameIdentifier)
-                ?? User.FindFirstValue(JwtRegisteredClaimNames.Sub)
-                ?? User.Claims.FirstOrDefault(c => c.Type.Equals("sub", StringComparison.OrdinalIgnoreCase))?.Value;
-
-            if (!string.IsNullOrWhiteSpace(userId))
-                return await _userManager.FindByIdAsync(userId);
 
             return null;
         }
@@ -330,10 +356,14 @@ namespace FourierIT_API.Controllers
             }
 
             var token = await _userManager.GeneratePasswordResetTokenAsync(user);
-            var encodedToken = WebUtility.UrlEncode(token);
+            var linkLifetime = TimeSpan.FromMinutes(await _settings.GetAsync(SystemSettingDefinitions.PasswordResetLinkExpiryMinutes));
+            var expiresAt = DateTimeOffset.UtcNow.Add(linkLifetime);
+            // Identity reset tokens last a day by default; sealing the token with the configured lifetime
+            // makes the link stop working when the email says it does.
+            var linkToken = _resetLinkProtector?.Protect(token, linkLifetime) ?? token;
+            var encodedToken = WebUtility.UrlEncode(linkToken);
             var frontendBase = _configuration["EmailSettings:FrontendBaseUrl"]?.TrimEnd('/') ?? "http://localhost:4200";
             var resetLink = $"{frontendBase}/auth/reset-password?email={WebUtility.UrlEncode(email)}&token={encodedToken}";
-            var expiresAt = DateTimeOffset.UtcNow.AddHours(1);
 
             await _emailService.SendPasswordResetEmailAsync(email, resetLink, expiresAt);
 
@@ -354,7 +384,20 @@ namespace FourierIT_API.Controllers
                 return BadRequest(new { error = "Invalid password reset request." });
             }
 
-            var resetResult = await _userManager.ResetPasswordAsync(user, request.Token, request.NewPassword);
+            var resetToken = request.Token;
+            if (_resetLinkProtector != null)
+            {
+                try
+                {
+                    resetToken = _resetLinkProtector.Unprotect(request.Token, out _);
+                }
+                catch (CryptographicException)
+                {
+                    return BadRequest(new { error = "This password reset link has expired or is invalid. Request a new one." });
+                }
+            }
+
+            var resetResult = await _userManager.ResetPasswordAsync(user, resetToken, request.NewPassword);
             if (!resetResult.Succeeded)
             {
                 return BadRequest(new
@@ -458,6 +501,14 @@ namespace FourierIT_API.Controllers
                     || string.Equals(r, "Department Admin", StringComparison.OrdinalIgnoreCase)
                 );
 
+                // Only people who upload documents have an entity. Stakeholders and Compliance Officers
+                // don't, so any entity details sent for them are ignored rather than stored.
+                if (!requiresEntityVerification)
+                {
+                    userDto.EntityTypeId = null;
+                    verificationNumber = null;
+                }
+
                 if (requiresEntityVerification)
                 {
                     if (!userDto.EntityTypeId.HasValue)
@@ -485,6 +536,17 @@ namespace FourierIT_API.Controllers
                         return BadRequest(new { error = expectedLengthMessage });
                     }
 
+                    if (userDto.EntityTypeId.Value == SouthAfricanIdNumber.EntityTypeId)
+                    {
+                        if (!SouthAfricanIdNumber.TryGetDateOfBirth(verificationNumber, out var idDateOfBirth))
+                        {
+                            return BadRequest(new { error = "This South African ID number isn't valid. Check the number and try again." });
+                        }
+
+                        // The date of birth always comes from the ID number, not from what was typed.
+                        userDto.DateOfBirth = idDateOfBirth;
+                    }
+
                     var verificationResult = await _entityVerificationService.VerifyEntityAsync(userDto.EntityTypeId.Value, verificationNumber);
                     if (!verificationResult.IsValid)
                     {
@@ -493,7 +555,7 @@ namespace FourierIT_API.Controllers
                 }
 
                 var otpCode = GenerateOtpCode();
-                var otpExpiry = DateTimeOffset.UtcNow.AddMinutes(15);
+                var otpExpiry = DateTimeOffset.UtcNow.AddMinutes(await _settings.GetAsync(SystemSettingDefinitions.UserOtpExpiryMinutes));
                 var otpHash = HashOtpCode(otpCode);
                 var pending = await _context.PendingRegistrations
                     .FirstOrDefaultAsync(r => r.NormalizedEmail == normalizedEmail);
@@ -503,6 +565,21 @@ namespace FourierIT_API.Controllers
                     _context.PendingRegistrations.Remove(pending);
                     await _context.SaveChangesAsync();
                     pending = null;
+                }
+
+                if (pending != null)
+                {
+                    var cooldown = TimeSpan.FromSeconds(await _settings.GetAsync(SystemSettingDefinitions.CodeResendCooldownSeconds));
+                    var wait = cooldown - (DateTimeOffset.UtcNow - pending.CreatedAt);
+                    if (wait > TimeSpan.Zero)
+                    {
+                        var seconds = (int)Math.Ceiling(wait.TotalSeconds);
+                        return StatusCode(StatusCodes.Status429TooManyRequests, new
+                        {
+                            error = $"We just sent a code to this email. Please wait {seconds} seconds before trying again.",
+                            retryAfterSeconds = seconds
+                        });
+                    }
                 }
 
                 var passwordHash = _userManager.PasswordHasher.HashPassword(new User(), userDto.Password!);
@@ -527,6 +604,7 @@ namespace FourierIT_API.Controllers
                 pending.RequestedRolesJson = JsonSerializer.Serialize(requestedRoles);
                 pending.OtpHash = otpHash;
                 pending.OtpExpiry = otpExpiry;
+                pending.FailedAttempts = 0;
                 pending.CreatedAt = DateTimeOffset.UtcNow;
                 await _context.SaveChangesAsync();
 
@@ -534,8 +612,9 @@ namespace FourierIT_API.Controllers
                 {
                     await _emailService.SendUserRegistrationOtpEmailAsync(pending.Email, otpCode, otpExpiry);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    _logger.LogError(ex, "Failed to send the registration verification email to {Email}", pending.Email);
                     // Keep the pending registration so a corrected SMTP configuration can
                     // retry the same email without creating a partially registered user.
                     return StatusCode(StatusCodes.Status503ServiceUnavailable, new
@@ -585,7 +664,21 @@ namespace FourierIT_API.Controllers
 
             if (!VerifyOtpCode(request.Otp, pending.OtpHash, new User()))
             {
-                return BadRequest(new { error = "The verification code is invalid." });
+                pending.FailedAttempts++;
+                var attemptsRemaining = await _settings.GetAsync(SystemSettingDefinitions.MaxCodeAttempts) - pending.FailedAttempts;
+                if (attemptsRemaining <= 0)
+                {
+                    _context.PendingRegistrations.Remove(pending);
+                    await _context.SaveChangesAsync();
+                    return BadRequest(new { error = "Too many incorrect codes. Please register again to get a new code.", attemptsRemaining = 0 });
+                }
+
+                await _context.SaveChangesAsync();
+                return BadRequest(new
+                {
+                    error = $"The verification code is incorrect. {attemptsRemaining} attempt{(attemptsRemaining == 1 ? "" : "s")} left.",
+                    attemptsRemaining
+                });
             }
 
             var requestedRoles = JsonSerializer.Deserialize<List<string>>(pending.RequestedRolesJson) ?? new List<string>();
@@ -702,6 +795,209 @@ namespace FourierIT_API.Controllers
             return passwordHasher.VerifyHashedPassword(user, storedHash, otpCode) == PasswordVerificationResult.Success;
         }
 
+        // ===== EMAIL CHANGE (confirmed with a one-time code sent to the new address) =====
+
+
+        [Authorize]
+        [HttpPost("me/email-change")]
+        public async Task<IActionResult> RequestEmailChange([FromBody] RequestEmailChangeDto request)
+        {
+            if (!ModelState.IsValid) return BadRequest(ModelState);
+
+            var user = await ResolveCurrentUserAsync();
+            if (user == null) return Unauthorized();
+
+            var now = DateTimeOffset.UtcNow;
+            var newEmail = request.NewEmail.Trim();
+            var normalizedNewEmail = _userManager.NormalizeEmail(newEmail);
+
+            if (string.Equals(user.NormalizedEmail, normalizedNewEmail, StringComparison.Ordinal))
+                return BadRequest(new { error = "This is already your email address." });
+
+            var emailTaken = await _userManager.FindByEmailAsync(newEmail) is { } other && other.Id != user.Id
+                || await _context.PendingRegistrations.AnyAsync(r => r.NormalizedEmail == normalizedNewEmail && r.OtpExpiry > now)
+                || await _context.PendingEmailChanges.AnyAsync(p => p.NormalizedNewEmail == normalizedNewEmail && p.UserId != user.Id && p.OtpExpiry > now);
+            if (emailTaken)
+                return Conflict(new { error = "This email address is already linked to another account. Please use a different email address." });
+
+            var resendCooldown = TimeSpan.FromSeconds(await _settings.GetAsync(SystemSettingDefinitions.CodeResendCooldownSeconds));
+            var pending = await _context.PendingEmailChanges.FirstOrDefaultAsync(p => p.UserId == user.Id);
+            if (pending != null)
+            {
+                var wait = resendCooldown - (now - pending.CreatedAt);
+                if (wait > TimeSpan.Zero)
+                {
+                    var seconds = (int)Math.Ceiling(wait.TotalSeconds);
+                    return StatusCode(StatusCodes.Status429TooManyRequests, new
+                    {
+                        error = $"Please wait {seconds} seconds before requesting another code.",
+                        retryAfterSeconds = seconds
+                    });
+                }
+            }
+            else
+            {
+                pending = new PendingEmailChange { UserId = user.Id };
+                _context.PendingEmailChanges.Add(pending);
+            }
+
+            var otpCode = GenerateOtpCode();
+            var otpExpiry = now.AddMinutes(await _settings.GetAsync(SystemSettingDefinitions.UserOtpExpiryMinutes));
+            pending.NewEmail = newEmail;
+            pending.NormalizedNewEmail = normalizedNewEmail;
+            pending.OtpHash = HashOtpCode(otpCode);
+            pending.OtpExpiry = otpExpiry;
+            pending.FailedAttempts = 0;
+            pending.CreatedAt = now;
+            await _context.SaveChangesAsync();
+
+            try
+            {
+                await _emailService.SendEmailChangeOtpEmailAsync(newEmail, otpCode, otpExpiry);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to send the email-change verification code to {Email}", newEmail);
+                _context.PendingEmailChanges.Remove(pending);
+                await _context.SaveChangesAsync();
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+                {
+                    error = "We could not send the verification email right now. Please try again in a few minutes."
+                });
+            }
+
+            await TryCreateAuditLogAsync(new AuditLog
+            {
+                UserId = user.Id,
+                ActionCode = "EMAIL_CHANGE_REQUESTED",
+                TimeStamp = now,
+                Description = "User requested an email address change; verification code sent to the new address.",
+                TableAffected = "PendingEmailChanges",
+                RecordID = null
+            });
+
+            return Ok(new
+            {
+                message = $"We sent a 6-digit code to {newEmail}.",
+                email = newEmail,
+                expiresAt = otpExpiry,
+                resendAvailableInSeconds = (int)resendCooldown.TotalSeconds
+            });
+        }
+
+        [Authorize]
+        [HttpPost("me/email-change/verify")]
+        public async Task<IActionResult> VerifyEmailChange([FromBody] VerifyEmailChangeDto request)
+        {
+            if (!ModelState.IsValid) return BadRequest(ModelState);
+
+            var user = await ResolveCurrentUserAsync();
+            if (user == null) return Unauthorized();
+
+            var pending = await _context.PendingEmailChanges.FirstOrDefaultAsync(p => p.UserId == user.Id);
+            if (pending == null)
+                return BadRequest(new { error = "There is no email change waiting for confirmation. Request a new code." });
+
+            if (pending.OtpExpiry <= DateTimeOffset.UtcNow)
+            {
+                _context.PendingEmailChanges.Remove(pending);
+                await _context.SaveChangesAsync();
+                return BadRequest(new { error = "The code has expired. Request a new one." });
+            }
+
+            if (!VerifyOtpCode(request.Otp, pending.OtpHash, new User()))
+            {
+                pending.FailedAttempts++;
+                var attemptsRemaining = await _settings.GetAsync(SystemSettingDefinitions.MaxCodeAttempts) - pending.FailedAttempts;
+                if (attemptsRemaining <= 0)
+                {
+                    _context.PendingEmailChanges.Remove(pending);
+                    await _context.SaveChangesAsync();
+                    return BadRequest(new { error = "Too many incorrect codes. Request a new code to try again.", attemptsRemaining = 0 });
+                }
+
+                await _context.SaveChangesAsync();
+                return BadRequest(new
+                {
+                    error = $"The code is incorrect. {attemptsRemaining} attempt{(attemptsRemaining == 1 ? "" : "s")} left.",
+                    attemptsRemaining
+                });
+            }
+
+            // Someone may have taken the address since the code was sent.
+            var owner = await _userManager.FindByEmailAsync(pending.NewEmail);
+            if (owner != null && owner.Id != user.Id)
+            {
+                _context.PendingEmailChanges.Remove(pending);
+                await _context.SaveChangesAsync();
+                return Conflict(new { error = "This email address is already linked to another account. Please use a different email address." });
+            }
+
+            var oldEmail = user.Email;
+            user.Email = pending.NewEmail;
+            user.NormalizedEmail = pending.NormalizedNewEmail;
+            user.EmailConfirmed = true;
+            user.EmailVerified = true;
+
+            var updateResult = await _userManager.UpdateAsync(user);
+            if (!updateResult.Succeeded)
+                return BadRequest(new { error = string.Join(" ", updateResult.Errors.Select(e => e.Description)) });
+
+            _context.PendingEmailChanges.Remove(pending);
+            await _context.SaveChangesAsync();
+
+            if (!string.IsNullOrWhiteSpace(oldEmail))
+            {
+                try
+                {
+                    await _emailService.SendEmailChangedNoticeAsync(oldEmail, user.Email);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to send the email-changed notice to {Email}", oldEmail);
+                    // The change is done; a missed notice must not undo it.
+                }
+            }
+
+            await TryCreateAuditLogAsync(new AuditLog
+            {
+                UserId = user.Id,
+                ActionCode = "EMAIL_CHANGED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = $"User changed their email address from '{oldEmail}' to '{user.Email}' after verifying a code.",
+                TableAffected = "Users",
+                RecordID = null
+            });
+
+            // The old token carries the old email; hand back one with the new address.
+            var token = await _tokenService.CreateTokenAsync(user);
+
+            return Ok(new
+            {
+                message = "Your email address has been updated.",
+                email = user.Email,
+                token
+            });
+        }
+
+        [Authorize]
+        [HttpDelete("me/email-change")]
+        public async Task<IActionResult> CancelEmailChange()
+        {
+            var user = await ResolveCurrentUserAsync();
+            if (user == null) return Unauthorized();
+
+            var pending = await _context.PendingEmailChanges.FirstOrDefaultAsync(p => p.UserId == user.Id);
+            if (pending != null)
+            {
+                // Expire rather than delete, so cancelling cannot be used to skip the resend cooldown.
+                pending.OtpExpiry = DateTimeOffset.UtcNow;
+                await _context.SaveChangesAsync();
+            }
+
+            return NoContent();
+        }
+
         [AllowAnonymous]
         [HttpPost("verify-entity")]
         public async Task<IActionResult> VerifyEntity([FromBody] VerifyEntityRequestDto request)
@@ -771,6 +1067,22 @@ namespace FourierIT_API.Controllers
             }
         }
 
+        /// <summary>True when the user is identified by a valid South African ID number, which fixes their date of birth.</summary>
+        private static bool TryGetIdDateOfBirth(User user, out DateOnly dateOfBirth)
+        {
+            dateOfBirth = default;
+            return user.EntityTypeId == SouthAfricanIdNumber.EntityTypeId
+                && SouthAfricanIdNumber.TryGetDateOfBirth(user.EntityIdentificationNumber, out dateOfBirth);
+        }
+
+        /// <summary>Only the last four characters of an identification number are ever shown.</summary>
+        private static string? MaskIdentificationNumber(string? number)
+        {
+            var value = number?.Trim();
+            if (string.IsNullOrEmpty(value)) return null;
+            return value.Length <= 4 ? new string('•', value.Length) : new string('•', value.Length - 4) + value[^4..];
+        }
+
         private static string? ValidateEntityIdentificationNumber(int entityTypeId, string verificationNumber)
         {
             return entityTypeId switch
@@ -785,7 +1097,7 @@ namespace FourierIT_API.Controllers
             };
         }
 
-        [Authorize(Policy = "Users.Manage")]
+        // Any signed-in user may edit their own profile; editing someone else's also needs Users.Manage (checked below).
         [Authorize]
         [HttpPut("profile/{profileId}")]
         public async Task<IActionResult> UpdateManagedUser([FromRoute] int profileId, [FromBody] UpdateUserManagementRequestDto dto)
@@ -800,6 +1112,10 @@ namespace FourierIT_API.Controllers
             var currentUser = await ResolveCurrentUserAsync();
             var isSelfEdit = currentUser?.Id == user.Id;
             if (!isSelfEdit && !User.IsInRole("Admin") && !User.HasClaim("superadmin", "true"))
+                return Forbid();
+
+            if (!isSelfEdit && _authorizationService != null
+                && !(await _authorizationService.AuthorizeAsync(User, "Users.Manage")).Succeeded)
                 return Forbid();
 
             if (IsSuperAdminUser(user) && currentUser?.Id != user.Id)
@@ -827,7 +1143,7 @@ namespace FourierIT_API.Controllers
             {
                 profile.FirstName = dto.FirstName.Trim();
                 profile.LastName = dto.LastName.Trim();
-                profile.DateOfBirth = dto.DateOfBirth;
+                profile.DateOfBirth = TryGetIdDateOfBirth(user, out var idDateOfBirth) ? idDateOfBirth : dto.DateOfBirth;
                 profile.PhoneNumber = dto.PhoneNumber.Trim();
                 profile.JobTitle = dto.JobTitle.Trim();
             }
@@ -845,7 +1161,10 @@ namespace FourierIT_API.Controllers
 
             var previousRoleText = string.Join(", ", previousRoles);
             var previousStatus = user.AccountStatus;
-            var updatedStatus = string.IsNullOrWhiteSpace(dto.AccountStatus) ? "Active" : dto.AccountStatus.Trim();
+            // Users cannot change their own account status; only someone managing the account can.
+            var updatedStatus = isSelfEdit
+                ? previousStatus
+                : string.IsNullOrWhiteSpace(dto.AccountStatus) ? "Active" : dto.AccountStatus.Trim();
             user.AccountStatus = updatedStatus;
             var userUpdateResult = await _userManager.UpdateAsync(user);
             if (!userUpdateResult.Succeeded) return StatusCode(StatusCodes.Status500InternalServerError, userUpdateResult.Errors);
@@ -985,10 +1304,17 @@ namespace FourierIT_API.Controllers
                 throw new DeletionConflictException("User", user.Id, conflicts);
         }
 
-        [Authorize(Policy = "Users.Manage")]
+        // Listing users is also allowed for Stakeholders, who view the whole system read-only.
+        // Changing users (edit/delete) still requires Users.Manage.
+        [Authorize]
         [HttpGet("all")]
         public async Task<IActionResult> GetAllUsers()
         {
+            var isStakeholderViewer = User.IsInRole("Stakeholder") && !User.IsInRole("Department Admin");
+            if (!isStakeholderViewer && _authorizationService != null
+                && !(await _authorizationService.AuthorizeAsync(User, "Users.Manage")).Succeeded)
+                return Forbid();
+
             var users = await _userManager.Users
                 .AsNoTracking()
                 .ToListAsync();
@@ -1028,7 +1354,10 @@ namespace FourierIT_API.Controllers
                     DepartmentName = departmentName,
                     user.EntityTypeId,
                     EntityTypeName = entityTypeName,
-                    user.EntityIdentificationNumber,
+                    // Read-only viewers only ever see the last four characters of someone's ID number.
+                    EntityIdentificationNumber = isStakeholderViewer
+                        ? MaskIdentificationNumber(user.EntityIdentificationNumber)
+                        : user.EntityIdentificationNumber,
                     Roles = roles,
                     Profile = new
                     {
@@ -1308,6 +1637,20 @@ namespace FourierIT_API.Controllers
             if (targetUser.DepartmentId.HasValue && targetUser.DepartmentId != departmentId)
                 return BadRequest(new { error = "User is already assigned to another department." });
 
+            // A department has only one user (its Department Admin), so clear the current one first;
+            // the database enforces this with a unique index on DepartmentId.
+            var departmentAdminUsers = await _userManager.Users
+                .Where(u => u.DepartmentId == departmentId && u.Id != targetUser.Id)
+                .ToListAsync();
+
+            foreach (var departmentAdminUser in departmentAdminUsers)
+            {
+                departmentAdminUser.DepartmentId = null;
+                var formerAdminUpdateResult = await _userManager.UpdateAsync(departmentAdminUser);
+                if (!formerAdminUpdateResult.Succeeded)
+                    return StatusCode(StatusCodes.Status500InternalServerError, formerAdminUpdateResult.Errors);
+            }
+
             // Ensure user is assigned to department
             var departmentChanged = !targetUser.DepartmentId.HasValue || targetUser.DepartmentId != departmentId;
             if (departmentChanged)
@@ -1325,18 +1668,6 @@ namespace FourierIT_API.Controllers
                     _context.ComplianceStatuses.Update(complianceStatus);
                     await _context.SaveChangesAsync();
                 }
-            }
-
-            var departmentAdminUsers = await _userManager.Users
-                .Where(u => u.DepartmentId == departmentId && u.Id != targetUser.Id)
-                .ToListAsync();
-
-            foreach (var departmentAdminUser in departmentAdminUsers)
-            {
-                departmentAdminUser.DepartmentId = null;
-                var formerAdminUpdateResult = await _userManager.UpdateAsync(departmentAdminUser);
-                if (!formerAdminUpdateResult.Succeeded)
-                    return StatusCode(StatusCodes.Status500InternalServerError, formerAdminUpdateResult.Errors);
             }
 
             // Remove any existing Department Admin role

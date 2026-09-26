@@ -1,6 +1,7 @@
 using FourierIT_API.Data;
 using FourierIT_API.DTOs;
 using FourierIT_API.Models;
+using FourierIT_API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -19,39 +20,66 @@ public class SystemSettingsController : ControllerBase
         _context = context;
     }
 
+    /// <summary>All configurable timers and limits, in display order, with their current values.</summary>
     [HttpGet]
     public async Task<ActionResult<List<SystemSettingDto>>> GetAll()
     {
-        return Ok(await _context.SystemSettings
+        var stored = await _context.SystemSettings
             .AsNoTracking()
-            .OrderBy(setting => setting.Key)
-            .Select(setting => new SystemSettingDto
-            {
-                Key = setting.Key,
-                Value = setting.Value,
-                Description = setting.Description
-            })
-            .ToListAsync());
+            .ToDictionaryAsync(setting => setting.Key, setting => setting.Value, StringComparer.OrdinalIgnoreCase);
+
+        return Ok(SystemSettingDefinitions.All
+            .Select(definition => ToDto(definition, stored.GetValueOrDefault(definition.Key)))
+            .ToList());
     }
 
     [HttpPut("{key}")]
     public async Task<ActionResult<SystemSettingDto>> Update(string key, UpdateSystemSettingRequest request)
     {
-        if (!int.TryParse(request.Value, out var value) || value < 1 || value > 1440)
-            return BadRequest(new { error = "The setting must be a whole number between 1 and 1440." });
-
-        var setting = await _context.SystemSettings.FindAsync(key);
-        if (setting == null)
+        var definition = SystemSettingDefinitions.Find(key);
+        if (definition == null)
             return NotFound(new { error = "System setting not found." });
+
+        if (!int.TryParse(request.Value, out var value) || value < definition.Min || value > definition.Max)
+        {
+            return BadRequest(new
+            {
+                error = $"{definition.Title} must be a whole number from {definition.Min} to {definition.Max} {UnitLabel(definition.Unit)}."
+            });
+        }
+
+        var setting = await _context.SystemSettings.FindAsync(definition.Key);
+        if (setting == null)
+        {
+            setting = new SystemSetting { Key = definition.Key, Description = definition.Description };
+            _context.SystemSettings.Add(setting);
+        }
 
         setting.Value = value.ToString();
         await _context.SaveChangesAsync();
 
-        return Ok(new SystemSettingDto
-        {
-            Key = setting.Key,
-            Value = setting.Value,
-            Description = setting.Description
-        });
+        return Ok(ToDto(definition, setting.Value));
     }
+
+    private static SystemSettingDto ToDto(SystemSettingDefinition definition, string? storedValue)
+    {
+        var value = int.TryParse(storedValue, out var parsed)
+            ? Math.Clamp(parsed, definition.Min, definition.Max)
+            : definition.Default;
+
+        return new SystemSettingDto
+        {
+            Key = definition.Key,
+            Value = value.ToString(),
+            Description = definition.Description,
+            Category = definition.Category,
+            Title = definition.Title,
+            Unit = definition.Unit.ToString().ToLowerInvariant(),
+            Min = definition.Min,
+            Max = definition.Max,
+            Default = definition.Default
+        };
+    }
+
+    private static string UnitLabel(SettingUnit unit) => unit == SettingUnit.Count ? "attempts" : unit.ToString().ToLowerInvariant();
 }

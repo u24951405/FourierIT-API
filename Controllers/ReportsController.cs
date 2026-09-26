@@ -52,7 +52,7 @@ namespace FourierIT_API.Controllers
                 .Where(document => document.CurrentStatus != "Deleted")
                 .Select(document => document.FileSizeBytes)
                 .ToListAsync();
-            var complianceStatuses = await _context.ComplianceStatuses.AsNoTracking()
+            var complianceStatuses = await ComplianceStatusesOfDocumentUploaders()
                 .Where(status => status.LastChecked >= start && status.LastChecked < endExclusive)
                 .ToListAsync();
             var auditLogs = await _context.AuditLogs.AsNoTracking()
@@ -447,7 +447,7 @@ namespace FourierIT_API.Controllers
 
             if (normalizedFocusAreas.Any(focus => focus is "COMPLIANCE" or "COMPLIANCE_STATUS" or "COMPLIANCE_STATUSES"))
             {
-                result.ComplianceResults = await _context.ComplianceStatuses.AsNoTracking()
+                result.ComplianceResults = await ComplianceStatusesOfDocumentUploaders()
                     .Where(status => status.LastChecked >= report.DateFrom && status.LastChecked < report.DateTo.Date.AddDays(1))
                     .OrderBy(status => status.LastChecked)
                     .Select(status => new AdHocComplianceResultDto
@@ -664,9 +664,24 @@ namespace FourierIT_API.Controllers
                 .ToListAsync();
         }
 
+        /// <summary>
+        /// Compliance records of people who upload documents. Stakeholders and Compliance Officers are left out,
+        /// including any record left over from before a role change.
+        /// </summary>
+        private IQueryable<ComplianceStatus> ComplianceStatusesOfDocumentUploaders()
+        {
+            var uploaderRoleNames = ComplianceService.DocumentUploaderRoles.Select(role => role.ToUpperInvariant()).ToList();
+            var uploaderIds = _context.UserRoles
+                .Join(_context.Roles, userRole => userRole.RoleId, role => role.Id, (userRole, role) => new { userRole.UserId, role.NormalizedName })
+                .Where(joined => joined.NormalizedName != null && uploaderRoleNames.Contains(joined.NormalizedName))
+                .Select(joined => joined.UserId);
+
+            return _context.ComplianceStatuses.AsNoTracking().Where(status => uploaderIds.Contains(status.UserId));
+        }
+
         private async Task AddComplianceResultsSheetAsync(XLWorkbook workbook, AdHocReport report)
         {
-            var statuses = await _context.ComplianceStatuses.AsNoTracking()
+            var statuses = await ComplianceStatusesOfDocumentUploaders()
                 .Where(status => status.LastChecked >= report.DateFrom && status.LastChecked < report.DateTo.Date.AddDays(1))
                 .OrderBy(status => status.LastChecked)
                 .ToListAsync();

@@ -46,5 +46,6 @@ namespace FourierIT_API.DTOs.Document
         public long FileSizeBytes { get; set; }
         public bool UserCanView { get; set; }
         public bool UserCanDownload { get; set; }
+        public bool UserCanDelete { get; set; }
     }
 }

@@ -138,10 +138,10 @@ namespace FourierIT.API.Tests
                 .FirstOrDefault();
 
             Assert.NotNull(constructor);
-            var parameters = constructor.GetParameters();
-            
-            // Should have 10 parameters
-            Assert.Equal(10, parameters.Length);
+            var requiredParameters = constructor.GetParameters().Where(p => !p.IsOptional).ToArray();
+
+            // Should have 10 required parameters (optional ones, like IAuthorizationService, are resolved when registered)
+            Assert.Equal(10, requiredParameters.Length);
         }
 
         [Fact]

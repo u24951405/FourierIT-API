@@ -265,8 +265,21 @@ public class DocumentAccessRequestUploadRequirementTests
         context.DocumentTypes.Add(idType);
         context.Documents.Add(uploadedDocument);
         context.InstitutionEnquiryRequests.Add(request);
+        var complianceStatus = new ComplianceStatus { UserId = owner.Id, User = owner };
+        context.ComplianceStatuses.Add(complianceStatus);
         context.InstitutionRequestedDocumentTypes.Add(
             new InstitutionRequestedDocumentType { EnquiryRequestId = request.EnquiryRequestId, DocumentTypeId = idType.DocumentTypeId, FICARuleId = 0, isMandatory = true });
+        await context.SaveChangesAsync();
+        context.DocumentComplianceChecks.Add(new DocumentComplianceCheck
+        {
+            CheckId = 1,
+            DocumentId = uploadedDocument.DocumentId,
+            ComplianceStatusId = complianceStatus.ComplianceStatusId,
+            CheckStatus = "Compliant",
+            RequiresManualReview = true,
+            IsManuallyApproved = true,
+            ManualReviewDate = DateTime.UtcNow
+        });
         await context.SaveChangesAsync();
 
         var controller = CreateController(context, owner);
@@ -277,6 +290,74 @@ public class DocumentAccessRequestUploadRequirementTests
         var updated = await context.InstitutionEnquiryRequests.SingleAsync(r => r.EnquiryRequestId == request.EnquiryRequestId);
         Assert.Equal("Approved", updated.Status);
         Assert.Equal(1, await context.DocumentAccessApprovals.CountAsync());
+    }
+
+    [Fact]
+    public async Task Approve_WhenRequestedDocumentHasNotBeenApprovedByCompliance_ReturnsConflict()
+    {
+        await using var context = CreateContext();
+        var owner = CreateUser("owner-unreviewed", "Owner", "Unreviewed");
+        var institutionType = new InstitutionType { InstitutionTypeId = 903, InstitutionTypeName = "Bank" };
+        var institution = new Institution { InstitutionId = 3, InstitutionName = "Review Institution", VerifiedDomain = "review.test", RegNumber = 1003, TypeId = institutionType.InstitutionTypeId, InstitutionType = institutionType };
+        var documentType = new DocumentType { DocumentTypeId = 907, TypeName = "Proof of Address", Description = "Address document" };
+        var document = new Document
+        {
+            DocumentId = 3,
+            UserId = owner.Id,
+            DocumentTypeId = documentType.DocumentTypeId,
+            FileName = "address.pdf",
+            CurrentStatus = "Uploaded",
+            ExpiryDate = DateTimeOffset.UtcNow.AddYears(1),
+            FileSizeBytes = 10,
+            EncryptionAlgorithm = "AES-256",
+            IsEncrypted = true
+        };
+        var request = new InstitutionEnquiryRequest
+        {
+            EnquiryRequestId = 3,
+            InstitutionId = institution.InstitutionId,
+            RequestType = "Individual",
+            TargetUserId = owner.Id,
+            Status = "Pending",
+            PurposeNote = "Please provide proof of address",
+            RequestDate = DateTimeOffset.UtcNow
+        };
+        var status = new ComplianceStatus { UserId = owner.Id, User = owner };
+
+        context.Users.Add(owner);
+        context.InstitutionTypes.Add(institutionType);
+        context.Institutions.Add(institution);
+        context.DocumentTypes.Add(documentType);
+        context.Documents.Add(document);
+        context.InstitutionEnquiryRequests.Add(request);
+        context.InstitutionRequestedDocumentTypes.Add(new InstitutionRequestedDocumentType
+        {
+            EnquiryRequestId = request.EnquiryRequestId,
+            DocumentTypeId = documentType.DocumentTypeId,
+            FICARuleId = 0,
+            isMandatory = true
+        });
+        context.ComplianceStatuses.Add(status);
+        await context.SaveChangesAsync();
+        context.DocumentComplianceChecks.Add(new DocumentComplianceCheck
+        {
+            CheckId = 2,
+            DocumentId = document.DocumentId,
+            ComplianceStatusId = status.ComplianceStatusId,
+            CheckStatus = "Pending Review",
+            RequiresManualReview = true,
+            IsManuallyApproved = false
+        });
+        await context.SaveChangesAsync();
+
+        var controller = CreateController(context, owner);
+
+        var result = await controller.Approve(request.EnquiryRequestId);
+
+        var conflict = Assert.IsType<ConflictObjectResult>(result);
+        Assert.Contains("Compliance Officer", conflict.Value!.GetType().GetProperty("error")!.GetValue(conflict.Value)!.ToString());
+        Assert.Equal("Pending", (await context.InstitutionEnquiryRequests.SingleAsync()).Status);
+        Assert.Empty(await context.DocumentAccessApprovals.ToListAsync());
     }
 
     private static AppDbContext CreateContext()
@@ -322,6 +403,10 @@ public class DocumentAccessRequestUploadRequirementTests
             .Returns<string>(async id => await context.Users.FirstOrDefaultAsync(u => u.Id == id));
 
         var documentService = new Mock<IDocumentService>();
+        var complianceService = new Mock<IComplianceService>();
+        complianceService
+            .Setup(service => service.CheckUserComplianceAsync(It.IsAny<string>(), It.IsAny<bool>()))
+            .ReturnsAsync((string userId, bool _) => new ComplianceStatus { UserId = userId });
         var departmentValidation = new FourierIT_API.Services.DepartmentRequestValidationService();
         var auditLog = new Mock<IAuditLogService>();
 
@@ -330,7 +415,8 @@ public class DocumentAccessRequestUploadRequirementTests
             userManager.Object,
             documentService.Object,
             departmentValidation,
-            auditLog.Object);
+            auditLog.Object,
+            complianceService.Object);
 
         controller.ControllerContext = new ControllerContext
         {

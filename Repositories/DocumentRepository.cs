@@ -18,7 +18,17 @@ namespace FourierIT_API.Repositories
         public async Task<Document> AddDocumentAsync(Document document)
         {
             _context.Documents.Add(document);
-            await _context.SaveChangesAsync();
+            var previousCommandTimeout = _context.Database.GetCommandTimeout();
+            _context.Database.SetCommandTimeout(120);
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            finally
+            {
+                _context.Database.SetCommandTimeout(previousCommandTimeout);
+            }
+
             return document;
         }
 
@@ -126,7 +136,12 @@ namespace FourierIT_API.Repositories
 
         public async Task UpdateDocumentAsync(Document document)
         {
-            _context.Documents.Update(document);
+            // Documents loaded through this context are already tracked, so SaveChanges writes only what changed.
+            // Update() would mark the whole loaded graph (owner, profile, file blob...) as modified and rewrite all of it,
+            // including the file bytes, on every save, even when only LastAccessedDate changed.
+            if (_context.Entry(document).State == EntityState.Detached)
+                _context.Documents.Update(document);
+
             await _context.SaveChangesAsync();
         }
     }

@@ -217,12 +217,14 @@ public class AuditLogInstitutionAttributionTests : IDisposable
         var documentService = new Mock<IDocumentService>();
         var departmentValidation = new DepartmentRequestValidationService();
         IAuditLogService auditLogService = new AuditLogService(_context);
+        var compliance = new Mock<IComplianceService>();
 
         return new DocumentAccessRequestsController(
             _context,
             userManager.Object,
             documentService.Object,
             departmentValidation,
-            auditLogService);
+            auditLogService,
+            compliance.Object);
     }
 }

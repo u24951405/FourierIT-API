@@ -1,4 +1,5 @@
 using FourierIT_API.Models;
+using FourierIT_API.Services;
 using FourierIT_API.DTOs.Compliance;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
@@ -48,6 +49,7 @@ namespace FourierIT_API.Data
         public DbSet<RequiredDocument> RequiredDocuments { get; set; }
         public DbSet<ClientEnlistment> ClientEnlistments { get; set; }
         public DbSet<PendingRegistration> PendingRegistrations { get; set; }
+        public DbSet<PendingEmailChange> PendingEmailChanges { get; set; }
 
         // FICA Compliance System DbSets
         public DbSet<ComplianceStatus> ComplianceStatuses { get; set; }
@@ -165,19 +167,14 @@ namespace FourierIT_API.Data
                 new { RoleId = "CO", PermissionId = 5 }, new { RoleId = "CO", PermissionId = 8 },
                 new { RoleId = "SH", PermissionId = 1 }, new { RoleId = "SH", PermissionId = 4 });
 
+            // Timers and limits the Super Admin can change on the System Settings page.
             modelBuilder.Entity<SystemSetting>().HasData(
-                new SystemSetting
+                SystemSettingDefinitions.All.Select(definition => new SystemSetting
                 {
-                    Key = "InstitutionOtpExpiryMinutes",
-                    Value = "10",
-                    Description = "Minutes before an institution portal OTP expires."
-                },
-                new SystemSetting
-                {
-                    Key = "InstitutionSessionTimeoutMinutes",
-                    Value = "480",
-                    Description = "Minutes before an institution portal session expires."
-                });
+                    Key = definition.Key,
+                    Value = definition.Default.ToString(),
+                    Description = definition.Description
+                }).ToArray());
 
             modelBuilder.Entity<Department>()
                 .HasOne(d => d.Parent)
@@ -362,6 +359,12 @@ namespace FourierIT_API.Data
                 .HasForeignKey( s => s.CityId)
                 .OnDelete(DeleteBehavior.Restrict);
 
+            // A department has at most one user: its Department Admin.
+            modelBuilder.Entity<User>()
+                .HasIndex(u => u.DepartmentId)
+                .IsUnique()
+                .HasFilter("[DepartmentId] IS NOT NULL");
+
             // Configure User one-to-many relationship with document
             modelBuilder.Entity<User>()
                 .HasMany(u => u.Documents)
@@ -440,6 +443,17 @@ namespace FourierIT_API.Data
                 .WithMany(sq => sq.UserSecurityQuestions)
                 .HasForeignKey(usq => usq.SecurityQuestionId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            // One pending email change per user; it goes away with the user.
+            modelBuilder.Entity<PendingEmailChange>()
+                .HasIndex(pec => pec.UserId)
+                .IsUnique();
+
+            modelBuilder.Entity<PendingEmailChange>()
+                .HasOne(pec => pec.User)
+                .WithMany()
+                .HasForeignKey(pec => pec.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
 
             // Configure UserNotification many-to-many relationship
             modelBuilder.Entity<UserNotification>()

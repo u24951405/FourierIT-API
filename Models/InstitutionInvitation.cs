@@ -31,6 +31,12 @@ namespace FourierIT_API.Models
         public bool IsUsed { get; set; } = false;
 
         public int OtpSendCount { get; set; } = 0;
+
+        // Wrong codes entered for the current code; reset whenever a new code is sent.
+        public int OtpFailedAttempts { get; set; } = 0;
+
+        // When the current code was emailed, used to limit how often codes can be resent.
+        public DateTimeOffset? OtpLastSentAt { get; set; }
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     }
 }

@@ -15,5 +15,13 @@ namespace FourierIT_API.DTOs.Department
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
         public string DepartmentName { get; set; } = string.Empty;
+
+        // A department's only user is its Department Admin (null when none is assigned).
+        public string? AdminUserId { get; set; }
+        public string? AdminName { get; set; }
+        public string? AdminEmail { get; set; }
+
+        // Documents uploaded by the department (i.e. by its Department Admin), excluding deleted ones.
+        public int DocumentCount { get; set; }
     }
 }

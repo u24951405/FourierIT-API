@@ -23,6 +23,10 @@ namespace FourierIT_API.Services
         private readonly INotificationService _notificationService;
         private readonly IAuditLogService _auditLogService;
         private readonly DocumentValidityCalculator _documentValidityCalculator;
+        private readonly IInAppNotificationService? _inAppNotifications;
+
+        // Marks checks created only so a replaced file reaches the review queue; they are excluded from compliance counts.
+        private const string ReviewOnlyCheckDetails = "Review only: replaced file outside required documents";
 
         public ComplianceService(
             AppDbContext context,
@@ -30,7 +34,8 @@ namespace FourierIT_API.Services
             ILogger<ComplianceService> logger,
             IAuditLogService auditLogService,
             INotificationService? notificationService = null,
-            DocumentValidityCalculator? documentValidityCalculator = null)
+            DocumentValidityCalculator? documentValidityCalculator = null,
+            IInAppNotificationService? inAppNotifications = null)
         {
             _context = context;
             _userManager = userManager;
@@ -38,6 +43,32 @@ namespace FourierIT_API.Services
             _auditLogService = auditLogService;
             _notificationService = notificationService ?? new NullNotificationService();
             _documentValidityCalculator = documentValidityCalculator ?? new DocumentValidityCalculator();
+            _inAppNotifications = inAppNotifications;
+        }
+
+        // ===== WHO COMPLIANCE APPLIES TO =====
+
+        /// <summary>Shown for users who don't upload documents (Stakeholders, Compliance Officers, the Super Admin).</summary>
+        public const string NotApplicableStatus = "Not Applicable";
+
+        /// <summary>
+        /// Only these roles upload documents, so only they are checked for FICA document compliance
+        /// (also used by the reports, so both agree on who compliance applies to).
+        /// </summary>
+        public static readonly IReadOnlyList<string> DocumentUploaderRoles = new[] { "Document Owner", "Department Admin" };
+
+        private async Task<bool> UploadsDocumentsAsync(User user)
+        {
+            var roles = await _userManager.GetRolesAsync(user);
+            return roles.Any(role => DocumentUploaderRoles.Contains(role, StringComparer.OrdinalIgnoreCase));
+        }
+
+        private async Task<HashSet<string>> GetDocumentUploaderIdsAsync()
+        {
+            var ids = new HashSet<string>();
+            foreach (var role in DocumentUploaderRoles)
+                ids.UnionWith((await _userManager.GetUsersInRoleAsync(role)).Select(u => u.Id));
+            return ids;
         }
 
         // ===== MAIN COMPLIANCE CHECK =====
@@ -62,6 +93,19 @@ namespace FourierIT_API.Services
             var user = await _userManager.FindByIdAsync(userId) 
                 ?? throw new Exception($"User {userId} not found");
 
+            // Stakeholders, Compliance Officers (and the Super Admin) don't upload documents, so FICA document
+            // compliance doesn't apply to them: no record, alerts or history are created.
+            if (!await UploadsDocumentsAsync(user))
+            {
+                return new ComplianceStatus
+                {
+                    UserId = userId,
+                    OverallStatus = NotApplicableStatus,
+                    LastChecked = DateTime.UtcNow,
+                    LastUpdated = DateTime.UtcNow
+                };
+            }
+
             var status = await _context.ComplianceStatuses
                 .Include(cs => cs.DocumentChecks)
                 .FirstOrDefaultAsync(cs => cs.UserId == userId) 
@@ -78,6 +122,28 @@ namespace FourierIT_API.Services
             var previousComplianceScore = status.ComplianceScore;
 
             var requiredDocs = await GetRequiredDocumentsForUserAsync(user);
+            var requestedDocumentTypeIds = await GetPendingInstitutionDocumentTypeIdsAsync(user);
+            var includedDocumentTypeIds = requiredDocs.Select(document => document.DocumentTypeId).ToHashSet();
+
+            foreach (var documentTypeId in requestedDocumentTypeIds.Where(id => !includedDocumentTypeIds.Contains(id)))
+            {
+                var documentType = await _context.DocumentTypes
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(type => type.DocumentTypeId == documentTypeId);
+
+                if (documentType != null)
+                {
+                    requiredDocs.Add(new RequiredDocument
+                    {
+                        EntityTypeId = user.EntityTypeId ?? 1,
+                        DocumentTypeId = documentTypeId,
+                        DocumentType = documentType,
+                        IsMandatory = true,
+                        Description = "Requested by an institution and requires compliance review."
+                    });
+                }
+            }
+
             var userDocs = await _context.Documents
                 .AsNoTracking()
                 .Where(d => d.UserId == userId && d.CurrentStatus != "Deleted")
@@ -159,10 +225,40 @@ namespace FourierIT_API.Services
                     await _context.SaveChangesAsync();
                 }
 
+                if (requestedDocumentTypeIds.Contains(doc.DocumentTypeId) && !doc.IsManualOverrideActive)
+                {
+                    check.CheckStatus = "Pending Review";
+                    check.RequiresManualReview = true;
+                    check.IsManuallyApproved = false;
+                    check.ManualReviewReason = "This document was requested by an institution and must be reviewed by a Compliance Officer before the request can be approved.";
+                }
+
+                // A replaced file needs a Compliance Officer, even if the automatic checks pass.
+                if (!doc.IsManualOverrideActive && string.Equals(doc.CurrentStatus, "Under Review", StringComparison.OrdinalIgnoreCase))
+                {
+                    check.CheckStatus = "Pending Review";
+                    check.RequiresManualReview = true;
+                    check.IsManuallyApproved = false;
+                    check.ManualReviewReason = "The owner replaced this file. Review the new file.";
+                }
+
+                // A rejected document stays rejected (and out of the review queue) until the owner replaces it.
+                if (!doc.IsManualOverrideActive && string.Equals(doc.CurrentStatus, "Rejected", StringComparison.OrdinalIgnoreCase))
+                {
+                    check.CheckStatus = "Non-Compliant";
+                    check.RequiresManualReview = false;
+                    check.IsManuallyApproved = false;
+                    check.NonComplianceReason = doc.ManualOverrideReason ?? "Rejected by a Compliance Officer.";
+                    check.ManuallyReviewedBy = doc.ManualOverrideBy;
+                    check.ManualReviewDate = doc.ManualOverrideAt;
+                }
+
                 status.DocumentChecks.Add(check);
 
                 if (check.CheckStatus == "Compliant")
                     status.CompliantDocuments++;
+                else if (check.CheckStatus == "Pending Review")
+                    status.PendingReviewDocuments++;
                 else
                 {
                     status.NonCompliantDocuments++;
@@ -173,8 +269,37 @@ namespace FourierIT_API.Services
                         status.NotCertifiedDocuments++;
                 }
 
-                if (check.RequiresManualReview && !check.IsManuallyApproved)
+                if (check.RequiresManualReview && !check.IsManuallyApproved && check.CheckStatus != "Pending Review")
                     status.PendingReviewDocuments++;
+            }
+
+            // Replaced files the loop above did not cover (a type that is not required, or a second document of the
+            // same type) still need a Compliance Officer. These checks only feed the review queue: they are not
+            // counted, so they do not change the user's compliance percentage, score or risk.
+            var checkedDocumentIds = status.DocumentChecks.Select(c => c.DocumentId).ToHashSet();
+            var reviewCheckTime = DateTimeOffset.UtcNow;
+            foreach (var doc in userDocs.Where(d =>
+                         !d.IsManualOverrideActive
+                         && string.Equals(d.CurrentStatus, "Under Review", StringComparison.OrdinalIgnoreCase)
+                         && !checkedDocumentIds.Contains(d.DocumentId)))
+            {
+                status.DocumentChecks.Add(new DocumentComplianceCheck
+                {
+                    DocumentId = doc.DocumentId,
+                    ComplianceStatusId = status.ComplianceStatusId,
+                    CheckStatus = "Pending Review",
+                    RequiresManualReview = true,
+                    IsManuallyApproved = false,
+                    ManualReviewReason = "The owner replaced this file. Review the new file.",
+                    IsExpiryValid = doc.ExpiryDate > reviewCheckTime,
+                    ExpiryCheckDate = reviewCheckTime.UtcDateTime,
+                    DaysUntilExpiry = (int)Math.Min((doc.ExpiryDate - reviewCheckTime).TotalDays, int.MaxValue),
+                    IsCertified = doc.IsCertified,
+                    IsEncrypted = doc.IsEncrypted,
+                    CheckedAt = reviewCheckTime.UtcDateTime,
+                    DocumentTypeId = doc.DocumentTypeId,
+                    Details = ReviewOnlyCheckDetails
+                });
             }
 
             // Calculate scores
@@ -379,10 +504,14 @@ namespace FourierIT_API.Services
 
         public async Task<ComplianceDashboardDto> GetSystemDashboardAsync()
         {
-            var totalUsers = await _userManager.Users.CountAsync();
-            var statuses = await _context.ComplianceStatuses
+            // Only people who upload documents are counted; records left from a role change are ignored.
+            var uploaderIds = await GetDocumentUploaderIdsAsync();
+            var totalUsers = uploaderIds.Count;
+            var statuses = (await _context.ComplianceStatuses
                 .AsNoTracking()
-                .ToListAsync();
+                .ToListAsync())
+                .Where(s => uploaderIds.Contains(s.UserId))
+                .ToList();
 
             var dashboard = new ComplianceDashboardDto
             {
@@ -1036,6 +1165,7 @@ namespace FourierIT_API.Services
             check.ManuallyReviewedBy = approvedBy;
             check.ManualReviewDate = approvalTime;
 
+            document.CurrentStatus = "Approved";
             document.IsManualOverrideActive = true;
             document.ManualOverrideBy = approvedBy;
             document.ManualOverrideAt = approvalTime;
@@ -1058,6 +1188,8 @@ namespace FourierIT_API.Services
             await GenerateAlertsAsync(updatedStatus);
 
             _logger.LogInformation($"Document check {checkId} approved by {approvedBy}");
+
+            await NotifyReviewOutcomeAsync(document, approved: true, notes);
 
             return true;
         }
@@ -1085,16 +1217,22 @@ namespace FourierIT_API.Services
             if (document == null)
                 throw new Exception($"Document for check {checkId} not found");
 
+            var rejectionTime = DateTime.UtcNow;
+
             check.CheckStatus = "Non-Compliant";
+            check.RequiresManualReview = false;
             check.IsManuallyApproved = false;
             check.NonComplianceReason = reason;
             check.ManuallyReviewedBy = rejectedBy;
-            check.ManualReviewDate = DateTime.UtcNow;
+            check.ManualReviewDate = rejectionTime;
 
+            // The rejection is persisted on the document because compliance checks are rebuilt on every
+            // recalculation. With the override inactive, the ManualOverride* fields record who rejected it and why.
+            document.CurrentStatus = "Rejected";
             document.IsManualOverrideActive = false;
-            document.ManualOverrideBy = null;
-            document.ManualOverrideAt = null;
-            document.ManualOverrideReason = null;
+            document.ManualOverrideBy = rejectedBy;
+            document.ManualOverrideAt = rejectionTime;
+            document.ManualOverrideReason = reason;
 
             _context.DocumentComplianceChecks.Update(check);
             _context.Documents.Update(document);
@@ -1114,7 +1252,72 @@ namespace FourierIT_API.Services
 
             _logger.LogInformation($"Document check {checkId} rejected by {rejectedBy}");
 
+            await NotifyReviewOutcomeAsync(document, approved: false, reason);
+
             return true;
+        }
+
+        /// <summary>
+        /// Tells the document's uploader and the department admins of their department about a review decision.
+        /// A notification failure never undoes the decision itself.
+        /// </summary>
+        private async Task NotifyReviewOutcomeAsync(Document document, bool approved, string? reason)
+        {
+            if (_inAppNotifications == null) return;
+
+            try
+            {
+                var owner = await _userManager.Users
+                    .AsNoTracking()
+                    .Include(u => u.Profile)
+                    .FirstOrDefaultAsync(u => u.Id == document.UserId);
+
+                var documentTypeName = await _context.DocumentTypes
+                    .AsNoTracking()
+                    .Where(t => t.DocumentTypeId == document.DocumentTypeId)
+                    .Select(t => t.TypeName)
+                    .FirstOrDefaultAsync();
+
+                var documentLabel = string.IsNullOrWhiteSpace(documentTypeName)
+                    ? $"\"{document.FileName}\""
+                    : $"\"{document.FileName}\" ({documentTypeName})";
+                var category = approved ? "DocumentApproved" : "DocumentRejected";
+                var subject = approved ? "Document approved" : "Document rejected - action needed";
+                var outcome = approved
+                    ? "was approved by a Compliance Officer."
+                    : $"was rejected by a Compliance Officer. Reason: {(string.IsNullOrWhiteSpace(reason) ? "No reason given" : reason.Trim().TrimEnd('.'))}.";
+                var ownerAction = approved ? string.Empty : " Replace the file and resubmit it from My Documents.";
+
+                await _inAppNotifications.NotifyUsersAsync(
+                    new[] { document.UserId },
+                    subject,
+                    $"Your document {documentLabel} {outcome}{ownerAction}",
+                    category,
+                    document.DocumentId);
+
+                if (owner?.DepartmentId == null) return;
+
+                var departmentAdminIds = (await _userManager.GetUsersInRoleAsync("Department Admin"))
+                    .Where(admin => admin.DepartmentId == owner.DepartmentId && admin.Id != document.UserId)
+                    .Select(admin => admin.Id)
+                    .ToList();
+
+                if (departmentAdminIds.Count == 0) return;
+
+                var ownerName = $"{owner.Profile?.FirstName} {owner.Profile?.LastName}".Trim();
+                if (string.IsNullOrWhiteSpace(ownerName)) ownerName = owner.UserName ?? "A department member";
+
+                await _inAppNotifications.NotifyUsersAsync(
+                    departmentAdminIds,
+                    subject,
+                    $"{ownerName}'s document {documentLabel} {outcome}",
+                    category,
+                    document.DocumentId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to send review outcome notification for document {DocumentId}", document.DocumentId);
+            }
         }
 
         // ===== DEADLINES =====
@@ -1409,11 +1612,12 @@ namespace FourierIT_API.Services
                 .FirstOrDefaultAsync(cs => cs.ComplianceStatusId == statusId)
                 ?? throw new Exception($"Status {statusId} not found");
 
-            status.CompliantDocuments = status.DocumentChecks.Count(c => c.CheckStatus == "Compliant");
-            status.PendingReviewDocuments = status.DocumentChecks.Count(c => c.CheckStatus == "Pending");
-            status.NonCompliantDocuments = status.DocumentChecks.Count(c => c.CheckStatus != "Compliant");
-            status.ExpiredDocuments = status.DocumentChecks.Count(c => !c.IsExpiryValid);
-            status.NotCertifiedDocuments = status.DocumentChecks.Count(c => !c.IsCertified);
+            var countedChecks = status.DocumentChecks.Where(c => c.Details != ReviewOnlyCheckDetails).ToList();
+            status.CompliantDocuments = countedChecks.Count(c => c.CheckStatus == "Compliant");
+            status.PendingReviewDocuments = countedChecks.Count(c => c.CheckStatus == "Pending");
+            status.NonCompliantDocuments = countedChecks.Count(c => c.CheckStatus != "Compliant");
+            status.ExpiredDocuments = countedChecks.Count(c => !c.IsExpiryValid);
+            status.NotCertifiedDocuments = countedChecks.Count(c => !c.IsCertified);
 
             var user = await _userManager.FindByIdAsync(status.UserId);
             if (user != null)
@@ -1622,6 +1826,22 @@ namespace FourierIT_API.Services
                 .Include(rd => rd.DocumentType)
                 .Where(rd => rd.EntityTypeId == entityTypeId)
                 .ToListAsync();
+        }
+
+        private async Task<HashSet<int>> GetPendingInstitutionDocumentTypeIdsAsync(User user)
+        {
+            return (await _context.InstitutionRequestedDocumentTypes
+                .AsNoTracking()
+                .Where(requested =>
+                    (requested.InstitutionEnquiryRequest.Status == "Pending"
+                        && requested.InstitutionEnquiryRequest.TargetUserId == user.Id)
+                    || (user.DepartmentId.HasValue
+                        && requested.InstitutionEnquiryRequest.Status == "Department_Pending"
+                        && requested.InstitutionEnquiryRequest.TargetDepartmentId == user.DepartmentId.Value))
+                .Select(requested => requested.DocumentTypeId)
+                .Distinct()
+                .ToListAsync())
+                .ToHashSet();
         }
 
         private string DetermineComplianceCategory(User user)
