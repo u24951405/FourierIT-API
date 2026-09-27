@@ -14,6 +14,7 @@ namespace FourierIT_API.Interfaces
         /// </summary>
         /// <param name="backupId">The id of the backup record in the database.</param>
         /// <returns>A <see cref="RestoreResponseDto"/> describing success/failure and timestamp.</returns>
-        Task<RestoreResponseDto> RestoreDatabaseAsync(int backupId);
+        /// <param name="restoredByUserId">Who asked for the restore, for the audit trail.</param>
+        Task<RestoreResponseDto> RestoreDatabaseAsync(int backupId, string? restoredByUserId = null);
     }
 }

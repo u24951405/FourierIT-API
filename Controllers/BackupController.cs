@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using FourierIT_API.DTOs;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
+using System.Security.Claims;
 
 namespace FourierIT_API.Controllers
 {
@@ -36,12 +37,8 @@ namespace FourierIT_API.Controllers
                 _logger.LogInformation("Backup creation returned status: {Status}", result.StatusMessage);
             }
 
-            // If status indicates an error or failure, return 400 so frontend knows the operation failed.
-            if (!string.IsNullOrWhiteSpace(result.StatusMessage) &&
-                (result.StatusMessage.Contains("error", StringComparison.OrdinalIgnoreCase)
-                 || result.StatusMessage.Contains("failed", StringComparison.OrdinalIgnoreCase)
-                 || result.StatusMessage.Contains("not configured", StringComparison.OrdinalIgnoreCase)
-                 || result.StatusMessage.Contains("not available", StringComparison.OrdinalIgnoreCase)))
+            // A failed backup returns 400 so the page shows the reason (in StatusMessage).
+            if (!result.Success)
             {
                 _logger.LogWarning("Backup creation failed: {Status}", result.StatusMessage);
                 return BadRequest(result);
@@ -68,7 +65,8 @@ namespace FourierIT_API.Controllers
         public async Task<IActionResult> RestoreDatabase([FromRoute] int id)
         {
             _logger.LogInformation("API called to restore database from backup id {BackupId}", id);
-            var result = await _backupService.RestoreDatabaseAsync(id);
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            var result = await _backupService.RestoreDatabaseAsync(id, userId);
 
             if (!result.Success)
             {

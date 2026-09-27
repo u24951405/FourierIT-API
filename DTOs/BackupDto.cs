@@ -13,6 +13,9 @@ namespace FourierIT_API.DTOs
 
     public class BackupResponseDto
     {
+        /// <summary>True when the backup was made and uploaded; StatusMessage says why when it wasn't.</summary>
+        public bool Success { get; set; }
+
         public int BackupId { get; set; }
 
         public string UserId { get; set; } = string.Empty;

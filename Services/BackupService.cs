@@ -1,6 +1,4 @@
-using Azure;
 using Azure.Storage.Blobs;
-using Azure.Storage.Blobs.Specialized;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -20,19 +18,49 @@ namespace FourierIT_API.Services
         private readonly IConfiguration _configuration;
         private readonly ILogger<BackupService> _logger;
         private readonly BlobServiceClient _blobServiceClient;
+        private readonly IAuditLogService? _auditLogService;
 
         public BackupService(
             AppDbContext context,
             IWebHostEnvironment env,
             IConfiguration configuration,
             ILogger<BackupService> logger,
-            BlobServiceClient blobServiceClient)
+            BlobServiceClient blobServiceClient,
+            IAuditLogService? auditLogService = null)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));
             _env = env ?? throw new ArgumentNullException(nameof(env));
             _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _blobServiceClient = blobServiceClient ?? throw new ArgumentNullException(nameof(blobServiceClient));
+            _auditLogService = auditLogService;
+        }
+
+        /// <summary>
+        /// The BACKUP statement for this server. SQL Server Express can't compress backups
+        /// ("BACKUP DATABASE WITH COMPRESSION is not supported on Express Edition"), so it only asks for compression elsewhere.
+        /// </summary>
+        public static string BuildBackupSql(string databaseName, string filePath, bool supportsCompression) =>
+            $"BACKUP DATABASE [{databaseName.Replace("]", "]]")}] TO DISK = '{filePath.Replace("'", "''")}' WITH FORMAT, INIT"
+            + (supportsCompression ? ", COMPRESSION" : string.Empty)
+            + ", MAXTRANSFERSIZE = 1048576, BUFFERCOUNT = 8;";
+
+        /// <summary>Engine edition 4 is Express (see SERVERPROPERTY('EngineEdition')).</summary>
+        private async Task<bool> ServerSupportsCompressionAsync()
+        {
+            try
+            {
+                var edition = await _context.Database
+                    .SqlQueryRaw<int>("SELECT CAST(SERVERPROPERTY('EngineEdition') AS int) AS [Value]")
+                    .SingleAsync();
+                return edition != 4;
+            }
+            catch (Exception ex)
+            {
+                // If we can't tell, don't compress: an uncompressed backup works on every edition.
+                _logger.LogWarning(ex, "Could not read the SQL Server edition; backing up without compression.");
+                return false;
+            }
         }
 
         private async Task<string?> GetSqlServerBackupDirectoryAsync()
@@ -40,21 +68,15 @@ namespace FourierIT_API.Services
             try
             {
                 var conn = (SqlConnection)_context.Database.GetDbConnection();
-                await conn.OpenAsync();
-                using (var cmd = conn.CreateCommand())
-                {
-                    // Ensure long-running registry read has a generous timeout
-                    cmd.CommandTimeout = 300; // 5 minutes
-                    cmd.CommandText = @"DECLARE @backupdir NVARCHAR(4000); 
-IF (OBJECT_ID('tempdb..#t') IS NOT NULL) DROP TABLE #t; 
-EXEC master.dbo.xp_instance_regread N'HKEY_LOCAL_MACHINE', N'Software\\Microsoft\\MSSQLServer\\MSSQLServer', N'BackupDirectory', @backupdir OUTPUT; 
+                if (conn.State != System.Data.ConnectionState.Open) await conn.OpenAsync();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandTimeout = 300;
+                cmd.CommandText = @"DECLARE @backupdir NVARCHAR(4000);
+EXEC master.dbo.xp_instance_regread N'HKEY_LOCAL_MACHINE', N'Software\\Microsoft\\MSSQLServer\\MSSQLServer', N'BackupDirectory', @backupdir OUTPUT;
 SELECT @backupdir as BackupDir;";
-                    var result = await cmd.ExecuteScalarAsync();
-                    if (result != null && result != DBNull.Value)
-                    {
-                        return result.ToString();
-                    }
-                }
+                var result = await cmd.ExecuteScalarAsync();
+                if (result != null && result != DBNull.Value)
+                    return result.ToString();
             }
             catch (Exception ex)
             {
@@ -99,12 +121,9 @@ SELECT @backupdir as BackupDir;";
             string dbName;
             try
             {
-                var builder = new SqlConnectionStringBuilder(connectionString);
-                dbName = builder.InitialCatalog;
+                dbName = new SqlConnectionStringBuilder(connectionString).InitialCatalog;
                 if (string.IsNullOrWhiteSpace(dbName))
-                {
                     throw new InvalidOperationException("Unable to determine database name from connection string.");
-                }
             }
             catch (Exception ex)
             {
@@ -113,151 +132,54 @@ SELECT @backupdir as BackupDir;";
                 return response;
             }
 
+            var supportsCompression = await ServerSupportsCompressionAsync();
             string tempPath = Path.Combine(_env.ContentRootPath, "TempBackups");
             Directory.CreateDirectory(tempPath);
 
-            string timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd_HHmmss");
-            string fileName = $"{dbName}_{timestamp}.bak";
+            string fileName = $"{dbName}_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}.bak";
             string tempFilePath = Path.Combine(tempPath, fileName);
-
             response.FileName = fileName;
 
             try
             {
-                _logger.LogInformation("Starting database backup to local file {FilePath}", tempFilePath);
+                _logger.LogInformation("Starting database backup to local file {FilePath} (compression: {Compression})", tempFilePath, supportsCompression);
+                _context.Database.SetCommandTimeout(3600); // backups can take a while
+                await _context.Database.ExecuteSqlRawAsync(BuildBackupSql(dbName, tempFilePath, supportsCompression));
 
-                string sql = $"BACKUP DATABASE [{dbName}] TO DISK = '{tempFilePath.Replace("'", "''")}' WITH FORMAT, INIT, COMPRESSION, MAXTRANSFERSIZE = 1048576, BUFFERCOUNT = 8;";
-                // Backups can take a long time; ensure the EF Core command timeout is large enough
-                _context.Database.SetCommandTimeout(3600); // 1 hour
-                await _context.Database.ExecuteSqlRawAsync(sql);
-
-                _logger.LogInformation("Database backup finished, uploading to Azure Blob Storage container '{Container}'", containerName);
-
-                var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
-                await containerClient.CreateIfNotExistsAsync();
-
-                var blobClient = containerClient.GetBlobClient(fileName);
-
-                using (var fileStream = File.OpenRead(tempFilePath))
-                {
-                    // Use a cancellation token with a long timeout to avoid indefinite hangs during upload
-                    using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
-                    await blobClient.UploadAsync(fileStream, overwrite: true, cancellationToken: cts.Token);
-                }
-
-                string blobUrl = blobClient.Uri.ToString();
-
-                string? validUserId = null;
-                if (!string.IsNullOrWhiteSpace(request.UserId))
-                {
-                    bool userExists = await _context.Users.AnyAsync(u => u.Id == request.UserId);
-                    if (userExists)
-                    {
-                        validUserId = request.UserId;
-                    }
-                }
-
-                var backup = new Backup
-                {
-                    UserId = validUserId,
-                    FileName = fileName,
-                    DateBackedUp = DateTimeOffset.UtcNow,
-                    IsManualBackup = request.IsManualBackup
-                };
-
-                _context.Backups.Add(backup);
-                await _context.SaveChangesAsync();
-
-                response.BackupId = backup.BackupId;
-                response.FilePath = blobUrl;
-                response.DateBackedUp = backup.DateBackedUp;
-                response.StatusMessage = "Backup created and uploaded successfully.";
-
-                _logger.LogInformation("Backup (Id: {BackupId}) uploaded to {BlobUrl}", backup.BackupId, blobUrl);
-
-                return response;
+                return await UploadAndRecordAsync(request, response, containerName, fileName, tempFilePath, "Backup created and uploaded successfully.");
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Initial backup to temp path failed, attempting fallback backup location.");
-
-                // If access denied to the provided path, attempt to backup to the SQL Server default backup directory
-                if (ex.Message != null && ex.Message.Contains("Access is denied", StringComparison.OrdinalIgnoreCase))
+                // SQL Server writes the file as its own service account, which often may not write to the app's folder.
+                if (ex.Message?.Contains("Access is denied", StringComparison.OrdinalIgnoreCase) == true)
                 {
-                    try
+                    _logger.LogWarning(ex, "SQL Server could not write to {TempPath}; trying its default backup folder.", tempPath);
+                    var defaultBackupDir = await GetSqlServerBackupDirectoryAsync();
+                    if (!string.IsNullOrWhiteSpace(defaultBackupDir))
                     {
-                        var defaultBackupDir = await GetSqlServerBackupDirectoryAsync();
-                        if (!string.IsNullOrWhiteSpace(defaultBackupDir))
+                        var altFilePath = Path.Combine(defaultBackupDir, fileName);
+                        try
                         {
-                            var altFilePath = Path.Combine(defaultBackupDir, fileName);
-                            _logger.LogInformation("Attempting backup to SQL Server default backup directory: {AltPath}", altFilePath);
-
-                            string altSql = $"BACKUP DATABASE [{dbName}] TO DISK = '{altFilePath.Replace("'", "''")}' WITH FORMAT, INIT, COMPRESSION, MAXTRANSFERSIZE = 1048576, BUFFERCOUNT = 8;";
-                            _context.Database.SetCommandTimeout(3600); // 1 hour for fallback as well
-                            await _context.Database.ExecuteSqlRawAsync(altSql);
-
-                            // try upload from altFilePath
-                            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
-                            await containerClient.CreateIfNotExistsAsync();
-
-                            var blobClient = containerClient.GetBlobClient(fileName);
-
-                            try
-                            {
-                                using (var fileStream = File.OpenRead(altFilePath))
-                                {
-                                    using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
-                                    await blobClient.UploadAsync(fileStream, overwrite: true, cancellationToken: cts.Token);
-                                }
-
-                                string blobUrl = blobClient.Uri.ToString();
-
-                                var backup = new Backup
-                                {
-                                    UserId = string.IsNullOrWhiteSpace(request.UserId) ? null : request.UserId,
-                                    FileName = fileName,
-                                    DateBackedUp = DateTimeOffset.UtcNow,
-                                    IsManualBackup = request.IsManualBackup
-                                };
-
-                                _context.Backups.Add(backup);
-                                await _context.SaveChangesAsync();
-
-                                response.BackupId = backup.BackupId;
-                                response.FilePath = blobUrl;
-                                response.DateBackedUp = backup.DateBackedUp;
-                                response.StatusMessage = "Backup created and uploaded successfully (fallback path).";
-
-                                _logger.LogInformation("Backup (Id: {BackupId}) uploaded to {BlobUrl} from fallback path", backup.BackupId, blobUrl);
-
-                                return response;
-                            }
-                            catch (Exception uploadEx)
-                            {
-                                _logger.LogError(uploadEx, "Failed to upload backup from fallback path. Check that the application has read access to the SQL Server backup folder: {AltPath}", altFilePath);
-                                response.StatusMessage = "Backup created on server, but failed to upload from fallback path. Ensure the application can read the SQL Server backup folder: " + uploadEx.Message;
-                                return response;
-                            }
-                            finally
-                            {
-                                try
-                                {
-                                    if (File.Exists(altFilePath)) File.Delete(altFilePath);
-                                }
-                                catch { }
-                            }
+                            _context.Database.SetCommandTimeout(3600);
+                            await _context.Database.ExecuteSqlRawAsync(BuildBackupSql(dbName, altFilePath, supportsCompression));
+                            return await UploadAndRecordAsync(request, response, containerName, fileName, altFilePath,
+                                "Backup created and uploaded successfully (from SQL Server's backup folder).");
                         }
-                    }
-                    catch (Exception fbEx)
-                    {
-                        _logger.LogError(fbEx, "Fallback backup attempt failed.");
-                        response.StatusMessage = "Fallback backup attempt failed: " + fbEx.Message;
-                        return response;
+                        catch (Exception fallbackEx)
+                        {
+                            _logger.LogError(fallbackEx, "Backup to SQL Server's backup folder {AltPath} failed.", altFilePath);
+                            response.StatusMessage = "The backup failed: " + fallbackEx.Message;
+                            return response;
+                        }
+                        finally
+                        {
+                            try { if (File.Exists(altFilePath)) File.Delete(altFilePath); } catch { /* best effort */ }
+                        }
                     }
                 }
 
-                _logger.LogError(ex, "An error occurred while creating or uploading database backup.");
-                response.StatusMessage = "An error occurred during backup: " + ex.Message;
+                _logger.LogError(ex, "An error occurred while creating or uploading the database backup.");
+                response.StatusMessage = "The backup failed: " + ex.Message;
                 return response;
             }
             finally
@@ -277,150 +199,207 @@ SELECT @backupdir as BackupDir;";
             }
         }
 
+        private async Task<BackupResponseDto> UploadAndRecordAsync(CreateBackupRequestDto request, BackupResponseDto response,
+            string containerName, string fileName, string filePath, string successMessage)
+        {
+            _logger.LogInformation("Uploading backup to Azure Blob Storage container '{Container}'", containerName);
+            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+            await containerClient.CreateIfNotExistsAsync();
+            var blobClient = containerClient.GetBlobClient(fileName);
+
+            using (var fileStream = File.OpenRead(filePath))
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
+                await blobClient.UploadAsync(fileStream, overwrite: true, cancellationToken: cts.Token);
+            }
+
+            var backup = new Backup
+            {
+                UserId = await ExistingUserIdOrNullAsync(request.UserId),
+                FileName = fileName,
+                DateBackedUp = DateTimeOffset.UtcNow,
+                IsManualBackup = request.IsManualBackup
+            };
+            _context.Backups.Add(backup);
+            await _context.SaveChangesAsync();
+
+            response.Success = true;
+            response.BackupId = backup.BackupId;
+            response.FilePath = blobClient.Uri.ToString();
+            response.DateBackedUp = backup.DateBackedUp;
+            response.StatusMessage = successMessage;
+            _logger.LogInformation("Backup (Id: {BackupId}) uploaded to {BlobUrl}", backup.BackupId, response.FilePath);
+            return response;
+        }
+
+        private async Task<string?> ExistingUserIdOrNullAsync(string? userId) =>
+            !string.IsNullOrWhiteSpace(userId) && await _context.Users.AnyAsync(u => u.Id == userId) ? userId : null;
+
         // =========================================================================
         // 2. GET ALL BACKUPS
         // =========================================================================
         public async Task<IEnumerable<Backup>> GetAllBackupsAsync()
         {
-            return await _context.Backups.OrderByDescending(b => b.DateBackedUp).ToListAsync();
+            return await _context.Backups.AsNoTracking().OrderByDescending(b => b.DateBackedUp).ToListAsync();
+        }
+
+        /// <summary>
+        /// The backup list lives in the database being restored, so a restore would forget every backup made after the one chosen.
+        /// This puts back the records that are missing afterwards (the files are still in Azure).
+        /// </summary>
+        public static List<Backup> MissingAfterRestore(IEnumerable<Backup> before, IEnumerable<string> fileNamesAfter)
+        {
+            var present = new HashSet<string>(fileNamesAfter, StringComparer.OrdinalIgnoreCase);
+            return before
+                .Where(b => !present.Contains(b.FileName))
+                .Select(b => new Backup { FileName = b.FileName, DateBackedUp = b.DateBackedUp, IsManualBackup = b.IsManualBackup, UserId = b.UserId })
+                .ToList();
         }
 
         // =========================================================================
         // 3. RESTORE DATABASE
         // =========================================================================
-        public async Task<RestoreResponseDto> RestoreDatabaseAsync(int backupId)
+        public async Task<RestoreResponseDto> RestoreDatabaseAsync(int backupId, string? restoredByUserId = null)
         {
             string? tempFilePath = null;
             try
             {
                 _logger.LogInformation("Starting database restore for BackupId={BackupId}", backupId);
 
-                var backup = await _context.Backups.FindAsync(backupId);
+                var backup = await _context.Backups.AsNoTracking().FirstOrDefaultAsync(b => b.BackupId == backupId);
                 if (backup == null)
                 {
                     _logger.LogWarning("Backup record not found for id {BackupId}", backupId);
-                    return new RestoreResponseDto
-                    {
-                        Success = false,
-                        Message = $"Backup record with id {backupId} not found.",
-                        RestoredAt = DateTimeOffset.UtcNow
-                    };
+                    return new RestoreResponseDto { Success = false, Message = $"Backup record with id {backupId} not found.", RestoredAt = DateTimeOffset.UtcNow };
                 }
 
+                // Remember the full backup list before the restore replaces it.
+                var backupsBefore = await _context.Backups.AsNoTracking().ToListAsync();
+
                 string containerName = _configuration["AzureBlobStorage:ContainerName"] ?? "docuvault-database-backups";
-                var container = _blobServiceClient.GetBlobContainerClient(containerName);
-                var blobClient = container.GetBlobClient(backup.FileName);
+                var blobClient = _blobServiceClient.GetBlobContainerClient(containerName).GetBlobClient(backup.FileName);
 
                 var tempDir = Path.Combine(_env.ContentRootPath, "TempBackups");
                 Directory.CreateDirectory(tempDir);
-
-                tempFilePath = Path.Combine(tempDir, backup.FileName);
+                tempFilePath = Path.Combine(tempDir, Path.GetFileName(backup.FileName));
 
                 _logger.LogInformation("Downloading backup blob {FileName} to {TempFilePath}", backup.FileName, tempFilePath);
-                // Use cancellation token to avoid indefinite hangs when downloading large backups
                 using (var downloadCts = new CancellationTokenSource(TimeSpan.FromMinutes(30)))
                 {
                     await blobClient.DownloadToAsync(tempFilePath, downloadCts.Token);
                 }
-                _logger.LogInformation("Download complete for backup id {BackupId}", backupId);
 
-                string? currentConnectionString = _context.Database.GetDbConnection().ConnectionString;
-                if (string.IsNullOrWhiteSpace(currentConnectionString))
-                {
-                    return new RestoreResponseDto
-                    {
-                        Success = false,
-                        Message = "Could not determine target database connection string.",
-                        RestoredAt = DateTimeOffset.UtcNow
-                    };
-                }
-                var builder = new SqlConnectionStringBuilder(currentConnectionString);
-                var targetDbName = builder.InitialCatalog;
-
+                var currentConnectionString = _context.Database.GetDbConnection().ConnectionString;
+                var targetDbName = string.IsNullOrWhiteSpace(currentConnectionString) ? null : new SqlConnectionStringBuilder(currentConnectionString).InitialCatalog;
                 if (string.IsNullOrWhiteSpace(targetDbName))
                 {
                     _logger.LogError("Could not determine target database name from connection string.");
-                    return new RestoreResponseDto
-                    {
-                        Success = false,
-                        Message = "Could not determine target database name from connection string.",
-                        RestoredAt = DateTimeOffset.UtcNow
-                    };
+                    return new RestoreResponseDto { Success = false, Message = "Could not determine the database to restore.", RestoredAt = DateTimeOffset.UtcNow };
                 }
 
-                var masterBuilder = new SqlConnectionStringBuilder(currentConnectionString)
-                {
-                    InitialCatalog = "master"
-                };
-                var masterConnectionString = masterBuilder.ConnectionString;
+                // Release this request's own connection before taking the database offline.
+                await _context.Database.CloseConnectionAsync();
 
+                var masterConnectionString = new SqlConnectionStringBuilder(currentConnectionString) { InitialCatalog = "master" }.ConnectionString;
+                var quotedDb = targetDbName.Replace("]", "]]");
                 using (var conn = new SqlConnection(masterConnectionString))
                 {
                     await conn.OpenAsync();
-
-                    using (var cmd = conn.CreateCommand())
-                    {
-                        cmd.CommandTimeout = 3600; // 1 hour
-                        cmd.CommandText = $"ALTER DATABASE [{targetDbName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;";
-                        _logger.LogInformation("Executing: {Sql}", cmd.CommandText);
-                        await cmd.ExecuteNonQueryAsync();
-                    }
-
+                    await ExecuteAsync(conn, $"ALTER DATABASE [{quotedDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;");
                     try
                     {
-                        using (var cmd = conn.CreateCommand())
-                        {
-                            cmd.CommandTimeout = 3600; // 1 hour
-                            var escapedPath = tempFilePath.Replace("'", "''");
-                            cmd.CommandText = $"RESTORE DATABASE [{targetDbName}] FROM DISK = '{escapedPath}' WITH REPLACE;";
-                            _logger.LogInformation("Executing: {Sql}", cmd.CommandText);
-                            await cmd.ExecuteNonQueryAsync();
-                        }
+                        await ExecuteAsync(conn, $"RESTORE DATABASE [{quotedDb}] FROM DISK = '{tempFilePath.Replace("'", "''")}' WITH REPLACE;");
                     }
                     finally
                     {
-                        using (var cmd = conn.CreateCommand())
-                        {
-                            cmd.CommandTimeout = 3600; // 1 hour
-                            cmd.CommandText = $"ALTER DATABASE [{targetDbName}] SET MULTI_USER;";
-                            _logger.LogInformation("Executing: {Sql}", cmd.CommandText);
-                            await cmd.ExecuteNonQueryAsync();
-                        }
+                        await ExecuteAsync(conn, $"ALTER DATABASE [{quotedDb}] SET MULTI_USER;");
                     }
                 }
+
+                // Every pooled connection was cut when the database went single-user; drop them so the next requests
+                // open fresh ones instead of failing.
+                SqlConnection.ClearAllPools();
+                _context.ChangeTracker.Clear();
+
+                // An older backup can predate recent changes to the database; bring it up to what this version of the app expects.
+                var pending = (await _context.Database.GetPendingMigrationsAsync()).ToList();
+                if (pending.Count > 0)
+                {
+                    _logger.LogInformation("Applying {Count} migrations to the restored database: {Migrations}", pending.Count, string.Join(", ", pending));
+                    await _context.Database.MigrateAsync();
+                }
+
+                // Put back the backups made after the one restored, so they can still be chosen later.
+                var fileNamesAfter = await _context.Backups.AsNoTracking().Select(b => b.FileName).ToListAsync();
+                var missing = MissingAfterRestore(backupsBefore, fileNamesAfter);
+                foreach (var record in missing)
+                {
+                    record.UserId = await ExistingUserIdOrNullAsync(record.UserId);
+                    _context.Backups.Add(record);
+                }
+                if (missing.Count > 0) await _context.SaveChangesAsync();
+
+                await RecordRestoreAsync(backup, restoredByUserId);
 
                 _logger.LogInformation("Database restore completed successfully for backup id {BackupId}", backupId);
                 return new RestoreResponseDto
                 {
                     Success = true,
-                    Message = "Database restored successfully.",
+                    Message = $"The database was restored to the backup of {backup.DateBackedUp.ToOffset(TimeSpan.FromHours(2)):d MMM yyyy, HH:mm} (SAST)."
+                        + (pending.Count > 0 ? $" {pending.Count} database update{(pending.Count == 1 ? " was" : "s were")} applied so it matches this version of DocuVault." : string.Empty),
                     RestoredAt = DateTimeOffset.UtcNow
                 };
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error occurred during database restore for backup id {BackupId}", backupId);
-                return new RestoreResponseDto
-                {
-                    Success = false,
-                    Message = $"Error during restore: {ex.Message}",
-                    RestoredAt = DateTimeOffset.UtcNow
-                };
+                SqlConnection.ClearAllPools();
+                return new RestoreResponseDto { Success = false, Message = $"Error during restore: {ex.Message}", RestoredAt = DateTimeOffset.UtcNow };
             }
             finally
             {
                 try
                 {
                     if (!string.IsNullOrWhiteSpace(tempFilePath) && File.Exists(tempFilePath))
-                    {
                         File.Delete(tempFilePath);
-                        _logger.LogInformation("Deleted temporary backup file {TempFilePath}", tempFilePath);
-                    }
                 }
                 catch (Exception deleteEx)
                 {
                     _logger.LogWarning(deleteEx, "Failed to delete temporary backup file {TempFilePath}", tempFilePath);
                 }
+            }
+        }
+
+        private async Task ExecuteAsync(SqlConnection conn, string sql)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandTimeout = 3600;
+            cmd.CommandText = sql;
+            _logger.LogInformation("Executing: {Sql}", sql);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        /// <summary>
+        /// Written after the restore, into the restored database's audit trail, so the record of the restore itself survives.
+        /// </summary>
+        private async Task RecordRestoreAsync(Backup backup, string? restoredByUserId)
+        {
+            if (_auditLogService == null) return;
+            try
+            {
+                await _auditLogService.CreateAuditLogAsync(new AuditLog
+                {
+                    UserId = await ExistingUserIdOrNullAsync(restoredByUserId),
+                    ActionCode = "DATABASE_RESTORED",
+                    TimeStamp = DateTimeOffset.UtcNow,
+                    Description = $"Database restored from backup \"{backup.FileName}\" (made {backup.DateBackedUp:yyyy-MM-dd HH:mm} UTC). Changes made after that backup were replaced.",
+                    TableAffected = "Backups",
+                    RecordID = backup.BackupId
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "The restore worked, but it could not be written to the audit log.");
             }
         }
     }
