@@ -135,6 +135,8 @@ builder.Services.AddSingleton(sp =>
 
 // Register Backup Service
 builder.Services.AddScoped<FourierIT_API.Interfaces.IBackupService, FourierIT_API.Services.BackupService>();
+// Runs manual backups in the background (one at a time) so the page doesn't wait on the upload.
+builder.Services.AddSingleton<FourierIT_API.Services.BackupJobTracker>();
 
 // Register Daily Backup Service as a Hosted Service
 builder.Services.AddHostedService<DailyBackupService>();

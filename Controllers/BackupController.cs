@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using FourierIT_API.DTOs;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
+using FourierIT_API.Services;
 using System.Security.Claims;
 
 namespace FourierIT_API.Controllers
@@ -14,38 +15,40 @@ namespace FourierIT_API.Controllers
     public class BackupController : ControllerBase
     {
         private readonly IBackupService _backupService;
+        private readonly BackupJobTracker _jobs;
         private readonly ILogger<BackupController> _logger;
 
-        public BackupController(IBackupService backupService, ILogger<BackupController> logger)
+        public BackupController(IBackupService backupService, BackupJobTracker jobs, ILogger<BackupController> logger)
         {
             _backupService = backupService;
+            _jobs = jobs;
             _logger = logger;
         }
 
+        /// <summary>
+        /// Starts a backup in the background and returns straight away (202); the page then asks <c>status</c>
+        /// until it finishes. Only one backup runs at a time (409 while one is running).
+        /// </summary>
         [HttpPost("create")]
-        public async Task<IActionResult> Create([FromBody] CreateBackupRequestDto request)
+        public IActionResult Create([FromBody] CreateBackupRequestDto request)
         {
             if (request == null)
             {
                 return BadRequest("Request body is required.");
             }
 
-            var result = await _backupService.CreateDatabaseBackupAsync(request);
-
-            if (!string.IsNullOrWhiteSpace(result.StatusMessage))
+            if (!_jobs.TryStart(request, out var job))
             {
-                _logger.LogInformation("Backup creation returned status: {Status}", result.StatusMessage);
+                return Conflict(new { error = "A backup is already running. Wait for it to finish.", job });
             }
 
-            // A failed backup returns 400 so the page shows the reason (in StatusMessage).
-            if (!result.Success)
-            {
-                _logger.LogWarning("Backup creation failed: {Status}", result.StatusMessage);
-                return BadRequest(result);
-            }
-
-            return Ok(result);
+            _logger.LogInformation("Manual backup {JobId} started.", job.JobId);
+            return Accepted(job);
         }
+
+        /// <summary>The backup running now, or the last one to finish (null if none since the API started).</summary>
+        [HttpGet("status")]
+        public IActionResult Status() => Ok(_jobs.Current);
 
         [HttpGet("history")]
         public async Task<IActionResult> History()

@@ -16,6 +16,11 @@ namespace FourierIT_API.DTOs
         /// <summary>True when the backup was made and uploaded; StatusMessage says why when it wasn't.</summary>
         public bool Success { get; set; }
 
+        /// <summary>How long SQL Server took to write the backup, and the upload to Azure took (seconds).</summary>
+        public double BackupSeconds { get; set; }
+        public double UploadSeconds { get; set; }
+        public long SizeBytes { get; set; }
+
         public int BackupId { get; set; }
 
         public string UserId { get; set; } = string.Empty;

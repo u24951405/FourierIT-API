@@ -63,29 +63,6 @@ namespace FourierIT_API.Services
             }
         }
 
-        private async Task<string?> GetSqlServerBackupDirectoryAsync()
-        {
-            try
-            {
-                var conn = (SqlConnection)_context.Database.GetDbConnection();
-                if (conn.State != System.Data.ConnectionState.Open) await conn.OpenAsync();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandTimeout = 300;
-                cmd.CommandText = @"DECLARE @backupdir NVARCHAR(4000);
-EXEC master.dbo.xp_instance_regread N'HKEY_LOCAL_MACHINE', N'Software\\Microsoft\\MSSQLServer\\MSSQLServer', N'BackupDirectory', @backupdir OUTPUT;
-SELECT @backupdir as BackupDir;";
-                var result = await cmd.ExecuteScalarAsync();
-                if (result != null && result != DBNull.Value)
-                    return result.ToString();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to query SQL Server backup directory via xp_instance_regread.");
-            }
-
-            return null;
-        }
-
         // =========================================================================
         // 1. CREATE BACKUP
         // =========================================================================
@@ -133,74 +110,104 @@ SELECT @backupdir as BackupDir;";
             }
 
             var supportsCompression = await ServerSupportsCompressionAsync();
-            string tempPath = Path.Combine(_env.ContentRootPath, "TempBackups");
-            Directory.CreateDirectory(tempPath);
-
             string fileName = $"{dbName}_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}.bak";
-            string tempFilePath = Path.Combine(tempPath, fileName);
             response.FileName = fileName;
 
-            try
+            // The file must be written by SQL Server's Windows account and then read (and deleted) by the app's account.
+            // SQL Server's own backup folder is usually closed to the app, and the app's folder (inside OneDrive here) is
+            // usually closed to SQL Server, so a folder both can use is set in Backup:LocalFolder. The app's folder is the fallback.
+            var folders = new List<string>();
+            var configuredFolder = _configuration["Backup:LocalFolder"];
+            if (!string.IsNullOrWhiteSpace(configuredFolder))
             {
-                _logger.LogInformation("Starting database backup to local file {FilePath} (compression: {Compression})", tempFilePath, supportsCompression);
-                _context.Database.SetCommandTimeout(3600); // backups can take a while
-                await _context.Database.ExecuteSqlRawAsync(BuildBackupSql(dbName, tempFilePath, supportsCompression));
-
-                return await UploadAndRecordAsync(request, response, containerName, fileName, tempFilePath, "Backup created and uploaded successfully.");
+                try { Directory.CreateDirectory(configuredFolder); folders.Add(configuredFolder); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Backup:LocalFolder {Folder} can't be used.", configuredFolder); }
             }
-            catch (Exception ex)
-            {
-                // SQL Server writes the file as its own service account, which often may not write to the app's folder.
-                if (ex.Message?.Contains("Access is denied", StringComparison.OrdinalIgnoreCase) == true)
-                {
-                    _logger.LogWarning(ex, "SQL Server could not write to {TempPath}; trying its default backup folder.", tempPath);
-                    var defaultBackupDir = await GetSqlServerBackupDirectoryAsync();
-                    if (!string.IsNullOrWhiteSpace(defaultBackupDir))
-                    {
-                        var altFilePath = Path.Combine(defaultBackupDir, fileName);
-                        try
-                        {
-                            _context.Database.SetCommandTimeout(3600);
-                            await _context.Database.ExecuteSqlRawAsync(BuildBackupSql(dbName, altFilePath, supportsCompression));
-                            return await UploadAndRecordAsync(request, response, containerName, fileName, altFilePath,
-                                "Backup created and uploaded successfully (from SQL Server's backup folder).");
-                        }
-                        catch (Exception fallbackEx)
-                        {
-                            _logger.LogError(fallbackEx, "Backup to SQL Server's backup folder {AltPath} failed.", altFilePath);
-                            response.StatusMessage = "The backup failed: " + fallbackEx.Message;
-                            return response;
-                        }
-                        finally
-                        {
-                            try { if (File.Exists(altFilePath)) File.Delete(altFilePath); } catch { /* best effort */ }
-                        }
-                    }
-                }
+            var appFolder = Path.Combine(_env.ContentRootPath, "TempBackups");
+            Directory.CreateDirectory(appFolder);
+            folders.Add(appFolder);
 
-                _logger.LogError(ex, "An error occurred while creating or uploading the database backup.");
-                response.StatusMessage = "The backup failed: " + ex.Message;
-                return response;
-            }
-            finally
+            Exception? lastError = null;
+            foreach (var folder in folders)
             {
+                var filePath = Path.Combine(folder, fileName);
+                var timer = System.Diagnostics.Stopwatch.StartNew();
                 try
                 {
-                    if (File.Exists(tempFilePath))
-                    {
-                        File.Delete(tempFilePath);
-                        _logger.LogInformation("Deleted temporary backup file {TempFile}", tempFilePath);
-                    }
+                    _logger.LogInformation("Backing up to {FilePath} (compression: {Compression})", filePath, supportsCompression);
+                    _context.Database.SetCommandTimeout(3600); // backups can take a while
+                    await _context.Database.ExecuteSqlRawAsync(BuildBackupSql(dbName, filePath, supportsCompression));
+                    response.BackupSeconds = Math.Round(timer.Elapsed.TotalSeconds, 1);
+                    response.SizeBytes = new FileInfo(filePath).Length;
+                }
+                catch (Exception ex) when (IsFolderAccessProblem(ex))
+                {
+                    _logger.LogWarning(ex, "SQL Server could not write to {Folder}; trying the next folder.", folder);
+                    lastError = ex;
+                    continue;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to delete temporary backup file {TempFile}", tempFilePath);
+                    _logger.LogError(ex, "The database backup failed.");
+                    response.StatusMessage = "The backup failed: " + ex.Message;
+                    DeleteQuietly(filePath);
+                    return response;
+                }
+
+                try
+                {
+                    timer.Restart();
+                    var result = await UploadAndRecordAsync(request, response, containerName, fileName, filePath);
+                    response.UploadSeconds = Math.Round(timer.Elapsed.TotalSeconds, 1);
+                    response.StatusMessage =
+                        $"Backup created and uploaded ({FormatSize(response.SizeBytes)}: backed up in {response.BackupSeconds:0.#}s, uploaded in {response.UploadSeconds:0.#}s).";
+                    _logger.LogInformation("{Status}", response.StatusMessage);
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "The backup was made but could not be uploaded to Azure Blob Storage.");
+                    response.StatusMessage = "The backup was made but could not be uploaded: " + ex.Message;
+                    return response;
+                }
+                finally
+                {
+                    DeleteQuietly(filePath);
                 }
             }
+
+            response.StatusMessage = "The backup failed: SQL Server could not write the backup file to any folder. " + lastError?.Message;
+            return response;
         }
 
+        /// <summary>SQL Server couldn't create the file there (folder permissions), as opposed to the backup itself failing.</summary>
+        private static bool IsFolderAccessProblem(Exception ex) =>
+            ex.Message.Contains("Access is denied", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("Operating system error", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("Cannot open backup device", StringComparison.OrdinalIgnoreCase);
+
+        private void DeleteQuietly(string path)
+        {
+            try { if (File.Exists(path)) File.Delete(path); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Could not delete the local backup file {Path}", path); }
+        }
+
+        private static string FormatSize(long bytes) =>
+            bytes >= 1024 * 1024 ? $"{bytes / (1024.0 * 1024):0.#} MB" : $"{Math.Max(1, bytes / 1024)} KB";
+
+        /// <summary>
+        /// Uploads in 4 MB blocks, eight at a time; the defaults send much smaller pieces one after another,
+        /// which is slow on a home connection.
+        /// </summary>
+        private static readonly Azure.Storage.StorageTransferOptions UploadTransfer = new()
+        {
+            InitialTransferSize = 4 * 1024 * 1024,
+            MaximumTransferSize = 4 * 1024 * 1024,
+            MaximumConcurrency = 8
+        };
+
         private async Task<BackupResponseDto> UploadAndRecordAsync(CreateBackupRequestDto request, BackupResponseDto response,
-            string containerName, string fileName, string filePath, string successMessage)
+            string containerName, string fileName, string filePath)
         {
             _logger.LogInformation("Uploading backup to Azure Blob Storage container '{Container}'", containerName);
             var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
@@ -210,7 +217,7 @@ SELECT @backupdir as BackupDir;";
             using (var fileStream = File.OpenRead(filePath))
             {
                 using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(30));
-                await blobClient.UploadAsync(fileStream, overwrite: true, cancellationToken: cts.Token);
+                await blobClient.UploadAsync(fileStream, new Azure.Storage.Blobs.Models.BlobUploadOptions { TransferOptions = UploadTransfer }, cts.Token);
             }
 
             var backup = new Backup
@@ -227,7 +234,6 @@ SELECT @backupdir as BackupDir;";
             response.BackupId = backup.BackupId;
             response.FilePath = blobClient.Uri.ToString();
             response.DateBackedUp = backup.DateBackedUp;
-            response.StatusMessage = successMessage;
             _logger.LogInformation("Backup (Id: {BackupId}) uploaded to {BlobUrl}", backup.BackupId, response.FilePath);
             return response;
         }
