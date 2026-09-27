@@ -164,6 +164,7 @@ namespace FourierIT_API.Data
                 new { RoleId = "DA", PermissionId = 3 }, new { RoleId = "DA", PermissionId = 4 },
                 new { RoleId = "DA", PermissionId = 5 }, new { RoleId = "DA", PermissionId = 6 },
                 new { RoleId = "DA", PermissionId = 7 }, new { RoleId = "DA", PermissionId = 8 },
+                new { RoleId = "DA", PermissionId = 9 }, new { RoleId = "DA", PermissionId = 10 },
                 new { RoleId = "DO", PermissionId = 1 }, new { RoleId = "DO", PermissionId = 2 },
                 new { RoleId = "CO", PermissionId = 1 }, new { RoleId = "CO", PermissionId = 4 },
                 new { RoleId = "CO", PermissionId = 5 }, new { RoleId = "CO", PermissionId = 8 },

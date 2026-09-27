@@ -88,6 +88,18 @@ public class AuditLogInstitutionAttributionTests : IDisposable
     }
 
     [Fact]
+    public async Task SeededDepartmentAdminRole_IncludesAuditViewPermission()
+    {
+        var permission = await _context.RolePermissions
+            .Include(rp => rp.Permission)
+            .Where(rp => rp.RoleId == "DA")
+            .Select(rp => rp.Permission.PermissionKey)
+            .ToListAsync();
+
+        Assert.Contains("Audit.View", permission);
+    }
+
+    [Fact]
     public async Task GetAuditLogsPagedAsync_InstitutionAttributedEntry_DisplaysInstitutionNameWithNullUser()
     {
         // Uses the InMemory provider (like the rest of this test project) rather than the
