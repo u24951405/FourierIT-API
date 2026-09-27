@@ -337,11 +337,17 @@ using (var scope = app.Services.CreateScope())
         var userMgr = scope.ServiceProvider.GetRequiredService<Microsoft.AspNetCore.Identity.UserManager<FourierIT_API.Models.User>>();
         var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
         var superUserName = builder.Configuration["SuperAdmin:Username"] ?? "superadmin";
-        var superPassword = builder.Configuration["SuperAdmin:Password"] ?? "Sup3r@dmin!";
+        // The password comes from User Secrets (dotnet user-secrets set "SuperAdmin:Password" "...") or an environment
+        // variable (SuperAdmin__Password); it is never kept in a tracked file.
+        var superPassword = builder.Configuration["SuperAdmin:Password"];
         var superEmail = builder.Configuration["SuperAdmin:Email"] ?? "superadmin@fourier.local";
 
         var superUser = await userMgr.FindByNameAsync(superUserName);
-        if (superUser == null)
+        if (superUser == null && string.IsNullOrWhiteSpace(superPassword))
+        {
+            logger.LogWarning("No Super Admin password is configured, so the Super Admin account was not created. Set it with: dotnet user-secrets set \"SuperAdmin:Password\" \"<password>\"");
+        }
+        else if (superUser == null)
         {
             superUser = new FourierIT_API.Models.User
             {
