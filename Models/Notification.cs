@@ -22,6 +22,10 @@ namespace FourierIT_API.Models
         // The document this notification is about, if any. Not a foreign key so notifications survive document deletion.
         public int? DocumentId { get; set; }
 
+        // The app page the notification opens, e.g. "/documents/requests". Null falls back to the document, if any.
+        [StringLength(200)]
+        public string? Link { get; set; }
+
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
         public ICollection<UserNotification> UserNotifications { get; set; } = new List<UserNotification>();

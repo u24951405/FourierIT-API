@@ -36,7 +36,6 @@ public class DocumentTypesController : ControllerBase
                 Name = dt.TypeName,
                 Description = dt.Description,
                 ValidityMonths = dt.ValidityMonths,
-                NeverExpires = dt.NeverExpires,
                 ValidityBasis = dt.ValidityBasis,
                 WarningDays = dt.WarningDays,
                 DocumentCount = dt.Documents.Count
@@ -59,7 +58,6 @@ public class DocumentTypesController : ControllerBase
                 Name = dt.TypeName,
                 Description = dt.Description,
                 ValidityMonths = dt.ValidityMonths,
-                NeverExpires = dt.NeverExpires,
                 ValidityBasis = dt.ValidityBasis,
                 WarningDays = dt.WarningDays,
                 DocumentCount = dt.Documents.Count
@@ -144,7 +142,7 @@ public class DocumentTypesController : ControllerBase
             return false;
         }
 
-        if (!request.NeverExpires && request.WarningDays >= request.ValidityMonths * 30)
+        if (request.WarningDays >= request.ValidityMonths * 30)
         {
             message = $"WarningDays must be less than validityMonths * 30 ({request.ValidityMonths * 30}).";
             return false;

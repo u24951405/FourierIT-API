@@ -44,18 +44,22 @@ public static class SouthAfricanIdNumber
 
     private static bool HasValidCheckDigit(string digits)
     {
-        // Luhn: double every second digit from the right (excluding the check digit itself).
+        // South African ID numbers use the official check-digit algorithm:
+        // weighted sum of the first 12 digits, then adjust modulo 11 and normalize 10/11 to 0.
+        var weights = new[] { 8, 7, 6, 5, 4, 3, 2, 10, 0, 5, 4, 3 };
         var sum = 0;
-        for (var i = 0; i < digits.Length; i++)
+
+        for (var i = 0; i < 12; i++)
         {
-            var digit = digits[digits.Length - 1 - i] - '0';
-            if (i % 2 == 1)
-            {
-                digit *= 2;
-                if (digit > 9) digit -= 9;
-            }
-            sum += digit;
+            sum += (digits[i] - '0') * weights[i];
         }
-        return sum % 10 == 0;
+
+        var checkDigit = 11 - (sum % 11);
+        if (checkDigit == 10 || checkDigit == 11)
+        {
+            checkDigit = 0;
+        }
+
+        return checkDigit == digits[12] - '0';
     }
 }

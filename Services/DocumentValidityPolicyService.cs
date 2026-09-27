@@ -60,7 +60,6 @@ public class DocumentValidityPolicyService
         var oldSettings = new DocumentValiditySettingsSnapshot
         {
             ValidityMonths = documentType.ValidityMonths,
-            NeverExpires = documentType.NeverExpires,
             ValidityBasis = documentType.ValidityBasis,
             WarningDays = documentType.WarningDays
         };
@@ -94,7 +93,6 @@ public class DocumentValidityPolicyService
         DocumentTypeValiditySummaryDto summary)
     {
         documentType.ValidityMonths = request.ValidityMonths;
-        documentType.NeverExpires = request.NeverExpires;
         documentType.ValidityBasis = request.ValidityBasis;
         documentType.WarningDays = request.WarningDays;
 
@@ -106,7 +104,6 @@ public class DocumentValidityPolicyService
             var proposedType = new DocumentType
             {
                 ValidityMonths = request.ValidityMonths,
-                NeverExpires = request.NeverExpires,
                 ValidityBasis = request.ValidityBasis,
                 WarningDays = request.WarningDays
             };
@@ -141,7 +138,7 @@ public class DocumentValidityPolicyService
             UserId = actingUserId,
             ActionCode = "DOCUMENT_TYPE_VALIDITY_UPDATED",
             TimeStamp = DateTimeOffset.UtcNow,
-            Description = $"Updated document validity for type '{documentType.TypeName}' from {{ validityMonths: {oldSettings.ValidityMonths}, neverExpires: {oldSettings.NeverExpires}, validityBasis: {oldSettings.ValidityBasis}, warningDays: {oldSettings.WarningDays} }} to {{ validityMonths: {documentType.ValidityMonths}, neverExpires: {documentType.NeverExpires}, validityBasis: {documentType.ValidityBasis}, warningDays: {documentType.WarningDays} }}. Affected documents: {affectedCount}. Newly expired: {newlyExpiredCount}.",
+            Description = $"Updated document validity for type '{documentType.TypeName}' from {{ validityMonths: {oldSettings.ValidityMonths}, validityBasis: {oldSettings.ValidityBasis}, warningDays: {oldSettings.WarningDays} }} to {{ validityMonths: {documentType.ValidityMonths}, validityBasis: {documentType.ValidityBasis}, warningDays: {documentType.WarningDays} }}. Affected documents: {affectedCount}. Newly expired: {newlyExpiredCount}.",
             TableAffected = "DocumentTypes",
             RecordID = documentType.DocumentTypeId
         });
@@ -185,7 +182,6 @@ public class DocumentValidityPolicyService
     private sealed class DocumentValiditySettingsSnapshot
     {
         public int ValidityMonths { get; set; }
-        public bool NeverExpires { get; set; }
         public ValidityBasis ValidityBasis { get; set; }
         public int WarningDays { get; set; }
     }
@@ -209,7 +205,6 @@ public class DocumentValidityPolicyService
             var proposedType = new DocumentType
             {
                 ValidityMonths = request.ValidityMonths,
-                NeverExpires = request.NeverExpires,
                 ValidityBasis = request.ValidityBasis,
                 WarningDays = request.WarningDays
             };
@@ -221,7 +216,8 @@ public class DocumentValidityPolicyService
 
             var proposedExpiry = _documentValidityCalculator.Calculate(proposedType, document.UploadedDate, certificationDate).ExpiryDate;
             var missingSourceDate = request.ValidityBasis == ValidityBasis.CertificationDate && certificationDate is null;
-            var wouldExpire = !request.NeverExpires && !missingSourceDate && proposedExpiry <= now;
+            // A document without a certification date is counted from its upload date, so it can expire too.
+            var wouldExpire = proposedExpiry <= now;
 
             if (missingSourceDate)
             {
@@ -233,7 +229,7 @@ public class DocumentValidityPolicyService
                 summary.BecomeExpired++;
             }
 
-            if (currentExpired && !wouldExpire && !missingSourceDate)
+            if (currentExpired && !wouldExpire)
             {
                 summary.NoLongerExpired++;
             }

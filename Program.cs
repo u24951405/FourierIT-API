@@ -116,6 +116,10 @@ builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IDocumentService, DocumentService>();
 builder.Services.AddScoped<IFileScanService, FileScanService>();
 builder.Services.AddScoped<IInAppNotificationService, InAppNotificationService>();
+// Notification emails are queued and sent in the background, so requests never wait on the mail server.
+builder.Services.AddSingleton<NotificationEmailQueue>();
+builder.Services.AddSingleton<INotificationEmailQueue>(sp => sp.GetRequiredService<NotificationEmailQueue>());
+builder.Services.AddHostedService<NotificationEmailSender>();
 builder.Services.AddScoped<ISystemSettingsService, SystemSettingsService>();
 builder.Services.AddScoped<IComplianceService, ComplianceService>();
 builder.Services.AddSingleton<DocumentValidityCalculator>();
@@ -136,6 +140,8 @@ builder.Services.AddScoped<FourierIT_API.Interfaces.IBackupService, FourierIT_AP
 builder.Services.AddHostedService<DailyBackupService>();
 // Register expired document compliance scheduler
 builder.Services.AddHostedService<ExpiredDocumentComplianceService>();
+// Access-ending warnings for institutions, reminders for unanswered requests, and escalation of overdue ones.
+builder.Services.AddHostedService<AccessRequestReminderService>();
 
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("EmailSettings"));
 builder.Services.AddScoped<IEmailService, EmailService>();
@@ -254,6 +260,18 @@ if (runDbInit)
     {
         logger.LogWarning(ex, "Database '{Database}' already exists. Skipping creation.", db.Database.GetDbConnection().Database);
     }
+    catch (Microsoft.Data.SqlClient.SqlException ex) when (
+        ex.Number == 2 ||
+        ex.Number == 40 ||
+        ex.Number == 53 ||
+        ex.Number == -2 ||
+        ex.Number == 4060 ||
+        ex.Number == 18456 ||
+        ex.Number == 18487)
+    {
+        logger.LogWarning(ex,
+            "SQL Server is unavailable during startup database initialization. Continuing without migrations so the API can still boot. Configure a reachable connection string to enable startup initialization.");
+    }
 
     try
     {
@@ -279,9 +297,16 @@ if (runDbInit)
             END
         ");
     }
-    catch (Microsoft.Data.SqlClient.SqlException ex) when (ex.Number == -2)
+    catch (Microsoft.Data.SqlClient.SqlException ex) when (
+        ex.Number == -2 ||
+        ex.Number == 2 ||
+        ex.Number == 40 ||
+        ex.Number == 53 ||
+        ex.Number == 4060 ||
+        ex.Number == 18456 ||
+        ex.Number == 18487)
     {
-        logger.LogWarning(ex, "Database index/column migration timed out after {Timeout}s. The app will continue, but database tuning may be required.", 120);
+        logger.LogWarning(ex, "Database index/column migration could not run because SQL Server is unavailable. The app will continue without this tuning step.");
     }
 
     if (runDevSeed)

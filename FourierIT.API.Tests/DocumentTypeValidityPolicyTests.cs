@@ -38,7 +38,6 @@ public class DocumentTypeValidityPolicyTests
             ValidityMonths = 12,
             WarningDays = 30,
             ValidityBasis = ValidityBasis.CertificationDate,
-            NeverExpires = false
         };
         context.DocumentTypes.Add(documentType);
 
@@ -138,7 +137,6 @@ public class DocumentTypeValidityPolicyTests
         var request = new DocumentTypeValidityUpdateRequest
         {
             ValidityMonths = 12,
-            NeverExpires = false,
             ValidityBasis = ValidityBasis.CertificationDate,
             WarningDays = 30
         };
@@ -155,7 +153,6 @@ public class DocumentTypeValidityPolicyTests
         var documentTypeAfter = await context.DocumentTypes.AsNoTracking().SingleAsync(dt => dt.DocumentTypeId == 1);
         Assert.Equal(12, documentTypeAfter.ValidityMonths);
         Assert.Equal(30, documentTypeAfter.WarningDays);
-        Assert.False(documentTypeAfter.NeverExpires);
     }
 
     [Fact]
@@ -170,7 +167,6 @@ public class DocumentTypeValidityPolicyTests
             ValidityMonths = 12,
             WarningDays = 30,
             ValidityBasis = ValidityBasis.UploadDate,
-            NeverExpires = false
         };
         var user = new User { Id = "u1", UserName = "user1" };
         context.Users.Add(user);
@@ -215,7 +211,6 @@ public class DocumentTypeValidityPolicyTests
         var request = new DocumentTypeValidityUpdateRequest
         {
             ValidityMonths = 6,
-            NeverExpires = false,
             ValidityBasis = ValidityBasis.UploadDate,
             WarningDays = 15
         };
@@ -248,7 +243,6 @@ public class DocumentTypeValidityPolicyTests
             ValidityMonths = 12,
             WarningDays = 30,
             ValidityBasis = ValidityBasis.UploadDate,
-            NeverExpires = false
         };
         var user = new User { Id = "u1", UserName = "user1" };
         context.Users.Add(user);
@@ -298,7 +292,6 @@ public class DocumentTypeValidityPolicyTests
         var request = new DocumentTypeValidityUpdateRequest
         {
             ValidityMonths = 6,
-            NeverExpires = false,
             ValidityBasis = ValidityBasis.UploadDate,
             WarningDays = 15
         };
@@ -312,12 +305,12 @@ public class DocumentTypeValidityPolicyTests
     }
 
     [Theory]
-    [InlineData(0, false, ValidityBasis.UploadDate, 10)]
-    [InlineData(121, false, ValidityBasis.UploadDate, 10)]
-    [InlineData(12, false, ValidityBasis.UploadDate, 365)]
-    [InlineData(12, false, (ValidityBasis)999, 10)]
-    [InlineData(12, false, ValidityBasis.UploadDate, 360)]
-    public async Task ValidationRules_Return400(int validityMonths, bool neverExpires, ValidityBasis basis, int warningDays)
+    [InlineData(0, ValidityBasis.UploadDate, 10)]
+    [InlineData(121, ValidityBasis.UploadDate, 10)]
+    [InlineData(12, ValidityBasis.UploadDate, 365)]
+    [InlineData(12, (ValidityBasis)999, 10)]
+    [InlineData(12, ValidityBasis.UploadDate, 360)]
+    public async Task ValidationRules_Return400(int validityMonths, ValidityBasis basis, int warningDays)
     {
         await using var context = CreateContext();
         var documentType = new DocumentType { DocumentTypeId = 1, TypeName = "Type", Description = "desc" };
@@ -342,7 +335,6 @@ public class DocumentTypeValidityPolicyTests
         var request = new DocumentTypeValidityUpdateRequest
         {
             ValidityMonths = validityMonths,
-            NeverExpires = neverExpires,
             ValidityBasis = basis,
             WarningDays = warningDays
         };
@@ -373,7 +365,6 @@ public class DocumentTypeValidityPolicyTests
         var result = await controller.PreviewValidity(1, new DocumentTypeValidityUpdateRequest
         {
             ValidityMonths = 12,
-            NeverExpires = false,
             ValidityBasis = ValidityBasis.UploadDate,
             WarningDays = 10
         });

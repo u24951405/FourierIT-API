@@ -40,7 +40,8 @@ namespace FourierIT_API.Controllers
             if (!string.IsNullOrWhiteSpace(result.StatusMessage) &&
                 (result.StatusMessage.Contains("error", StringComparison.OrdinalIgnoreCase)
                  || result.StatusMessage.Contains("failed", StringComparison.OrdinalIgnoreCase)
-                 || result.StatusMessage.Contains("not configured", StringComparison.OrdinalIgnoreCase)))
+                 || result.StatusMessage.Contains("not configured", StringComparison.OrdinalIgnoreCase)
+                 || result.StatusMessage.Contains("not available", StringComparison.OrdinalIgnoreCase)))
             {
                 _logger.LogWarning("Backup creation failed: {Status}", result.StatusMessage);
                 return BadRequest(result);

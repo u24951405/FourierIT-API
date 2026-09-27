@@ -120,8 +120,7 @@ public class MonthlyReportTests
         var expiredType = new DocumentType { DocumentTypeId = 1, TypeName = "Expired Type", WarningDays = 30 };
         var warningType = new DocumentType { DocumentTypeId = 2, TypeName = "Warning Type", WarningDays = 30 };
         var outsideType = new DocumentType { DocumentTypeId = 3, TypeName = "Outside Type", WarningDays = 30 };
-        var neverType = new DocumentType { DocumentTypeId = 4, TypeName = "Never Type", WarningDays = 30, NeverExpires = true };
-        context.DocumentTypes.AddRange(expiredType, warningType, outsideType, neverType);
+        context.DocumentTypes.AddRange(expiredType, warningType, outsideType);
 
         var now = DateTimeOffset.UtcNow;
         context.Documents.AddRange(
@@ -163,19 +162,6 @@ public class MonthlyReportTests
                 FileSizeBytes = 1024,
                 EncryptionAlgorithm = "AES-256",
                 IsEncrypted = true
-            },
-            new Document
-            {
-                DocumentId = 104,
-                FileName = "never.pdf",
-                UserId = "user-activity-validity",
-                DocumentTypeId = 4,
-                CurrentStatus = "Verified",
-                UploadedDate = now.AddDays(-90).UtcDateTime,
-                ExpiryDate = DateTimeOffset.MaxValue,
-                FileSizeBytes = 1024,
-                EncryptionAlgorithm = "AES-256",
-                IsEncrypted = true
             });
 
         await context.SaveChangesAsync();
@@ -187,7 +173,6 @@ public class MonthlyReportTests
         Assert.Equal("Expired", report.Inventory.Single(d => d.DocumentName == "expired.pdf").VerificationStatus);
         Assert.Equal("Expiring Soon", report.Inventory.Single(d => d.DocumentName == "warning.pdf").VerificationStatus);
         Assert.Equal("Verified", report.Inventory.Single(d => d.DocumentName == "outside.pdf").VerificationStatus);
-        Assert.Equal("Verified", report.Inventory.Single(d => d.DocumentName == "never.pdf").VerificationStatus);
     }
 
     [Fact]

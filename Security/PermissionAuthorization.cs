@@ -40,7 +40,7 @@ public sealed class PermissionAuthorizationHandler : AuthorizationHandler<Permis
         if (string.IsNullOrWhiteSpace(userId))
             return;
 
-        var hasPermission = await _context.Set<IdentityUserRole<string>>()
+        var hasPermission = await _context.UserRoles
             .Where(userRole => userRole.UserId == userId)
             .Join(
                 _context.RolePermissions,

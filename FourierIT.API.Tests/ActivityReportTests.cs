@@ -173,7 +173,7 @@ public class ActivityReportTests
         Assert.Equal(1, dto.InactiveDocuments);
         Assert.Contains(dto.DistributionByCategory, x => x.Label == "Identity Document" && x.Count == 1);
         Assert.Contains(dto.Inventory, x => x.DocumentName == "id-passport.pdf" && x.VerificationStatus == "Verified");
-        Assert.Contains(dto.VaultAccessLog, x => x.AccessorName == "Ava Accessor" && x.ActionReason.Contains("VIEW"));
+        Assert.Contains(dto.VaultAccessLog, x => x.AccessorName == "Ava Accessor" && x.ActionReason.StartsWith("Viewed"));
         Assert.Contains(dto.ClientRelationships, x => x.Organisation == "Test Bank" && x.DocumentsShared == 1);
     }
 

@@ -107,7 +107,9 @@ public class SuperAdminUserDeletionTests : IDisposable
 
         var result = await controller.DeleteUserById(targetUser.Id);
 
-        Assert.IsType<NoContentResult>(result);
+        // Deletes answer 200 OK with a message (SafeDeleteAsync); show the error body if it failed instead.
+        Assert.True(result is OkObjectResult,
+            System.Text.Json.JsonSerializer.Serialize((result as ObjectResult)?.Value));
         Assert.Null(await _context.Users.FindAsync(targetUser.Id));
 
         var survivingAuditLog = await _context.AuditLogs.FirstAsync();
@@ -139,6 +141,8 @@ public class SuperAdminUserDeletionTests : IDisposable
         userManager.Setup(x => x.GetUserAsync(It.IsAny<ClaimsPrincipal>())).ReturnsAsync(actingUser);
         userManager.Setup(x => x.FindByIdAsync(It.IsAny<string>()))
             .Returns<string>(id => _context.Users.FirstOrDefaultAsync(u => u.Id == id));
+        // Deleting a user first removes their roles; these test users have none.
+        userManager.Setup(x => x.GetRolesAsync(It.IsAny<User>())).ReturnsAsync(new List<string>());
         userManager.Setup(x => x.IsInRoleAsync(actingUser, "Admin")).ReturnsAsync(false);
         userManager.Setup(x => x.IsInRoleAsync(actingUser, "Department Admin")).ReturnsAsync(false);
         // Actually remove the row (rather than just returning success) so the real Sqlite

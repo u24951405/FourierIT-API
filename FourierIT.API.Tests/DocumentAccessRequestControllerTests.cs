@@ -89,8 +89,8 @@ public class DocumentAccessRequestControllerTests
         context.Institutions.Add(institution);
         context.Roles.Add(otherRole);
         context.Users.AddRange(owner, nonOwner);
-        context.Set<IdentityUserRole<string>>().Add(new IdentityUserRole<string> { UserId = owner.Id, RoleId = documentOwnerRole.Id });
-        context.Set<IdentityUserRole<string>>().Add(new IdentityUserRole<string> { UserId = nonOwner.Id, RoleId = otherRole.Id });
+        context.UserRoles.Add(new UserRole { UserId = owner.Id, RoleId = documentOwnerRole.Id });
+        context.UserRoles.Add(new UserRole { UserId = nonOwner.Id, RoleId = otherRole.Id });
         context.InstitutionSessionTokens.Add(CreateSession(institution.InstitutionId, "session-token"));
         await context.SaveChangesAsync();
 

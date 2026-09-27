@@ -42,6 +42,10 @@ namespace FourierIT_API.Models
 
         public DateTimeOffset RequestDate { get; set; } = DateTimeOffset.UtcNow;
 
+        // Who at the institution made the request; told by email when it is approved or denied.
+        [StringLength(256)]
+        public string? RequesterEmail { get; set; }
+
         public AccessToken AccessToken { get; set; } = null!;
 
         public DateTime? RespondedAt { get; set; }
@@ -53,6 +57,30 @@ namespace FourierIT_API.Models
         [ForeignKey("ApprovedByUser")]
         public string? ApprovedByUserId { get; set; }
         public User? ApprovedByUser { get; set; }
+
+        // ── Follow-up while the owner hasn't answered ──
+        /// <summary>When the owner (or department admin) was reminded that the request is still waiting.</summary>
+        public DateTime? OwnerReminderSentAt { get; set; }
+
+        /// <summary>When the request was escalated because its needed-by date passed without an answer.</summary>
+        public DateTime? EscalatedAt { get; set; }
+
+        // ── More time on approved access ──
+        /// <summary>The new end of access the institution asked for.</summary>
+        public DateTimeOffset? ExtensionRequestedUntil { get; set; }
+
+        [StringLength(500)]
+        public string? ExtensionReason { get; set; }
+
+        /// <summary>Pending, Approved or Denied; null when no extension was asked for.</summary>
+        [StringLength(20)]
+        public string? ExtensionStatus { get; set; }
+
+        public DateTime? ExtensionRequestedAt { get; set; }
+        public DateTime? ExtensionRespondedAt { get; set; }
+
+        [StringLength(500)]
+        public string? ExtensionResponseNote { get; set; }
 
         public ICollection<AccessList> AccessLists { get; set; } = new List<AccessList>();
         public ICollection<InstitutionRequestedDocumentType> RequestedDocumentTypes { get; set; } = new List<InstitutionRequestedDocumentType>();

@@ -20,6 +20,9 @@ namespace FourierIT_API.Models
 
         public bool IsRevoked { get; set; } = false;
 
+        /// <summary>When the institution was emailed that this access is about to end (cleared when access is extended).</summary>
+        public DateTimeOffset? ExpiryReminderSentAt { get; set; }
+
         public EnquirySession EnquirySession { get; set; } = null!;
 
         [ForeignKey("User")]

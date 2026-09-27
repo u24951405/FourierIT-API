@@ -8,7 +8,10 @@ using Microsoft.Extensions.Options;
 
 namespace FourierIT_API.Data
 {
-    public class AppDbContext : IdentityDbContext<User, Role, string>
+    // UserRole is Identity's own user-role type, so Identity and our queries read and write the same rows.
+    public class AppDbContext : IdentityDbContext<User, Role, string,
+        IdentityUserClaim<string>, UserRole, IdentityUserLogin<string>,
+        IdentityRoleClaim<string>, IdentityUserToken<string>>
     {
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
@@ -90,7 +93,6 @@ namespace FourierIT_API.Data
         public DbSet<UserNotification> UserNotifications { get; set; }
         public DbSet<Notification> Notifications { get; set; }
         public DbSet<InstitutionMembers> InstitutionMembers { get; set; }
-        public new DbSet<UserRole> UserRoles { get; set; }
         public DbSet<PEPList> PEPLists { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -289,6 +291,11 @@ namespace FourierIT_API.Data
             // Departments and related DepartmentDocumentTypes are seeded at runtime by DevLookupSeed
             // to avoid FK conflicts during migrations when Branch/Institution ids are not guaranteed.
 
+            // Scores and weights: state the column type SQL Server already uses (decimal(18,2)) so values are never silently truncated.
+            modelBuilder.Entity<ClientRiskRating>().Property(r => r.TotalScore).HasColumnType("decimal(18,2)");
+            modelBuilder.Entity<ComplianceStatus>().Property(s => s.ComplianceScore).HasColumnType("decimal(18,2)");
+            modelBuilder.Entity<RiskVariable>().Property(v => v.WeightMultiplier).HasColumnType("decimal(18,2)");
+
             // Configure UserRole many-to-many relationship
 
             modelBuilder.Entity<UserRole>()
@@ -388,10 +395,6 @@ namespace FourierIT_API.Data
             modelBuilder.Entity<DocumentType>()
                 .Property(dt => dt.ValidityMonths)
                 .HasDefaultValue(3);
-
-            modelBuilder.Entity<DocumentType>()
-                .Property(dt => dt.NeverExpires)
-                .HasDefaultValue(false);
 
             modelBuilder.Entity<DocumentType>()
                 .Property(dt => dt.ValidityBasis)
@@ -667,11 +670,11 @@ namespace FourierIT_API.Data
                 .HasForeignKey<EnquirySession>(es => es.TokenId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-            // Configure AccessToken one-to-one relationship with User **
+            // A user gets an access token for each institution request they approve.
             modelBuilder.Entity<AccessToken>()
                 .HasOne(at => at.User)
-                .WithOne(u => u.AccessToken)
-                .HasForeignKey<AccessToken>(at => at.UserId)
+                .WithMany(u => u.AccessTokens)
+                .HasForeignKey(at => at.UserId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             // Configure User one-to-one relationship with EnquiryComment

@@ -42,8 +42,8 @@ namespace FourierIT_API.Models
         // One-to-many relationship with ClientEnlistment
         public ICollection<ClientEnlistment> ClientEnlistments { get; set; } = new List<ClientEnlistment>();
 
-        // One-to-one relationship with AccessToken (a user has one access token)
-        public AccessToken AccessToken { get; set; } = null!;
+        // Access tokens for the institution requests this user approved (one per approved request).
+        public ICollection<AccessToken> AccessTokens { get; set; } = new List<AccessToken>();
 
         public EnquiryComment EnquiryComment { get; set; } = null!;
 
@@ -54,6 +54,9 @@ namespace FourierIT_API.Models
         public string EntityIdentificationNumber { get; set; } = string.Empty;
 
         public bool EmailVerified { get; set; } = false;
+
+        // Whether notifications (requests, reviews, expiry) are also emailed. Sign-in codes and security notices are always sent.
+        public bool EmailNotificationsEnabled { get; set; } = true;
         public string? EmailVerificationCodeHash { get; set; }
         public DateTimeOffset? EmailVerificationExpiry { get; set; }
 

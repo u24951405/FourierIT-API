@@ -25,5 +25,7 @@ namespace FourierIT_API.DTOs.User
 
         // True for South African ID holders: their date of birth is read from the ID number and can't be edited.
         public bool DateOfBirthFromIdNumber { get; set; }
+
+        public bool EmailNotificationsEnabled { get; set; } = true;
     }
 }

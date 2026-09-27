@@ -25,7 +25,7 @@ public class PermissionAuthorizationTests
         context.Permissions.Add(new Permission { PermissionId = 2, PermissionKey = "Compliance.View" });
         context.Permissions.Add(new Permission { PermissionId = 3, PermissionKey = "Documents.Manage" });
         context.Permissions.Add(new Permission { PermissionId = 4, PermissionKey = "Reports.View" });
-        context.Set<IdentityUserRole<string>>().Add(new IdentityUserRole<string> { UserId = "user-1", RoleId = "custom-role" });
+        context.UserRoles.Add(new UserRole { UserId = "user-1", RoleId = "custom-role" });
         context.RolePermissions.Add(new RolePermission { RoleId = "custom-role", PermissionId = 1 });
         context.RolePermissions.Add(new RolePermission { RoleId = "custom-role", PermissionId = 2 });
         await context.SaveChangesAsync();

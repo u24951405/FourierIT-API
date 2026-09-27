@@ -2,6 +2,18 @@ using System.ComponentModel.DataAnnotations;
 
 namespace FourierIT_API.DTOs.User
 {
+    public class ChangeUserRoleDto
+    {
+        [Required]
+        [StringLength(256)]
+        public string Role { get; set; } = string.Empty;
+    }
+
+    public class NotificationPreferencesDto
+    {
+        public bool EmailNotificationsEnabled { get; set; }
+    }
+
     public class RequestEmailChangeDto
     {
         [Required]

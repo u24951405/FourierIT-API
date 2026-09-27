@@ -22,6 +22,7 @@ public sealed class ReportPdfService
             {
                 new[] { "Verified", report.Processing.Verified.ToString() },
                 new[] { "Pending verification", report.Processing.PendingVerification.ToString() },
+                new[] { "Rejected", report.Processing.Rejected.ToString() },
                 new[] { "Flagged anomalies", report.Processing.FlaggedAnomalies.ToString() },
                 new[] { "Part of enquiry", report.Processing.PartOfEnquiry.ToString() }
             });
@@ -29,10 +30,11 @@ public sealed class ReportPdfService
             {
                 ("Verified", report.Processing.Verified),
                 ("Pending", report.Processing.PendingVerification),
+                ("Rejected", report.Processing.Rejected),
                 ("Flagged", report.Processing.FlaggedAnomalies),
                 ("Enquiry", report.Processing.PartOfEnquiry)
             });
-            AddTable(column, "Security events", new[] { "Day", "Failed logins", "Unusual access", "Permission requests" },
+            AddTable(column, "Security events", new[] { "Day", "Failed logins", "Flagged or access revoked", "Role changes" },
                 report.SecurityEvents.Select(item => new[] { item.Day.ToString(), item.FailedLogins.ToString(), item.UnusualAccessPattern.ToString(), item.PermissionElevationRequest.ToString() }).ToArray());
             AddTable(column, "Distribution", new[] { "Category", "Count", "Percentage" },
                 report.Distribution.Select(item => new[] { item.Label, item.Count.ToString(), $"{item.Percentage.ToString(CultureInfo.InvariantCulture)}%" }).ToArray());
@@ -52,16 +54,17 @@ public sealed class ReportPdfService
         {
             AddTable(column, "Document overview", new[] { "Metric", "Value" }, new[]
             {
+                new[] { "Compliance status", report.ComplianceStatus == null ? "Not checked yet" : $"{report.ComplianceStatus} ({report.CompliancePercentage}%)" },
                 new[] { "Active documents", report.ActiveDocuments.ToString() },
-                new[] { "Inactive documents", report.InactiveDocuments.ToString() },
+                new[] { "Not active (pending, rejected or expired)", report.InactiveDocuments.ToString() },
                 new[] { "Total documents", report.TotalDocuments.ToString() }
             });
-            AddChart(column, "Documents by category", report.DistributionByCategory.Select(item => (item.Label, item.Count)).ToArray());
-            AddTable(column, "Document inventory", new[] { "Document", "Category", "Uploaded", "Expiry", "Status" },
+            AddChart(column, "Documents by type", report.DistributionByCategory.Select(item => (item.Label, item.Count)).ToArray());
+            AddTable(column, "Document inventory", new[] { "Document", "Type", "Uploaded", "Expires", "Status" },
                 report.Inventory.Select(item => new[] { item.DocumentName, item.Category, item.UploadDate, item.ExpiryDate ?? "-", item.VerificationStatus }).ToArray());
-            AddTable(column, "Vault access log", new[] { "Timestamp", "Accessor", "Role", "Action", "Organisation" },
+            AddTable(column, "Vault access log", new[] { "When (SAST)", "Who", "Role", "What happened", "Organisation" },
                 report.VaultAccessLog.Select(item => new[] { item.Timestamp, item.AccessorName, item.AccessorRole, item.ActionReason, item.Organisation }).ToArray());
-            AddTable(column, "Client relationships", new[] { "Organisation", "Documents shared", "Status" },
+            AddTable(column, "Institutions documents are shared with", new[] { "Organisation", "Documents shared", "Status" },
                 report.ClientRelationships.Select(item => new[] { item.Organisation, item.DocumentsShared.ToString(), item.Status }).ToArray());
         });
 
@@ -76,7 +79,7 @@ public sealed class ReportPdfService
             });
             if (report.ComplianceResults.Count > 0)
                 AddTable(column, "Compliance results", new[] { "User", "Status", "Risk", "Compliance %", "Last checked" },
-                    report.ComplianceResults.Select(item => new[] { item.UserId, item.OverallStatus, item.RiskLevel, $"{item.CompliancePercentage}%", item.LastChecked.ToString("yyyy-MM-dd HH:mm") }).ToArray());
+                    report.ComplianceResults.Select(item => new[] { item.Name, item.OverallStatus, item.RiskLevel, $"{item.CompliancePercentage}%", item.LastChecked.ToString("yyyy-MM-dd HH:mm") }).ToArray());
             if (report.DocumentResults.Count > 0)
                 AddTable(column, "Document processing", new[] { "File", "Type", "Status", "Uploaded", "Size" },
                     report.DocumentResults.Select(item => new[] { item.FileName, item.DocumentType, item.Status, item.UploadedDate.ToString("yyyy-MM-dd"), item.FileSizeBytes.ToString() }).ToArray());
@@ -84,8 +87,8 @@ public sealed class ReportPdfService
                 AddTable(column, "Document distribution", new[] { "Type", "Count", "Size" },
                     report.DistributionResults.Select(item => new[] { item.DocumentType, item.DocumentCount.ToString(), item.TotalSizeBytes.ToString() }).ToArray());
             if (report.SecurityResults.Count > 0)
-                AddTable(column, "Security anomalies", new[] { "Action", "User", "Timestamp", "Description" },
-                    report.SecurityResults.Select(item => new[] { item.Action, item.UserId, item.Timestamp.ToString("yyyy-MM-dd HH:mm"), item.Description }).ToArray());
+                AddTable(column, "Security anomalies", new[] { "Action", "Who", "When (SAST)", "Description" },
+                    report.SecurityResults.Select(item => new[] { item.Action, item.Name, item.Timestamp.ToString("yyyy-MM-dd HH:mm"), item.Description }).ToArray());
             if (report.StorageResult != null)
                 AddTable(column, "System storage", new[] { "From", "To", "Documents", "Size" }, new[]
                 {

@@ -21,6 +21,12 @@ namespace FourierIT_API.Models
 
         public bool IsResolved { get; set; } = false;
 
+        public DateTimeOffset? ResolvedAt { get; set; }
+
+        /// <summary>What the owner did about the flag; passed on to the institution.</summary>
+        [System.ComponentModel.DataAnnotations.StringLength(500)]
+        public string? ResolutionNote { get; set; }
+
         public DateTimeOffset FlaggedAt { get; set; } = DateTimeOffset.UtcNow;
 
         // Navigation property for AccessList

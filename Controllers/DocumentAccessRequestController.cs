@@ -24,6 +24,7 @@ namespace FourierIT_API.Controllers
         private readonly IAuditLogService _auditLogService;
         private readonly IComplianceService _complianceService;
         private readonly ISystemSettingsService _settings;
+        private readonly IInAppNotificationService? _notifications;
 
         public DocumentAccessRequestsController(
             AppDbContext context,
@@ -32,7 +33,8 @@ namespace FourierIT_API.Controllers
             DepartmentRequestValidationService departmentRequestValidationService,
             IAuditLogService auditLogService,
             IComplianceService complianceService,
-            ISystemSettingsService? settings = null)
+            ISystemSettingsService? settings = null,
+            IInAppNotificationService? notifications = null)
         {
             _context = context;
             _userManager = userManager;
@@ -41,6 +43,66 @@ namespace FourierIT_API.Controllers
             _auditLogService = auditLogService;
             _complianceService = complianceService;
             _settings = settings ?? new SystemSettingsService(context);
+            _notifications = notifications;
+        }
+
+        private const string RequestsPage = "/documents/requests";
+
+        /// <summary>Who a request is addressed to, for the institution. Users without a profile fall back to their username.</summary>
+        private static string RecipientDisplayName(InstitutionEnquiryRequest request)
+        {
+            if (request.RequestType == "Department")
+                return request.TargetDepartment?.DepartmentName ?? "-";
+
+            var user = request.TargetUser;
+            if (user == null) return request.TargetUserId ?? "-";
+
+            var name = $"{user.Profile?.FirstName} {user.Profile?.LastName}".Trim();
+            return string.IsNullOrWhiteSpace(name) ? user.UserName ?? user.Id : name;
+        }
+
+        /// <summary>The document types a department accepts requests for (set up by the Super Admin).</summary>
+        private Task<List<int>> GetDepartmentDocumentTypeIdsAsync(int departmentId) =>
+            _context.DepartmentDocumentTypes
+                .Where(ddt => ddt.DepartmentId == departmentId)
+                .Select(ddt => ddt.DocumentTypeId)
+                .ToListAsync();
+
+        /// <summary>Runs a notification step; a notification failure never undoes the action that raised it.</summary>
+        private async Task TryNotifyAsync(Func<IInAppNotificationService, Task> notify)
+        {
+            if (_notifications == null) return;
+            try
+            {
+                await notify(_notifications);
+            }
+            catch
+            {
+                // Notifications are best-effort.
+            }
+        }
+
+        private async Task<string> GetInstitutionNameAsync(int institutionId) =>
+            await _context.Institutions
+                .AsNoTracking()
+                .Where(i => i.InstitutionId == institutionId)
+                .Select(i => i.InstitutionName)
+                .FirstOrDefaultAsync() ?? "An institution";
+
+        private static string DescribeRequest(InstitutionEnquiryRequest request) =>
+            string.IsNullOrWhiteSpace(request.ReferenceNumber)
+                ? $"request #{request.EnquiryRequestId}"
+                : $"request {request.ReferenceNumber} (#{request.EnquiryRequestId})";
+
+        /// <summary>The owner a request targets, or the admins of its department while it is still with the department.</summary>
+        private async Task<List<string>> GetRequestRecipientsAsync(InstitutionEnquiryRequest request, IInAppNotificationService notifications)
+        {
+            if (!string.IsNullOrWhiteSpace(request.TargetUserId))
+                return new List<string> { request.TargetUserId };
+
+            return request.TargetDepartmentId == null
+                ? new List<string>()
+                : await notifications.GetUserIdsInRoleAsync("Department Admin", request.TargetDepartmentId);
         }
 
         /// <summary>
@@ -146,7 +208,13 @@ namespace FourierIT_API.Controllers
                 SubmissionDeadline = dto.SubmissionDeadline,
                 ReferenceNumber = string.IsNullOrWhiteSpace(dto.ReferenceNumber) ? null : dto.ReferenceNumber.Trim(),
                 Status = dto.RequestType == "Department" ? "Department_Pending" : "Pending",
-                RequestDate = DateTimeOffset.UtcNow
+                RequestDate = DateTimeOffset.UtcNow,
+                // Sessions started before the email was stored fall back to the institution's latest invitation.
+                RequesterEmail = sessionToken.Email ?? await _context.InstitutionInvitations
+                    .Where(ii => ii.InstitutionId == institutionId)
+                    .OrderByDescending(ii => ii.InvitationId)
+                    .Select(ii => ii.Email)
+                    .FirstOrDefaultAsync()
             };
 
             _context.InstitutionEnquiryRequests.Add(request);
@@ -204,6 +272,29 @@ namespace FourierIT_API.Controllers
 
             await _context.SaveChangesAsync();
 
+            await TryNotifyAsync(async notifications =>
+            {
+                var institutionName = await GetInstitutionNameAsync(institutionId);
+                var count = requestedDocumentTypeIds.Count;
+                var documents = $"{count} document{(count == 1 ? "" : "s")}";
+                var deadline = request.SubmissionDeadline.HasValue ? $" Respond by {request.SubmissionDeadline.Value:d MMM yyyy}." : string.Empty;
+                var purpose = string.IsNullOrWhiteSpace(request.PurposeNote) ? string.Empty : $" Purpose: {request.PurposeNote}.";
+
+                if (targetUser != null)
+                {
+                    await notifications.NotifyUsersAsync(new[] { targetUser.Id }, "New document request",
+                        $"{institutionName} has requested {documents} from you.{purpose}{deadline}",
+                        "RequestReceived", link: RequestsPage, sendEmail: true);
+                }
+                else if (targetDepartment != null)
+                {
+                    var adminIds = await notifications.GetUserIdsInRoleAsync("Department Admin", targetDepartment.DepartmentId);
+                    await notifications.NotifyUsersAsync(adminIds, "New department document request",
+                        $"{institutionName} has requested {documents} from {targetDepartment.DepartmentName}. Assign it to the right person or deny it.{purpose}{deadline}",
+                        "RequestReceived", link: RequestsPage, sendEmail: true);
+                }
+            });
+
             return Ok(new
             {
                 request.EnquiryRequestId,
@@ -250,15 +341,17 @@ namespace FourierIT_API.Controllers
                     .ThenInclude(u => u!.Profile)
                 .Include(r => r.RequestedDocumentTypes)
                     .ThenInclude(rdt => rdt.DocumentType)
-                .Where(r => r.InstitutionId == institutionId && (r.Status == "Pending" || r.Status == "Department_Pending"))
+                .Include(r => r.AccessToken)
+                .Where(r => r.InstitutionId == institutionId)
                 .OrderByDescending(r => r.RequestDate)
                 .ToListAsync();
 
-            var requestStatuses = new Dictionary<int, (bool IsComplete, int MissingCount)>();
-            foreach (var request in requests)
+            // Every request the institution made, so decided and cancelled ones stay visible too.
+            // The document checklist only matters while a request is still waiting for a decision.
+            var checklists = new Dictionary<int, (bool IsComplete, int MissingCount, object RequestedDocumentStatuses)>();
+            foreach (var request in requests.Where(r => r.Status == "Pending" || r.Status == "Department_Pending"))
             {
-                var checklist = await ComputeInstitutionRequestChecklistAsync(request);
-                requestStatuses[request.EnquiryRequestId] = (checklist.IsComplete, checklist.MissingCount);
+                checklists[request.EnquiryRequestId] = await ComputeInstitutionRequestChecklistAsync(request);
             }
 
             return Ok(requests.Select(r => new
@@ -267,20 +360,27 @@ namespace FourierIT_API.Controllers
                 r.InstitutionId,
                 InstitutionName = r.Institution.InstitutionName,
                 r.RequestType,
-                Recipient = r.RequestType == "Department"
-                    ? new { Type = "Department", Name = r.TargetDepartment?.DepartmentName ?? "-" }
-                    : new { Type = "Individual", Name = r.TargetUser != null ? (string.IsNullOrWhiteSpace(r.TargetUser.Profile!.FirstName) && string.IsNullOrWhiteSpace(r.TargetUser.Profile.LastName) ? (r.TargetUser.UserName ?? r.TargetUser.Id) : (r.TargetUser.Profile.FirstName + " " + r.TargetUser.Profile.LastName).Trim()) : (r.TargetUserId ?? "-") },
+                Recipient = new { Type = r.RequestType == "Department" ? "Department" : "Individual", Name = RecipientDisplayName(r) },
                 r.Status,
                 r.PurposeNote,
                 r.RequestDate,
+                r.ReferenceNumber,
+                r.SubmissionDeadline,
+                r.RespondedAt,
+                ResponseNote = r.UserResponseNote,
+                AccessExpiresAt = r.AccessToken != null && !r.AccessToken.IsRevoked ? r.AccessToken.ExpiryTimeStamp : (DateTimeOffset?)null,
+                r.ExtensionStatus,
+                r.ExtensionRequestedUntil,
+                r.ExtensionResponseNote,
                 Documents = r.RequestedDocumentTypes.Select(d => new
                 {
                     d.DocumentTypeId,
                     DocumentTypeName = d.DocumentType.TypeName,
                     d.isMandatory
                 }),
-                IsComplete = requestStatuses[r.EnquiryRequestId].IsComplete,
-                MissingCount = requestStatuses[r.EnquiryRequestId].MissingCount
+                IsComplete = checklists.TryGetValue(r.EnquiryRequestId, out var checklist) ? checklist.IsComplete : (bool?)null,
+                MissingCount = checklists.TryGetValue(r.EnquiryRequestId, out var missing) ? missing.MissingCount : (int?)null,
+                RequestedDocumentStatuses = checklists.TryGetValue(r.EnquiryRequestId, out var statuses) ? statuses.RequestedDocumentStatuses : null
             }).ToList());
         }
 
@@ -354,6 +454,20 @@ namespace FourierIT_API.Controllers
             if (validDocumentTypeIds.Count != documentTypeIds.Count)
                 return BadRequest(new { error = "One or more requested document types are invalid." });
 
+            // The same rule as when the request was created: a department is only asked for the types it handles.
+            if (request.RequestType == "Department" && request.TargetDepartmentId.HasValue)
+            {
+                var allowed = await GetDepartmentDocumentTypeIdsAsync(request.TargetDepartmentId.Value);
+                var notAllowed = documentTypeIds.Except(allowed).ToList();
+                if (notAllowed.Count > 0)
+                    return BadRequest(new
+                    {
+                        error = "One or more requested document types do not belong to the target department's required documents.",
+                        invalidDocumentTypeIds = notAllowed,
+                        allowedDocumentTypeIds = allowed
+                    });
+            }
+
             request.PurposeNote = dto.PurposeNote.Trim();
             request.SubmissionDeadline = dto.SubmissionDeadline;
             request.ReferenceNumber = dto.ReferenceNumber?.Trim();
@@ -369,6 +483,16 @@ namespace FourierIT_API.Controllers
                     isMandatory = item.IsMandatory
                 });
             await _context.SaveChangesAsync();
+
+            await TryNotifyAsync(async notifications =>
+            {
+                var recipients = await GetRequestRecipientsAsync(request, notifications);
+                var institutionName = await GetInstitutionNameAsync(request.InstitutionId);
+                await notifications.NotifyUsersAsync(recipients, "Document request updated",
+                    $"{institutionName} changed {DescribeRequest(request)}. Check the documents it now asks for.",
+                    "RequestUpdated", link: RequestsPage);
+            });
+
             return Ok(new { request.EnquiryRequestId, request.Status, requestedDocumentTypeIds = documentTypeIds });
         }
 
@@ -425,6 +549,15 @@ namespace FourierIT_API.Controllers
                 // Ignore audit failures
             }
 
+            await TryNotifyAsync(async notifications =>
+            {
+                var recipients = await GetRequestRecipientsAsync(request, notifications);
+                var institutionName = await GetInstitutionNameAsync(request.InstitutionId);
+                await notifications.NotifyUsersAsync(recipients, "Document request cancelled",
+                    $"{institutionName} cancelled {DescribeRequest(request)}. No action is needed.",
+                    "RequestCancelled", link: RequestsPage);
+            });
+
             return Ok(new { message = "Request revoked.", requestId = request.EnquiryRequestId, status = request.Status });
         }
 
@@ -460,9 +593,7 @@ namespace FourierIT_API.Controllers
                 request.EnquiryRequestId,
                 request.RequestType,
                 request.Status,
-                Recipient = request.RequestType == "Department"
-                    ? new { Type = "Department", Name = request.TargetDepartment?.DepartmentName ?? "-" }
-                    : new { Type = "Individual", Name = request.TargetUser != null ? (string.IsNullOrWhiteSpace(request.TargetUser.Profile!.FirstName) && string.IsNullOrWhiteSpace(request.TargetUser.Profile.LastName) ? (request.TargetUser.UserName ?? request.TargetUser.Id) : (request.TargetUser.Profile.FirstName + " " + request.TargetUser.Profile.LastName).Trim()) : (request.TargetUserId ?? "-") },
+                Recipient = new { Type = request.RequestType == "Department" ? "Department" : "Individual", Name = RecipientDisplayName(request) },
                 checklist.IsComplete,
                 checklist.MissingCount,
                 checklist.RequestedDocumentStatuses
@@ -625,7 +756,7 @@ namespace FourierIT_API.Controllers
 
             if (docRole != null)
             {
-                var documentOwnerUserIds = _context.Set<IdentityUserRole<string>>()
+                var documentOwnerUserIds = _context.UserRoles
                     .Where(userRole => userRole.RoleId == docRole.Id)
                     .Select(userRole => userRole.UserId);
 
@@ -635,10 +766,11 @@ namespace FourierIT_API.Controllers
                     .Select(u => new
                     {
                         userId = u.Id,
-                        userName = u.UserName,
-                        displayName = !string.IsNullOrWhiteSpace(u.Profile.FirstName) || !string.IsNullOrWhiteSpace(u.Profile.LastName)
+                        userName = (string?)null,
+                        // Institutions see names only: usernames are often email addresses.
+                        displayName = u.Profile != null && (!string.IsNullOrWhiteSpace(u.Profile.FirstName) || !string.IsNullOrWhiteSpace(u.Profile.LastName))
                             ? (u.Profile.FirstName + " " + u.Profile.LastName).Trim()
-                            : (string.IsNullOrWhiteSpace(u.UserName) ? u.Id : u.UserName)
+                            : "Unnamed document owner"
                     })
                     .Distinct()
                     .OrderBy(u => u.displayName)
@@ -696,33 +828,46 @@ namespace FourierIT_API.Controllers
                 if (department == null)
                     return NotFound(new { error = "Target department not found." });
 
-                // For department requests, show the company-level required documents
-                // (e.g. entity type 'Company' requirements) filtered by what the
-                // department actually supports (DepartmentDocumentTypes).
-                // Return company-level required documents (EntityTypeId == 3).
-                // Previously we filtered these by DepartmentDocumentTypes; the UI
-                // expects the full company requirement set (11..19), so return
-                // the RequiredDocuments for the Company entity type.
-                var requiredDocs = await _context.RequiredDocuments
-                    .Where(rd => rd.EntityTypeId == 3)
-                    .Include(rd => rd.DocumentType)
+                // Only offer what the department accepts: creating the request rejects any other type.
+                // Mandatory flags and notes come from the company requirements where they exist.
+                var departmentTypeIds = await GetDepartmentDocumentTypeIdsAsync(departmentId);
+                var companyRequirements = await _context.RequiredDocuments
                     .AsNoTracking()
-                    .OrderBy(rd => rd.IsMandatory ? 0 : 1)
-                    .ThenBy(rd => rd.DocumentType.TypeName)
-                    .Select(rd => new
-                    {
-                        documentTypeId = rd.DocumentTypeId,
-                        typeName = rd.DocumentType.TypeName,
-                        description = rd.DocumentType.Description,
-                        isMandatory = rd.IsMandatory,
-                        requirementNote = rd.Description ?? rd.DocumentType.Description
-                    })
+                    .Where(rd => rd.EntityTypeId == 3 && departmentTypeIds.Contains(rd.DocumentTypeId))
+                    .Select(rd => new { rd.DocumentTypeId, rd.IsMandatory, rd.Description })
                     .ToListAsync();
 
-                return Ok(new
+                var departmentDocumentTypes = (await _context.DocumentTypes
+                        .AsNoTracking()
+                        .Where(dt => departmentTypeIds.Contains(dt.DocumentTypeId))
+                        .Select(dt => new { dt.DocumentTypeId, dt.TypeName, dt.Description })
+                        .ToListAsync())
+                    .Select(dt =>
+                    {
+                        var requirement = companyRequirements.FirstOrDefault(rd => rd.DocumentTypeId == dt.DocumentTypeId);
+                        return new
+                        {
+                            documentTypeId = dt.DocumentTypeId,
+                            typeName = dt.TypeName,
+                            description = dt.Description,
+                            isMandatory = requirement?.IsMandatory ?? false,
+                            requirementNote = requirement?.Description ?? dt.Description
+                        };
+                    })
+                    .OrderBy(dt => dt.isMandatory ? 0 : 1)
+                    .ThenBy(dt => dt.typeName)
+                    .ToList();
+
+                if (departmentDocumentTypes.Count == 0)
                 {
-                    documentTypes = requiredDocs
-                });
+                    return Ok(new
+                    {
+                        documentTypes = departmentDocumentTypes,
+                        warning = $"{department.DepartmentName} has no document types set up yet, so it can't receive requests. Contact DocuVault support."
+                    });
+                }
+
+                return Ok(new { documentTypes = departmentDocumentTypes });
             }
 
             var targetUser = await ResolveUserAsync(recipientId);
@@ -977,6 +1122,15 @@ namespace FourierIT_API.Controllers
                 RecordID = request.EnquiryRequestId
             });
 
+            await TryNotifyAsync(async notifications =>
+            {
+                var institutionName = await GetInstitutionNameAsync(request.InstitutionId);
+                var note = string.IsNullOrWhiteSpace(dto.AdminNote) ? string.Empty : $" Note from your department admin: {dto.AdminNote.Trim()}";
+                await notifications.NotifyUsersAsync(new[] { targetUser.Id }, "Document request assigned to you",
+                    $"Your department admin assigned you {institutionName}'s {DescribeRequest(request)}. Review it and approve or deny it.{note}",
+                    "RequestAssigned", link: RequestsPage, sendEmail: true);
+            });
+
             return Ok(new
             {
                 request.EnquiryRequestId,
@@ -1078,12 +1232,6 @@ namespace FourierIT_API.Controllers
                 });
             }
 
-            var existingToken = await _context.AccessTokens
-                .FirstOrDefaultAsync(at => at.UserId == request.TargetUserId);
-
-            if (existingToken != null)
-                existingToken.IsRevoked = true;
-
             var expiry = DateTimeOffset.UtcNow.AddHours(await _settings.GetAsync(SystemSettingDefinitions.DocumentAccessLinkExpiryHours));
             var tokenString = GenerateTokenString();
 
@@ -1128,6 +1276,14 @@ namespace FourierIT_API.Controllers
                 Description = $"Request {request.EnquiryRequestId} approved by {currentUser.UserName}.",
                 TableAffected = "InstitutionEnquiryRequests",
                 RecordID = request.EnquiryRequestId
+            });
+
+            await TryNotifyAsync(notifications =>
+            {
+                var count = approvedDocuments.Count;
+                notifications.EmailExternal(request.RequesterEmail, "Your document request was approved",
+                    $"Your {DescribeRequest(request)} was approved. {count} document{(count == 1 ? " is" : "s are")} now available in the DocuVault institution portal until {expiry:d MMM yyyy}.");
+                return Task.CompletedTask;
             });
 
             return Ok(new
@@ -1184,6 +1340,14 @@ namespace FourierIT_API.Controllers
                 RecordID = request.EnquiryRequestId
             });
 
+            await TryNotifyAsync(notifications =>
+            {
+                var reason = string.IsNullOrWhiteSpace(request.UserResponseNote) ? string.Empty : $" Reason: {request.UserResponseNote.Trim()}";
+                notifications.EmailExternal(request.RequesterEmail, "Your document request was denied",
+                    $"Your {DescribeRequest(request)} was denied.{reason}");
+                return Task.CompletedTask;
+            });
+
             return Ok(new { 
                 message = "Request denied.",
                 requestId = request.EnquiryRequestId,
@@ -1195,7 +1359,8 @@ namespace FourierIT_API.Controllers
         [HttpGet("institution-access/documents/{documentId:int}")]
         public async Task<IActionResult> DownloadWithInstitutionToken(
             [FromRoute] int documentId,
-            [FromQuery] string token)
+            [FromQuery] string token,
+            [FromQuery] bool inline = false)
         {
             if (string.IsNullOrWhiteSpace(token))
                 return Unauthorized(new { error = "A valid access token or institution session token is required." });
@@ -1226,7 +1391,8 @@ namespace FourierIT_API.Controllers
                     return Problem(detail: "Document ownership does not match the approved request.", statusCode: StatusCodes.Status403Forbidden);
 
                 var fileBytes = await _documentService.DownloadDocumentAsync(documentId, approval.InstitutionEnquiryRequest.TargetUserId);
-                return File(fileBytes, "application/octet-stream", document.FileName);
+                await LogInstitutionDownloadAsync(sessionToken.InstitutionId, "DocumentAccessApprovals", approval.ApprovalId, document.FileName, approval.EnquiryRequestId, inline);
+                return InstitutionFile(fileBytes, document.FileName, inline);
             }
 
             var accessToken = await _context.AccessTokens
@@ -1271,7 +1437,219 @@ namespace FourierIT_API.Controllers
                 return Forbid();
 
             var fileBytesToken = await _documentService.DownloadDocumentAsync(documentId, request.TargetUserId);
-            return File(fileBytesToken, "application/octet-stream", documentByToken.FileName);
+            await LogInstitutionDownloadAsync(request.InstitutionId, "InstitutionEnquiryRequests", request.EnquiryRequestId, documentByToken.FileName, request.EnquiryRequestId, inline);
+            return InstitutionFile(fileBytesToken, documentByToken.FileName, inline);
+        }
+
+        /// <summary>
+        /// A download, or with inline the file shown in the browser (no copy saved on the institution's computer).
+        /// Only PDFs and images can be shown inline; anything else is still downloaded.
+        /// </summary>
+        private IActionResult InstitutionFile(byte[] bytes, string fileName, bool inline)
+        {
+            var contentType = Path.GetExtension(fileName).ToLowerInvariant() switch
+            {
+                ".pdf" => "application/pdf",
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".gif" => "image/gif",
+                ".webp" => "image/webp",
+                _ => null
+            };
+            if (!inline || contentType == null)
+                return File(bytes, "application/octet-stream", fileName);
+
+            Response.Headers["Content-Disposition"] = "inline";
+            Response.Headers["Cache-Control"] = "no-store";
+            return File(bytes, contentType);
+        }
+
+        /// <summary>
+        /// The institution asks for more time on access it was given, instead of making a new request.
+        /// The owner who approved the request decides.
+        /// </summary>
+        [AllowAnonymous]
+        [HttpPost("institution-access/requests/{requestId:int}/extension")]
+        public async Task<IActionResult> RequestAccessExtension([FromRoute] int requestId, [FromQuery] string token, [FromBody] RequestAccessExtensionDto dto)
+        {
+            var sessionToken = string.IsNullOrWhiteSpace(token) ? null : await _context.InstitutionSessionTokens
+                .FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked && st.ExpiresAt > DateTime.UtcNow);
+            if (sessionToken == null)
+                return Unauthorized(new { error = "Your session has ended. Please sign in again." });
+
+            var request = await _context.InstitutionEnquiryRequests
+                .Include(r => r.AccessToken)
+                .Include(r => r.Institution)
+                .FirstOrDefaultAsync(r => r.EnquiryRequestId == requestId && r.InstitutionId == sessionToken.InstitutionId);
+            if (request == null)
+                return NotFound(new { error = "Request not found." });
+            if (request.Status != "Approved" || request.AccessToken == null || request.AccessToken.IsRevoked)
+                return Conflict(new { error = "More time can only be asked for on a request whose access is still approved." });
+            if (request.ExtensionStatus == "Pending")
+                return Conflict(new { error = "You have already asked for more time on this request. The owner hasn't answered yet." });
+            if (string.IsNullOrWhiteSpace(dto.Reason))
+                return BadRequest(new { error = "Say why you need the documents for longer." });
+
+            var maxDays = await _settings.GetAsync(SystemSettingDefinitions.MaxAccessExtensionDays);
+            if (dto.Days < 1 || dto.Days > maxDays)
+                return BadRequest(new { error = $"You can ask for between 1 and {maxDays} extra days." });
+
+            // Counted from when access ends now, or from today if it has already ended.
+            var from = request.AccessToken.ExpiryTimeStamp > DateTimeOffset.UtcNow ? request.AccessToken.ExpiryTimeStamp : DateTimeOffset.UtcNow;
+            request.ExtensionRequestedUntil = from.AddDays(dto.Days);
+            request.ExtensionReason = dto.Reason.Trim();
+            request.ExtensionStatus = "Pending";
+            request.ExtensionRequestedAt = DateTime.UtcNow;
+            request.ExtensionRespondedAt = null;
+            request.ExtensionResponseNote = null;
+            await _context.SaveChangesAsync();
+
+            await TryAuditAsync(new AuditLog
+            {
+                InstitutionId = request.InstitutionId,
+                ActionCode = "ACCESS_EXTENSION_REQUESTED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = $"{request.Institution.InstitutionName} asked for {dto.Days} more day{(dto.Days == 1 ? "" : "s")} on {DescribeRequest(request)}. Reason: {request.ExtensionReason}",
+                TableAffected = "InstitutionEnquiryRequests",
+                RecordID = request.EnquiryRequestId
+            });
+
+            var approverId = request.ApprovedByUserId ?? request.TargetUserId;
+            if (!string.IsNullOrWhiteSpace(approverId))
+            {
+                await TryNotifyAsync(notifications => notifications.NotifyUsersAsync(new[] { approverId },
+                    "An institution asked for more time",
+                    $"{request.Institution.InstitutionName} asked to keep access to the documents for {DescribeRequest(request)} until {request.ExtensionRequestedUntil.Value.ToOffset(TimeSpan.FromHours(2)):d MMM yyyy}. Reason: {request.ExtensionReason}",
+                    "AccessExtension", link: RequestsPage, sendEmail: true));
+            }
+
+            return Ok(new { request.EnquiryRequestId, request.ExtensionStatus, request.ExtensionRequestedUntil });
+        }
+
+        /// <summary>Extension requests waiting for the signed-in owner's answer.</summary>
+        [HttpGet("document-access-requests/extensions")]
+        public async Task<IActionResult> GetPendingExtensions()
+        {
+            var currentUser = await _userManager.GetUserAsync(User);
+            if (currentUser == null) return Unauthorized();
+
+            var requests = await _context.InstitutionEnquiryRequests
+                .AsNoTracking()
+                .Include(r => r.Institution)
+                .Include(r => r.AccessToken)
+                .Where(r => r.ExtensionStatus == "Pending" && r.Status == "Approved"
+                    && (r.ApprovedByUserId == currentUser.Id || (r.ApprovedByUserId == null && r.TargetUserId == currentUser.Id)))
+                .OrderBy(r => r.ExtensionRequestedAt)
+                .ToListAsync();
+
+            return Ok(requests.Select(r => new
+            {
+                r.EnquiryRequestId,
+                r.ReferenceNumber,
+                InstitutionName = r.Institution.InstitutionName,
+                r.PurposeNote,
+                CurrentAccessEndsAt = r.AccessToken?.ExpiryTimeStamp,
+                r.ExtensionRequestedUntil,
+                r.ExtensionReason,
+                r.ExtensionRequestedAt
+            }));
+        }
+
+        [HttpPost("document-access-requests/{requestId:int}/extension/approve")]
+        public Task<IActionResult> ApproveExtension([FromRoute] int requestId, [FromBody] FollowUpNoteDto? dto = null) =>
+            DecideExtensionAsync(requestId, approve: true, dto?.Note);
+
+        [HttpPost("document-access-requests/{requestId:int}/extension/deny")]
+        public Task<IActionResult> DenyExtension([FromRoute] int requestId, [FromBody] FollowUpNoteDto? dto = null) =>
+            DecideExtensionAsync(requestId, approve: false, dto?.Note);
+
+        private async Task<IActionResult> DecideExtensionAsync(int requestId, bool approve, string? note)
+        {
+            var currentUser = await _userManager.GetUserAsync(User);
+            if (currentUser == null) return Unauthorized();
+
+            var request = await _context.InstitutionEnquiryRequests
+                .Include(r => r.AccessToken)
+                .Include(r => r.Institution)
+                .FirstOrDefaultAsync(r => r.EnquiryRequestId == requestId);
+            if (request == null) return NotFound(new { error = "Request not found." });
+
+            var decider = request.ApprovedByUserId ?? request.TargetUserId;
+            if (decider != currentUser.Id) return Forbid();
+            if (request.ExtensionStatus != "Pending" || request.ExtensionRequestedUntil == null)
+                return Conflict(new { error = "There is no request for more time waiting on this request." });
+            if (approve && (request.Status != "Approved" || request.AccessToken == null || request.AccessToken.IsRevoked))
+                return Conflict(new { error = "Access on this request was withdrawn, so it can't be extended." });
+
+            request.ExtensionStatus = approve ? "Approved" : "Denied";
+            request.ExtensionRespondedAt = DateTime.UtcNow;
+            request.ExtensionResponseNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+
+            if (approve)
+            {
+                var until = request.ExtensionRequestedUntil.Value;
+                request.AccessToken!.ExpiryTimeStamp = until;
+                request.AccessToken.ExpiryReminderSentAt = null; // warn again before the new end
+                var approvals = await _context.DocumentAccessApprovals
+                    .Where(a => a.EnquiryRequestId == requestId && !a.IsRevoked)
+                    .ToListAsync();
+                foreach (var approval in approvals)
+                    approval.ExpiresAt = until.UtcDateTime;
+            }
+
+            await _context.SaveChangesAsync();
+
+            var endsAt = request.ExtensionRequestedUntil.Value.ToOffset(TimeSpan.FromHours(2));
+            await TryAuditAsync(new AuditLog
+            {
+                UserId = currentUser.Id,
+                ActionCode = approve ? "ACCESS_EXTENSION_APPROVED" : "ACCESS_EXTENSION_DENIED",
+                TimeStamp = DateTimeOffset.UtcNow,
+                Description = approve
+                    ? $"Access for {DescribeRequest(request)} extended to {endsAt:yyyy-MM-dd HH:mm} by {currentUser.UserName}."
+                    : $"More time on {DescribeRequest(request)} declined by {currentUser.UserName}.",
+                TableAffected = "InstitutionEnquiryRequests",
+                RecordID = request.EnquiryRequestId
+            });
+
+            await TryNotifyAsync(notifications =>
+            {
+                notifications.EmailExternal(request.RequesterEmail,
+                    approve ? "Your access was extended" : "Your request for more time was declined",
+                    approve
+                        ? $"Your access to the documents for {DescribeRequest(request)} now ends on {endsAt:d MMM yyyy 'at' HH:mm} (SAST)."
+                        : $"The owner declined your request for more time on {DescribeRequest(request)}." + (request.ExtensionResponseNote == null ? string.Empty : $" Reason: {request.ExtensionResponseNote}"));
+                return Task.CompletedTask;
+            });
+
+            return Ok(new { request.EnquiryRequestId, request.ExtensionStatus, AccessEndsAt = request.AccessToken?.ExpiryTimeStamp });
+        }
+
+        private async Task TryAuditAsync(AuditLog log)
+        {
+            try { await _auditLogService.CreateAuditLogAsync(log); }
+            catch { /* The action itself matters more than its audit entry. */ }
+        }
+
+        /// <summary>Records an institution's download or view in the audit trail (the reports read it). Never blocks the document.</summary>
+        private async Task LogInstitutionDownloadAsync(int institutionId, string table, int recordId, string fileName, int requestId, bool viewed = false)
+        {
+            try
+            {
+                await _auditLogService.CreateAuditLogAsync(new AuditLog
+                {
+                    InstitutionId = institutionId,
+                    ActionCode = viewed ? "INSTITUTION_DOCUMENT_VIEWED" : "INSTITUTION_DOCUMENT_DOWNLOADED",
+                    TimeStamp = DateTimeOffset.UtcNow,
+                    Description = $"{(viewed ? "Viewed" : "Downloaded")} \"{fileName}\" under request #{requestId}.",
+                    TableAffected = table,
+                    RecordID = recordId
+                });
+            }
+            catch
+            {
+                // Audit failures must not stop the institution getting a document it was approved for.
+            }
         }
 
         [AllowAnonymous]
@@ -1341,6 +1719,29 @@ namespace FourierIT_API.Controllers
                 // Audit failure should not block the user action.
             }
 
+            await TryNotifyAsync(async notifications =>
+            {
+                var document = await _context.Documents
+                    .AsNoTracking()
+                    .Where(d => d.DocumentId == documentId)
+                    .Select(d => new { d.UserId, d.FileName, OwnerDepartmentId = d.User.DepartmentId })
+                    .FirstOrDefaultAsync();
+                if (document == null) return;
+
+                var institutionName = await GetInstitutionNameAsync(sessionToken.InstitutionId);
+                var message = $"{institutionName} flagged the document \"{document.FileName}\". Reason: {flag.FlagReason}";
+                await notifications.NotifyUsersAsync(new[] { document.UserId }, "Document flagged by an institution",
+                    message, "DocumentFlagged", documentId, link: "/my-documents", sendEmail: true);
+
+                if (document.OwnerDepartmentId != null)
+                {
+                    var adminIds = (await notifications.GetUserIdsInRoleAsync("Department Admin", document.OwnerDepartmentId))
+                        .Where(id => id != document.UserId);
+                    await notifications.NotifyUsersAsync(adminIds, "Document flagged by an institution",
+                        message, "DocumentFlagged", documentId, link: "/dashboard/department", sendEmail: true);
+                }
+            });
+
             return Ok(new { message = "Document flagged and reason submitted." });
         }
 
@@ -1384,7 +1785,9 @@ namespace FourierIT_API.Controllers
                         DocumentName = daa.Document.FileName,
                         DocumentTypeName = daa.Document.DocumentType.TypeName,
                         ApprovedAt = daa.ApprovedAt,
-                        ExpiresAt = daa.ExpiresAt
+                        ExpiresAt = daa.ExpiresAt,
+                        daa.InstitutionEnquiryRequest.ExtensionStatus,
+                        daa.InstitutionEnquiryRequest.ExtensionRequestedUntil
                     })
                     .ToListAsync();
 
@@ -1466,35 +1869,61 @@ namespace FourierIT_API.Controllers
             if (sessionToken == null)
                 return Unauthorized(new { error = "Invalid or expired session token." });
 
-            var notifications = await _context.InstitutionEnquiryRequests
+            var requests = await _context.InstitutionEnquiryRequests
                 .AsNoTracking()
                 .Include(r => r.TargetDepartment)
                 .Include(r => r.TargetUser)
                     .ThenInclude(u => u!.Profile)
-                .Where(r => r.InstitutionId == sessionToken.InstitutionId
-                    && (r.Status == "Approved" || r.Status == "Denied")
-                    && r.RespondedAt != null)
-                .OrderByDescending(r => r.RespondedAt)
-                .Take(10)
-                .Select(r => new
-                {
-                    r.EnquiryRequestId,
-                    r.Status,
-                    RequestType = r.RequestType,
-                    RecipientName = r.RequestType == "Department"
-                        ? (r.TargetDepartment != null ? r.TargetDepartment.DepartmentName : "-")
-                        : (r.TargetUser != null
-                            ? ((!string.IsNullOrWhiteSpace(r.TargetUser.Profile!.FirstName) || !string.IsNullOrWhiteSpace(r.TargetUser.Profile.LastName))
-                                ? (r.TargetUser.Profile.FirstName + " " + r.TargetUser.Profile.LastName).Trim()
-                                : (r.TargetUser.UserName ?? r.TargetUserId ?? "-"))
-                            : (r.TargetUserId ?? "-")),
-                    Message = r.Status == "Approved"
-                        ? "Your documents were approved and are available for download."
-                        : "Your request was denied. Please contact the compliance team for more information.",
-                    Timestamp = r.RespondedAt
-                })
+                .Where(r => r.InstitutionId == sessionToken.InstitutionId)
                 .ToListAsync();
+            var requestById = requests.ToDictionary(r => r.EnquiryRequestId);
 
+            object Item(InstitutionEnquiryRequest r, string status, string message, DateTime? at) => new
+            {
+                r.EnquiryRequestId,
+                Status = status,
+                r.RequestType,
+                RecipientName = RecipientDisplayName(r),
+                Message = message,
+                Timestamp = at
+            };
+
+            var feed = new List<(DateTime At, object Item)>();
+            foreach (var r in requests.Where(r => (r.Status == "Approved" || r.Status == "Denied") && r.RespondedAt != null))
+            {
+                var message = r.Status == "Approved"
+                    ? "Your documents were approved and are available for download."
+                    : string.IsNullOrWhiteSpace(r.UserResponseNote) ? "Your request was denied." : "Your request was denied. Reason: " + r.UserResponseNote;
+                feed.Add((r.RespondedAt!.Value, Item(r, r.Status, message, r.RespondedAt)));
+            }
+
+            foreach (var r in requests.Where(r => r.ExtensionRespondedAt != null && r.ExtensionStatus is "Approved" or "Denied"))
+            {
+                var message = r.ExtensionStatus == "Approved"
+                    ? $"Your access was extended to {r.ExtensionRequestedUntil!.Value.ToOffset(TimeSpan.FromHours(2)):d MMM yyyy, HH:mm}."
+                    : "Your request for more time was declined." + (string.IsNullOrWhiteSpace(r.ExtensionResponseNote) ? string.Empty : " Reason: " + r.ExtensionResponseNote);
+                feed.Add((r.ExtensionRespondedAt!.Value, Item(r, $"Extension {r.ExtensionStatus!.ToLowerInvariant()}", message, r.ExtensionRespondedAt)));
+            }
+
+            var requestIds = requestById.Keys.ToList();
+            var resolvedFlags = await _context.EnquiryFlags
+                .AsNoTracking()
+                .Where(f => f.IsResolved && f.ResolvedAt != null && requestIds.Contains(f.EnquiryId))
+                .Select(f => new { f.EnquiryId, f.DocumentId, f.ResolvedAt, f.ResolutionNote, f.FlagReason })
+                .ToListAsync();
+            var flaggedFileNames = await _context.Documents
+                .AsNoTracking()
+                .Where(d => resolvedFlags.Select(f => f.DocumentId).Contains(d.DocumentId))
+                .ToDictionaryAsync(d => d.DocumentId, d => d.FileName);
+            foreach (var flag in resolvedFlags)
+            {
+                var file = flaggedFileNames.GetValueOrDefault(flag.DocumentId, "a document");
+                var message = $"The owner dealt with your flag on \"{file}\"." + (string.IsNullOrWhiteSpace(flag.ResolutionNote) ? string.Empty : " " + flag.ResolutionNote);
+                var at = flag.ResolvedAt!.Value.UtcDateTime;
+                feed.Add((at, Item(requestById[flag.EnquiryId], "Flag resolved", message, at)));
+            }
+
+            var notifications = feed.OrderByDescending(entry => entry.At).Take(15).Select(entry => entry.Item).ToList();
             return Ok(notifications);
         }
 

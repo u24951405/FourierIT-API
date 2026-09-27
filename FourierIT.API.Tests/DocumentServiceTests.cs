@@ -20,6 +20,8 @@ public class DocumentServiceTests
             .Options;
         await using var context = new AppDbContext(options);
         context.DocumentTypes.Add(new DocumentType { DocumentTypeId = 901, TypeName = "Test Document" });
+        // Documents always belong to an existing user (a foreign key in the real database).
+        context.Users.Add(new User { Id = "user-1", UserName = "owner@test.local" });
         await context.SaveChangesAsync();
 
         var scanner = new Mock<IFileScanService>();

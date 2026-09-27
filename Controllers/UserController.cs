@@ -42,6 +42,7 @@ namespace FourierIT_API.Controllers
         private readonly ILogger<UserController> _logger;
         private readonly ISystemSettingsService _settings;
         private readonly ITimeLimitedDataProtector? _resetLinkProtector;
+        private readonly IInAppNotificationService? _notifications;
 
         public UserController(
             UserManager<User> userManager,
@@ -57,8 +58,10 @@ namespace FourierIT_API.Controllers
             IAuthorizationService? authorizationService = null,
             ILogger<UserController>? logger = null,
             ISystemSettingsService? settings = null,
-            IDataProtectionProvider? dataProtection = null)
+            IDataProtectionProvider? dataProtection = null,
+            IInAppNotificationService? notifications = null)
         {
+            _notifications = notifications;
             _userManager = userManager;
             _tokenService = tokenService;
             _signInManager = signInManager;
@@ -195,7 +198,8 @@ namespace FourierIT_API.Controllers
                 DepartmentName = department?.DepartmentName,
                 EntityTypeId = user.EntityTypeId,
                 MaskedIdentificationNumber = MaskIdentificationNumber(user.EntityIdentificationNumber),
-                DateOfBirthFromIdNumber = TryGetIdDateOfBirth(user, out _)
+                DateOfBirthFromIdNumber = TryGetIdDateOfBirth(user, out _),
+                EmailNotificationsEnabled = user.EmailNotificationsEnabled
             };
 
             // Show the date of birth from the ID number even if an older profile stored something else.
@@ -203,6 +207,23 @@ namespace FourierIT_API.Controllers
                 dto.DateOfBirth = idDateOfBirth;
 
             return Ok(dto);
+        }
+
+        /// <summary>Turns notification emails on or off for the signed-in user. In-app notifications are unaffected.</summary>
+        [Authorize]
+        [HttpPut("me/notification-preferences")]
+        public async Task<IActionResult> UpdateNotificationPreferences([FromBody] NotificationPreferencesDto dto)
+        {
+            var user = await ResolveCurrentUserAsync();
+            if (user == null)
+                return Unauthorized(new { error = "Invalid token." });
+
+            user.EmailNotificationsEnabled = dto.EmailNotificationsEnabled;
+            var result = await _userManager.UpdateAsync(user);
+            if (!result.Succeeded)
+                return BadRequest(new { error = "Could not save your notification preference." });
+
+            return Ok(new { emailNotificationsEnabled = user.EmailNotificationsEnabled });
         }
 
         [Authorize]
@@ -1095,6 +1116,85 @@ namespace FourierIT_API.Controllers
                 6 when verificationNumber.Length < 4 => "Please enter a reference number for this entity type.",
                 _ => null
             };
+        }
+
+        /// <summary>
+        /// The Super Admin (or an Admin) changes another user's role. The new role replaces the current one.
+        /// Personal details stay with the user, who edits them from their own profile.
+        /// </summary>
+        [Authorize]
+        [HttpPut("{userId}/role")]
+        public async Task<IActionResult> ChangeUserRole([FromRoute] string userId, [FromBody] ChangeUserRoleDto dto)
+        {
+            if (!User.HasClaim("superadmin", "true") && !User.IsInRole("Admin"))
+                return Forbid();
+
+            var currentUser = await ResolveCurrentUserAsync();
+            var user = await _userManager.FindByIdAsync(userId);
+            if (user == null) return NotFound(new { error = "User not found." });
+            if (IsSuperAdminUser(user)) return BadRequest(new { error = "The Super Admin account's role can't be changed." });
+            if (currentUser?.Id == user.Id) return BadRequest(new { error = "You can't change your own role." });
+
+            var newRole = await _roleManager.FindByNameAsync(dto.Role.Trim());
+            if (newRole?.Name == null) return BadRequest(new { error = "Choose one of the existing roles." });
+            var roleName = newRole.Name;
+
+            var previousRoles = await _userManager.GetRolesAsync(user);
+            if (previousRoles.Count == 1 && string.Equals(previousRoles[0], roleName, StringComparison.OrdinalIgnoreCase))
+                return BadRequest(new { error = $"This user is already a {roleName}." });
+
+            var isDepartmentAdmin = previousRoles.Any(role => string.Equals(role, "Department Admin", StringComparison.OrdinalIgnoreCase));
+            if (isDepartmentAdmin && user.DepartmentId.HasValue && !string.Equals(roleName, "Department Admin", StringComparison.OrdinalIgnoreCase))
+                return BadRequest(new { error = "This user is the Department Admin of a department. Unassign them from it first (Departments → Assign Department Admin)." });
+
+            // Document Owners upload documents against an entity type, which is chosen when they register.
+            if (string.Equals(roleName, "Document Owner", StringComparison.OrdinalIgnoreCase) && !user.EntityTypeId.HasValue)
+                return BadRequest(new { error = "Document Owners need an entity type, which this user doesn't have. Register them as a Document Owner instead." });
+
+            var removeResult = await _userManager.RemoveFromRolesAsync(user, previousRoles);
+            if (!removeResult.Succeeded)
+                return BadRequest(new { error = "Could not change the role. Please try again." });
+
+            var addResult = await _userManager.AddToRoleAsync(user, roleName);
+            if (!addResult.Succeeded)
+            {
+                // Put the old roles back so the user isn't left without access.
+                await _userManager.AddToRolesAsync(user, previousRoles);
+                return BadRequest(new { error = "Could not change the role. Please try again." });
+            }
+
+            var previousRoleText = previousRoles.Count > 0 ? string.Join(", ", previousRoles) : "no role";
+            if (currentUser != null)
+            {
+                await TryCreateAuditLogAsync(new AuditLog
+                {
+                    UserId = currentUser.Id,
+                    ActionCode = "USER_ROLE_CHANGED",
+                    TimeStamp = DateTimeOffset.UtcNow,
+                    Description = $"Changed the role of '{user.UserName ?? user.Id}' from {previousRoleText} to {roleName}.",
+                    TableAffected = "Users",
+                    RecordID = null
+                });
+            }
+
+            if (_notifications != null)
+            {
+                try
+                {
+                    await _notifications.NotifyUsersAsync(new[] { user.Id }, "Your role changed",
+                        $"Your DocuVault role is now {roleName}. Sign out and back in to see the pages that come with it.",
+                        "RoleChanged", sendEmail: true);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to notify user {UserId} about their role change", user.Id);
+                }
+            }
+
+            var note = string.Equals(roleName, "Department Admin", StringComparison.OrdinalIgnoreCase)
+                ? " Assign them to a department under Departments → Assign Department Admin."
+                : string.Empty;
+            return Ok(new { roles = new[] { roleName }, message = $"Role changed to {roleName}.{note}" });
         }
 
         // Any signed-in user may edit their own profile; editing someone else's also needs Users.Manage (checked below).

@@ -2,21 +2,20 @@ using FourierIT_API.Models;
 
 namespace FourierIT_API.Services;
 
+/// <param name="MissingSourceDate">
+/// True when the type counts from the certification date but the document has none, so the upload date was used.
+/// </param>
 public sealed record DocumentValidityResult(DateTimeOffset ExpiryDate, bool MissingSourceDate);
 
+/// <summary>
+/// Every document is valid for its type's number of months, counted from either the date it was certified
+/// or the date it was uploaded (the type's validity basis). There are no documents that never expire.
+/// </summary>
 public class DocumentValidityCalculator
 {
-    public static bool IsNeverExpires(DocumentType? documentType, DateTimeOffset expiryDate)
-    {
-        return documentType?.NeverExpires == true || expiryDate == DateTimeOffset.MaxValue;
-    }
-
     public bool IsExpiringSoon(DocumentType? documentType, DateTimeOffset expiryDate, DateTimeOffset? asOf = null)
     {
         var now = asOf ?? DateTimeOffset.UtcNow;
-
-        if (IsNeverExpires(documentType, expiryDate))
-            return false;
 
         if (expiryDate <= now)
             return false;
@@ -34,19 +33,16 @@ public class DocumentValidityCalculator
         DateTime uploadedDate,
         DateTimeOffset? certificationDate = null)
     {
-        if (documentType.NeverExpires)
-            return new DocumentValidityResult(DateTimeOffset.MaxValue, false);
+        var uploaded = new DateTimeOffset(DateTime.SpecifyKind(uploadedDate, uploadedDate.Kind == DateTimeKind.Unspecified ? DateTimeKind.Utc : uploadedDate.Kind));
+        var missingCertificationDate = documentType.ValidityBasis == ValidityBasis.CertificationDate && certificationDate is null;
 
-        DateTimeOffset? basisDate = documentType.ValidityBasis switch
-        {
-            ValidityBasis.CertificationDate => certificationDate,
-            ValidityBasis.UploadDate => new DateTimeOffset(uploadedDate),
-            _ => null
-        };
+        // Counted from the certification date when the type says so; a document without one (e.g. uploaded
+        // before the date was required) is counted from its upload date, so it still expires.
+        var basisDate = documentType.ValidityBasis == ValidityBasis.CertificationDate && certificationDate is not null
+            ? certificationDate.Value
+            : uploaded;
 
-        if (basisDate is null)
-            return new DocumentValidityResult(DateTimeOffset.MaxValue, true);
-
-        return new DocumentValidityResult(basisDate.Value.AddMonths(documentType.ValidityMonths), false);
+        var months = documentType.ValidityMonths > 0 ? documentType.ValidityMonths : 1;
+        return new DocumentValidityResult(basisDate.AddMonths(months), missingCertificationDate);
     }
 }

@@ -31,7 +31,6 @@ namespace FourierIT_API.DTOs.Compliance
         public string DocumentName { get; set; } = string.Empty;
         public string DocumentType { get; set; } = string.Empty;
         public DateTimeOffset ExpiryDate { get; set; }
-        public bool NeverExpires { get; set; }
         public int DaysRemaining { get; set; }
         public string Status { get; set; } = string.Empty;
     }

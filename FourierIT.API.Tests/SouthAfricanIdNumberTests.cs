@@ -32,6 +32,15 @@ public class SouthAfricanIdNumberTests
     }
 
     [Fact]
+    public void TryGetDateOfBirth_AcceptsTheOfficialSouthAfricanChecksumAlgorithm()
+    {
+        const string validId = "9001015009061";
+
+        Assert.True(SouthAfricanIdNumber.TryGetDateOfBirth(validId, out var dateOfBirth, Today));
+        Assert.Equal(new DateOnly(1990, 1, 1), dateOfBirth);
+    }
+
+    [Fact]
     public void TryGetDateOfBirth_RejectsAWrongCheckDigit()
     {
         var valid = MakeId("850317500908");

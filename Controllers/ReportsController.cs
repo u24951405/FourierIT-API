@@ -42,10 +42,13 @@ namespace FourierIT_API.Controllers
                 return BadRequest(new { error = "The end date must not be before the start date." });
 
             var endExclusive = end.AddDays(1);
+            // The chosen days are South African days: SAST midnight is 22:00 UTC the day before.
+            var startUtc = start.Add(-Sast);
+            var endExclusiveUtc = endExclusive.Add(-Sast);
             var documents = await _context.Documents.AsNoTracking()
                 .Include(document => document.DocumentType)
-                .Where(document => document.UploadedDate >= start
-                    && document.UploadedDate < endExclusive
+                .Where(document => document.UploadedDate >= startUtc
+                    && document.UploadedDate < endExclusiveUtc
                     && document.CurrentStatus != "Deleted")
                 .ToListAsync();
             var allActiveDocuments = await _context.Documents.AsNoTracking()
@@ -53,16 +56,18 @@ namespace FourierIT_API.Controllers
                 .Select(document => document.FileSizeBytes)
                 .ToListAsync();
             var complianceStatuses = await ComplianceStatusesOfDocumentUploaders()
-                .Where(status => status.LastChecked >= start && status.LastChecked < endExclusive)
+                .Where(status => status.LastChecked >= startUtc && status.LastChecked < endExclusiveUtc)
                 .ToListAsync();
+            var rangeStart = new DateTimeOffset(DateTime.SpecifyKind(startUtc, DateTimeKind.Utc));
+            var rangeEnd = new DateTimeOffset(DateTime.SpecifyKind(endExclusiveUtc, DateTimeKind.Utc));
             var auditLogs = await _context.AuditLogs.AsNoTracking()
-                .Where(log => log.TimeStamp >= new DateTimeOffset(start) && log.TimeStamp < new DateTimeOffset(endExclusive))
+                .Where(log => log.TimeStamp >= rangeStart && log.TimeStamp < rangeEnd)
                 .ToListAsync();
             var enquiryCount = await _context.InstitutionEnquiryRequests.AsNoTracking()
-                .CountAsync(request => request.RequestDate >= new DateTimeOffset(start) && request.RequestDate < new DateTimeOffset(endExclusive));
+                .CountAsync(request => request.RequestDate >= rangeStart && request.RequestDate < rangeEnd);
 
             var days = Enumerable.Range(0, (end - start).Days + 1).Select(offset => start.AddDays(offset)).ToList();
-            var uploadGroups = documents.GroupBy(document => document.UploadedDate.Date)
+            var uploadGroups = documents.GroupBy(document => document.UploadedDate.Add(Sast).Date)
                 .ToDictionary(group => group.Key, group => group.Count());
             var uploadVolume = days.Select(day => new MonthlyUploadVolumeDto
             {
@@ -70,7 +75,8 @@ namespace FourierIT_API.Controllers
                 Count = uploadGroups.GetValueOrDefault(day, 0)
             }).ToList();
             var totalUploads = documents.Count;
-            var peak = uploadVolume.OrderByDescending(item => item.Count).FirstOrDefault();
+            // With no uploads there is no peak day (0), rather than "day 1".
+            var peak = uploadVolume.Where(item => item.Count > 0).OrderByDescending(item => item.Count).FirstOrDefault();
 
             var distributionGroups = documents.GroupBy(document => document.DocumentType?.TypeName ?? "Unknown")
                 .OrderBy(group => group.Key).ToList();
@@ -98,24 +104,23 @@ namespace FourierIT_API.Controllers
                 {
                     Verified = documents.Count(document => IsStatus(document.CurrentStatus, "approved", "verified", "compliant")),
                     PendingVerification = documents.Count(document => IsStatus(document.CurrentStatus, "pending", "under review", "awaiting verification")),
+                    Rejected = documents.Count(document => document.CurrentStatus.Contains("Reject", StringComparison.OrdinalIgnoreCase)),
+                    // Documents flagged by a Compliance Officer and owners flagged as suspicious or sanctioned; resolved flags don't count.
                     FlaggedAnomalies = complianceStatuses.Count(status => status.IsSuspicious || status.HasSanctionFlag)
-                        + auditLogs.Count(log => log.ActionCode.Contains("FLAG", StringComparison.OrdinalIgnoreCase)
-                            || log.ActionCode.Contains("ANOMAL", StringComparison.OrdinalIgnoreCase)),
+                        + auditLogs.Count(log => log.ActionCode == "DOCUMENT_FLAGGED"),
                     PartOfEnquiry = enquiryCount
                 },
                 SecurityEvents = days.Select(day =>
                 {
-                    var dayLogs = auditLogs.Where(log => log.TimeStamp.Date == day).ToList();
+                    var dayLogs = auditLogs.Where(log => log.TimeStamp.ToOffset(Sast).Date == day).ToList();
                     return new MonthlySecurityEventDto
                     {
                         Day = day.Day,
-                        FailedLogins = dayLogs.Count(log => log.ActionCode.Equals("LOGIN_FAILURE", StringComparison.OrdinalIgnoreCase)),
-                        PermissionElevationRequest = dayLogs.Count(log => log.ActionCode.Contains("ROLE", StringComparison.OrdinalIgnoreCase)
-                            || log.ActionCode.Contains("PERMISSION", StringComparison.OrdinalIgnoreCase)),
-                        UnusualAccessPattern = dayLogs.Count(log =>
-                            !log.ActionCode.Equals("LOGIN_FAILURE", StringComparison.OrdinalIgnoreCase)
-                            && !log.ActionCode.Contains("ROLE", StringComparison.OrdinalIgnoreCase)
-                            && !log.ActionCode.Contains("PERMISSION", StringComparison.OrdinalIgnoreCase))
+                        FailedLogins = dayLogs.Count(log => log.ActionCode == "LOGIN_FAILURE"),
+                        // Changes to what someone is allowed to do.
+                        PermissionElevationRequest = dayLogs.Count(log => log.ActionCode is "USER_ROLE_CHANGED" or "DEPARTMENT_ADMIN_ASSIGNED" or "DEPARTMENT_ADMIN_UNASSIGNED"),
+                        // Documents flagged, and document access taken away. (Everyday activity such as logins and uploads is not a security event.)
+                        UnusualAccessPattern = dayLogs.Count(log => log.ActionCode is "DOCUMENT_FLAGGED" or "DOCUMENT_ACCESS_REVOKED" or "REQUEST_REVOKED")
                     };
                 }).ToList(),
                 Distribution = distribution,
@@ -160,139 +165,160 @@ namespace FourierIT_API.Controllers
             if (owner == null)
                 return NotFound(new { error = "Document owner not found." });
 
+            var now = DateTimeOffset.UtcNow;
             var documents = await _context.Documents.AsNoTracking()
                 .Include(document => document.DocumentType)
                 .Where(document => document.UserId == ownerId && document.CurrentStatus != "Deleted")
                 .OrderByDescending(document => document.UploadedDate)
                 .ToListAsync();
 
+            // One colour per document type, shared by the chart and the inventory table.
             var documentColors = new[] { "#1e2a3a", "#2d5282", "#4a7fb5", "#7bafd4", "#b0cfe8" };
+            var typeNames = documents.Select(TypeNameOf).Distinct().OrderBy(name => name).ToList();
+            var colorByType = typeNames.Select((name, index) => (name, color: documentColors[index % documentColors.Length]))
+                .ToDictionary(item => item.name, item => item.color);
 
             var inventory = documents
                 .Select(document => new DocumentInventoryItemDto
                 {
                     DocumentName = document.FileName,
-                    Category = document.DocumentType?.TypeName ?? "Unknown",
-                    CategoryColor = documentColors[(document.DocumentTypeId - 1) % documentColors.Length],
-                    UploadDate = document.UploadedDate.ToString("yyyy-MM-dd"),
-                    ExpiryDate = document.ExpiryDate != default ? document.ExpiryDate.UtcDateTime.ToString("yyyy-MM-dd") : null,
+                    Category = TypeNameOf(document),
+                    CategoryColor = colorByType[TypeNameOf(document)],
+                    UploadDate = SastDate(document.UploadedDate),
+                    ExpiryDate = document.ExpiryDate != default ? document.ExpiryDate.ToOffset(Sast).ToString("yyyy-MM-dd") : null,
                     VerificationStatus = ResolveDocumentVerificationStatus(document.CurrentStatus, document.DocumentType, document.ExpiryDate)
                 })
                 .ToList();
 
-            var accessLogs = await _context.DocumentAccessLogs.AsNoTracking()
+            var categoryBreakdown = documents
+                .GroupBy(TypeNameOf)
+                .OrderBy(group => group.Key)
+                .Select(group => new MonthlyDistributionCategoryDto
+                {
+                    Label = group.Key,
+                    Count = group.Count(),
+                    Percentage = Math.Round(group.Count() * 100m / documents.Count, 2),
+                    Color = colorByType[group.Key]
+                })
+                .ToList();
+
+            var activeDocuments = documents.Count(document => ResolveDocumentStatusState(document.CurrentStatus, document.DocumentType, document.ExpiryDate) == "Active");
+
+            // ── Who has had the owner's documents ──
+            var approvals = await _context.DocumentAccessApprovals.AsNoTracking()
+                .Where(approval => approval.Document.UserId == ownerId)
+                .Select(approval => new
+                {
+                    approval.ApprovalId,
+                    approval.EnquiryRequestId,
+                    approval.DocumentId,
+                    approval.ExpiresAt,
+                    approval.IsRevoked,
+                    InstitutionName = approval.InstitutionEnquiryRequest.Institution.InstitutionName
+                })
+                .ToListAsync();
+
+            // 1. Views and downloads inside DocuVault (the owner, Compliance Officers, admins).
+            var inAppLogs = await _context.DocumentAccessLogs.AsNoTracking()
                 .Include(log => log.Document)
                 .Include(log => log.AccessedByUser)
                     .ThenInclude(user => user.Profile)
                 .Where(log => log.Document.UserId == ownerId)
                 .OrderByDescending(log => log.AccessDateTime)
-                .Take(25)
+                .Take(ActivityLogLimit)
                 .ToListAsync();
 
-            var userIds = accessLogs.Select(log => log.AccessedByUserId).Distinct().ToList();
-            var rolesByUserId = await _context.Set<IdentityUserRole<string>>().AsNoTracking()
-                .Where(userRole => userIds.Contains(userRole.UserId))
-                .Join(_context.Roles,
-                    userRole => userRole.RoleId,
-                    role => role.Id,
-                    (userRole, role) => new { userRole.UserId, RoleName = role.Name ?? "System" })
+            var userIds = inAppLogs.Select(log => log.AccessedByUserId).Distinct().ToList();
+            var rolesByUserId = (await _context.UserRoles.AsNoTracking()
+                    .Where(userRole => userIds.Contains(userRole.UserId))
+                    .Join(_context.Roles, userRole => userRole.RoleId, role => role.Id,
+                        (userRole, role) => new { userRole.UserId, RoleName = role.Name ?? "User" })
+                    .ToListAsync())
                 .GroupBy(role => role.UserId)
-                .Select(group => new { UserId = group.Key, RoleName = group.First().RoleName })
-                .ToDictionaryAsync(item => item.UserId, item => item.RoleName);
+                .ToDictionary(group => group.Key, group => string.Join(", ", group.Select(role => role.RoleName).OrderBy(name => name)));
 
-            var institutionByDocumentId = await _context.DocumentAccessApprovals.AsNoTracking()
-                .Include(approval => approval.InstitutionEnquiryRequest)
-                    .ThenInclude(request => request.Institution)
-                .Where(approval => approval.Document.UserId == ownerId)
-                .GroupBy(approval => approval.DocumentId)
-                .Select(group => new
+            var accessEvents = inAppLogs.Select(log =>
+            {
+                var isOwner = log.AccessedByUserId == ownerId;
+                var fileName = log.Document?.FileName ?? "a document";
+                return (When: new DateTimeOffset(DateTime.SpecifyKind(log.AccessDateTime, DateTimeKind.Utc)), Entry: new VaultAccessLogEntryDto
                 {
-                    DocumentId = group.Key,
-                    InstitutionName = group.Select(x => x.InstitutionEnquiryRequest.Institution.InstitutionName).FirstOrDefault() ?? "DocuVault Platform"
-                })
-                .ToDictionaryAsync(item => item.DocumentId, item => item.InstitutionName);
+                    AccessorName = BuildFullName(log.AccessedByUser?.Profile),
+                    AccessorRole = isOwner ? "Document owner" : rolesByUserId.GetValueOrDefault(log.AccessedByUserId, "User"),
+                    ActionReason = $"{DescribeAccess(log.ActionType)} {fileName}",
+                    Organisation = "DocuVault"
+                });
+            }).ToList();
 
-            var vaultAccessLog = accessLogs
-                .Select(log =>
-                {
-                    var accessorRole = rolesByUserId.TryGetValue(log.AccessedByUserId, out var resolvedRoleName)
-                        ? resolvedRoleName
-                        : "System";
+            // 2. Downloads by institutions, which are recorded in the audit trail rather than the access log.
+            var approvalIds = approvals.Select(approval => approval.ApprovalId).ToList();
+            var targetedRequestIds = await _context.InstitutionEnquiryRequests.AsNoTracking()
+                .Where(request => request.TargetUserId == ownerId)
+                .Select(request => request.EnquiryRequestId)
+                .ToListAsync();
+            var requestIds = targetedRequestIds.Union(approvals.Select(approval => approval.EnquiryRequestId)).ToList();
 
-                    var organisation = institutionByDocumentId.TryGetValue(log.DocumentId, out var resolvedOrgName)
-                        ? resolvedOrgName
-                        : "DocuVault Platform";
-
-                    return new VaultAccessLogEntryDto
-                    {
-                        Timestamp = log.AccessDateTime.ToString("yyyy-MM-dd HH:mm"),
-                        AccessorName = BuildFullName(log.AccessedByUser?.Profile),
-                        AccessorRole = accessorRole,
-                        ActionReason = $"{log.ActionType} · {log.Document?.FileName ?? "Document"}",
-                        Organisation = organisation
-                    };
-                })
-                .ToList();
-
-            var accessGrants = await _context.DocumentAccesses.AsNoTracking()
-                .Include(access => access.Document)
-                .Where(access => access.Document.UserId == ownerId)
-                .GroupBy(access => access.DocumentId)
-                .Select(group => new { DocumentId = group.Key, Count = group.Count() })
+            var institutionDownloads = await _context.AuditLogs.AsNoTracking()
+                .Include(log => log.Institution)
+                .Where(log => (log.ActionCode == "INSTITUTION_DOCUMENT_DOWNLOADED" || log.ActionCode == "INSTITUTION_DOCUMENT_VIEWED") && log.RecordID != null
+                    && ((log.TableAffected == "DocumentAccessApprovals" && approvalIds.Contains(log.RecordID.Value))
+                        || (log.TableAffected == "InstitutionEnquiryRequests" && requestIds.Contains(log.RecordID.Value))))
+                .OrderByDescending(log => log.TimeStamp)
+                .Take(ActivityLogLimit)
                 .ToListAsync();
 
-            var categoryBreakdown = documents
-                .GroupBy(document => document.DocumentType?.TypeName ?? "Unknown")
-                .OrderBy(group => group.Key)
-                .Select((group, index) => new MonthlyDistributionCategoryDto
+            var ownerFileNames = documents.Select(document => document.FileName).ToList();
+            foreach (var log in institutionDownloads)
+            {
+                // A department request can cover several people: keep request-level downloads only when they are this owner's file.
+                if (log.TableAffected == "InstitutionEnquiryRequests" && !targetedRequestIds.Contains(log.RecordID!.Value)
+                    && !ownerFileNames.Any(name => (log.Description ?? string.Empty).Contains($"\"{name}\"")))
+                    continue;
+
+                var institutionName = log.Institution?.InstitutionName ?? "An institution";
+                accessEvents.Add((log.TimeStamp, new VaultAccessLogEntryDto
                 {
-                    Label = group.Key,
-                    Count = group.Count(),
-                    Percentage = documents.Count == 0 ? 0 : Math.Round(group.Count() * 100m / documents.Count, 2),
-                    Color = documentColors[index % documentColors.Length]
-                })
+                    AccessorName = institutionName,
+                    AccessorRole = "Institution",
+                    ActionReason = log.Description ?? "Downloaded a shared document.",
+                    Organisation = institutionName
+                }));
+            }
+
+            var vaultAccessLog = accessEvents
+                .OrderByDescending(item => item.When)
+                .Take(ActivityLogLimit)
+                .Select(item => { item.Entry.Timestamp = item.When.ToOffset(Sast).ToString("yyyy-MM-dd HH:mm"); return item.Entry; })
                 .ToList();
 
-            var activeDocuments = documents.Count(document => ResolveDocumentStatusState(document.CurrentStatus, document.DocumentType, document.ExpiryDate) == "Active");
-            var inactiveDocuments = documents.Count - activeDocuments;
-
-            var clientRelationships = await _context.DocumentAccessApprovals.AsNoTracking()
-                .Include(approval => approval.InstitutionEnquiryRequest)
-                    .ThenInclude(request => request.Institution)
-                .Include(approval => approval.Document)
-                .Where(approval => approval.Document.UserId == ownerId)
-                .GroupBy(approval => approval.InstitutionEnquiryRequest.Institution.InstitutionName)
+            // ── Institutions the owner has shared documents with (approved requests only) ──
+            var clientRelationships = approvals
+                .GroupBy(approval => approval.InstitutionName)
                 .Select(group => new ClientRelationshipDto
                 {
                     Organisation = group.Key,
-                    DocumentsShared = group.Select(x => x.DocumentId).Distinct().Count(),
-                    Status = group.Any(x => x.ExpiresAt.HasValue && x.ExpiresAt.Value > DateTime.UtcNow && !x.IsRevoked) ? "Active" : (group.Any(x => x.IsRevoked) ? "Expired" : "Pending")
+                    DocumentsShared = group.Select(approval => approval.DocumentId).Distinct().Count(),
+                    Status = group.Any(approval => !approval.IsRevoked && (approval.ExpiresAt == null || approval.ExpiresAt > now.UtcDateTime))
+                        ? "Active"
+                        : group.All(approval => approval.IsRevoked) ? "Revoked" : "Expired"
                 })
-                .OrderByDescending(item => item.DocumentsShared)
-                .ToListAsync();
+                .OrderBy(item => item.Status == "Active" ? 0 : 1)
+                .ThenByDescending(item => item.DocumentsShared)
+                .ToList();
 
-            if (clientRelationships.Count == 0 && accessGrants.Count > 0)
-            {
-                clientRelationships = accessGrants
-                    .Take(5)
-                    .Select(item => new ClientRelationshipDto
-                    {
-                        Organisation = "Access Granted",
-                        DocumentsShared = item.Count,
-                        Status = "Active"
-                    })
-                    .ToList();
-            }
+            var compliance = await _context.ComplianceStatuses.AsNoTracking()
+                .FirstOrDefaultAsync(status => status.UserId == ownerId);
 
-            var ownerName = BuildFullName(owner.Profile);
             var activityReport = new ActivityReportDto
             {
                 ReportId = $"DV-DAR-{ownerId}-{DateTime.UtcNow:yyyyMMddHHmmss}",
                 DateGenerated = DateTime.UtcNow,
-                DocumentOwner = ownerName,
+                DocumentOwner = BuildFullName(owner.Profile),
                 OwnerId = owner.Id,
+                ComplianceStatus = compliance?.OverallStatus,
+                CompliancePercentage = compliance?.CompliancePercentage,
                 ActiveDocuments = activeDocuments,
-                InactiveDocuments = inactiveDocuments,
+                InactiveDocuments = documents.Count - activeDocuments,
                 TotalDocuments = documents.Count,
                 DistributionByCategory = categoryBreakdown,
                 Inventory = inventory,
@@ -302,6 +328,24 @@ namespace FourierIT_API.Controllers
 
             return Ok(activityReport);
         }
+
+        private const int ActivityLogLimit = 50;
+
+        /// <summary>DocuVault's users are in South Africa, so report times are shown in SAST (UTC+2).</summary>
+        private static readonly TimeSpan Sast = TimeSpan.FromHours(2);
+
+        private static string SastDate(DateTime utc) =>
+            new DateTimeOffset(DateTime.SpecifyKind(utc, DateTimeKind.Utc)).ToOffset(Sast).ToString("yyyy-MM-dd");
+
+        private static string TypeNameOf(Document document) => document.DocumentType?.TypeName ?? "Unknown type";
+
+        private static string DescribeAccess(string actionType) => actionType switch
+        {
+            "Download" => "Downloaded",
+            "AdminDownload" => "Downloaded for review:",
+            "AdminPreview" => "Viewed for review:",
+            _ => "Viewed"
+        };
 
         [HttpGet("activity/{ownerId}/pdf")]
         public async Task<IActionResult> DownloadActivityPdf(string ownerId)
@@ -327,9 +371,6 @@ namespace FourierIT_API.Controllers
             if (string.IsNullOrWhiteSpace(normalized))
                 return "Pending";
 
-            if (DocumentValidityCalculator.IsNeverExpires(documentType, expiryDate))
-                return "Verified";
-
             if (normalized.Equals("Verified", StringComparison.OrdinalIgnoreCase)
                 || normalized.Equals("Approved", StringComparison.OrdinalIgnoreCase)
                 || normalized.Equals("Compliant", StringComparison.OrdinalIgnoreCase)
@@ -347,11 +388,12 @@ namespace FourierIT_API.Controllers
                 || normalized.Contains("Awaiting", StringComparison.OrdinalIgnoreCase))
                 return "Pending";
 
+            // A rejected document is never "Verified", however far off its expiry date is.
+            if (normalized.Contains("Reject", StringComparison.OrdinalIgnoreCase))
+                return "Rejected";
+
             if (normalized.Equals("Expired", StringComparison.OrdinalIgnoreCase) || expiryDate <= DateTimeOffset.UtcNow)
                 return "Expired";
-
-            if (DocumentValidityCalculator.IsNeverExpires(documentType, expiryDate))
-                return "Verified";
 
             return _documentValidityCalculator.IsExpiringSoon(documentType, expiryDate, DateTimeOffset.UtcNow) ? "Expiring Soon" : "Verified";
         }
@@ -447,20 +489,7 @@ namespace FourierIT_API.Controllers
 
             if (normalizedFocusAreas.Any(focus => focus is "COMPLIANCE" or "COMPLIANCE_STATUS" or "COMPLIANCE_STATUSES"))
             {
-                result.ComplianceResults = await ComplianceStatusesOfDocumentUploaders()
-                    .Where(status => status.LastChecked >= report.DateFrom && status.LastChecked < report.DateTo.Date.AddDays(1))
-                    .OrderBy(status => status.LastChecked)
-                    .Select(status => new AdHocComplianceResultDto
-                    {
-                        StatusId = status.ComplianceStatusId,
-                        UserId = status.UserId,
-                        OverallStatus = status.OverallStatus,
-                        RiskLevel = status.RiskLevel,
-                        CompliancePercentage = status.CompliancePercentage,
-                        OverallRiskScore = status.OverallRiskScore,
-                        LastChecked = status.LastChecked
-                    })
-                    .ToListAsync();
+                result.ComplianceResults = await BuildAdHocComplianceResultsAsync(report);
             }
 
             if (normalizedFocusAreas.Contains("DOCUMENT_PROCESSING"))
@@ -517,23 +546,78 @@ namespace FourierIT_API.Controllers
 
             if (normalizedFocusAreas.Contains("SECURITY_ANOMALIES"))
             {
-                result.SecurityResults = await _context.AuditLogs.AsNoTracking()
-                    .Where(log => log.TimeStamp >= new DateTimeOffset(report.DateFrom)
-                        && log.TimeStamp < new DateTimeOffset(report.DateTo.Date.AddDays(1)))
-                    .OrderBy(log => log.TimeStamp)
-                    .Select(log => new AdHocSecurityResultDto
-                    {
-                        AuditLogId = log.AuditLogId,
-                        UserId = log.UserId ?? "System",
-                        Action = log.ActionCode,
-                        Timestamp = log.TimeStamp.DateTime,
-                        Description = log.Description ?? string.Empty,
-                        Table = log.TableAffected
-                    })
-                    .ToListAsync();
+                result.SecurityResults = await BuildAdHocSecurityResultsAsync(report);
             }
 
             return Ok(result);
+        }
+
+        /// <summary>
+        /// Events that matter for security: failed logins, changes to what someone may do, flags, revoked access and removed accounts.
+        /// Everyday activity (logins, uploads, views) is not an anomaly.
+        /// </summary>
+        private static readonly string[] SecurityActionCodes =
+        {
+            "LOGIN_FAILURE", "USER_ROLE_CHANGED", "DEPARTMENT_ADMIN_ASSIGNED", "DEPARTMENT_ADMIN_UNASSIGNED",
+            "DOCUMENT_FLAGGED", "DOCUMENT_ACCESS_REVOKED", "REQUEST_REVOKED", "USER_DELETED", "EMAIL_CHANGED"
+        };
+
+        private async Task<List<AdHocComplianceResultDto>> BuildAdHocComplianceResultsAsync(AdHocReport report)
+        {
+            var statuses = await ComplianceStatusesOfDocumentUploaders()
+                .Where(status => status.LastChecked >= report.DateFrom && status.LastChecked < report.DateTo.Date.AddDays(1))
+                .OrderBy(status => status.LastChecked)
+                .ToListAsync();
+            var names = await NamesByUserIdAsync(statuses.Select(status => status.UserId));
+
+            return statuses.Select(status => new AdHocComplianceResultDto
+            {
+                StatusId = status.ComplianceStatusId,
+                UserId = status.UserId,
+                Name = names.GetValueOrDefault(status.UserId, "Unknown user"),
+                OverallStatus = status.OverallStatus,
+                RiskLevel = status.RiskLevel,
+                CompliancePercentage = status.CompliancePercentage,
+                OverallRiskScore = status.OverallRiskScore,
+                LastChecked = DateTime.SpecifyKind(status.LastChecked, DateTimeKind.Utc).Add(Sast)
+            }).ToList();
+        }
+
+        private async Task<List<AdHocSecurityResultDto>> BuildAdHocSecurityResultsAsync(AdHocReport report)
+        {
+            var from = new DateTimeOffset(DateTime.SpecifyKind(report.DateFrom.Date, DateTimeKind.Utc)).Add(-Sast);
+            var to = new DateTimeOffset(DateTime.SpecifyKind(report.DateTo.Date.AddDays(1), DateTimeKind.Utc)).Add(-Sast);
+            var logs = await _context.AuditLogs.AsNoTracking()
+                .Include(log => log.Institution)
+                .Where(log => log.TimeStamp >= from && log.TimeStamp < to && SecurityActionCodes.Contains(log.ActionCode))
+                .OrderBy(log => log.TimeStamp)
+                .ToListAsync();
+            var names = await NamesByUserIdAsync(logs.Where(log => log.UserId != null).Select(log => log.UserId!));
+
+            return logs.Select(log => new AdHocSecurityResultDto
+            {
+                AuditLogId = log.AuditLogId,
+                UserId = log.UserId ?? "System",
+                Name = log.UserId != null ? names.GetValueOrDefault(log.UserId, "Unknown user") : log.Institution?.InstitutionName ?? "System",
+                Action = log.ActionCode,
+                Timestamp = log.TimeStamp.ToOffset(Sast).DateTime,
+                Description = log.Description ?? string.Empty,
+                Table = log.TableAffected
+            }).ToList();
+        }
+
+        private async Task<Dictionary<string, string>> NamesByUserIdAsync(IEnumerable<string> userIds)
+        {
+            var ids = userIds.Distinct().ToList();
+            var users = await _context.Users.AsNoTracking()
+                .Where(user => ids.Contains(user.Id))
+                .Select(user => new { user.Id, user.Email, FirstName = user.Profile != null ? user.Profile.FirstName : null, LastName = user.Profile != null ? user.Profile.LastName : null })
+                .ToListAsync();
+            return users.ToDictionary(user => user.Id, user =>
+            {
+                var name = $"{user.FirstName} {user.LastName}".Trim();
+                return string.IsNullOrWhiteSpace(name) ? user.Email ?? "Unknown user" : name;
+            });
         }
 
         [HttpGet("ad-hoc/{id:int}/pdf")]
@@ -681,46 +765,36 @@ namespace FourierIT_API.Controllers
 
         private async Task AddComplianceResultsSheetAsync(XLWorkbook workbook, AdHocReport report)
         {
-            var statuses = await ComplianceStatusesOfDocumentUploaders()
-                .Where(status => status.LastChecked >= report.DateFrom && status.LastChecked < report.DateTo.Date.AddDays(1))
-                .OrderBy(status => status.LastChecked)
-                .ToListAsync();
-            var sheet = CreateResultsSheet(workbook, "Compliance Results", new[] { "Status ID", "User ID", "Overall status", "Risk level", "Compliance %", "Risk score", "Last checked" });
-            for (var index = 0; index < statuses.Count; index++)
+            var results = await BuildAdHocComplianceResultsAsync(report);
+            var sheet = CreateResultsSheet(workbook, "Compliance Results", new[] { "Document owner", "Overall status", "Risk level", "Compliance %", "Risk score", "Last checked (SAST)" });
+            for (var index = 0; index < results.Count; index++)
             {
-                var status = statuses[index];
+                var item = results[index];
                 var row = index + 2;
-                sheet.Cell(row, 1).Value = status.ComplianceStatusId;
-                sheet.Cell(row, 2).Value = status.UserId;
-                sheet.Cell(row, 3).Value = status.OverallStatus;
-                sheet.Cell(row, 4).Value = status.RiskLevel;
-                sheet.Cell(row, 5).Value = status.CompliancePercentage;
-                sheet.Cell(row, 6).Value = status.OverallRiskScore;
-                sheet.Cell(row, 7).Value = status.LastChecked;
-                sheet.Cell(row, 7).Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss";
+                sheet.Cell(row, 1).Value = item.Name;
+                sheet.Cell(row, 2).Value = item.OverallStatus;
+                sheet.Cell(row, 3).Value = item.RiskLevel;
+                sheet.Cell(row, 4).Value = item.CompliancePercentage;
+                sheet.Cell(row, 5).Value = item.OverallRiskScore;
+                sheet.Cell(row, 6).Value = item.LastChecked;
+                sheet.Cell(row, 6).Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss";
             }
             FormatResultsSheet(sheet);
         }
 
         private async Task AddSecurityResultsSheetAsync(XLWorkbook workbook, AdHocReport report)
         {
-            var logs = await _context.AuditLogs.AsNoTracking()
-                .Where(log => log.TimeStamp >= new DateTimeOffset(report.DateFrom) && log.TimeStamp < new DateTimeOffset(report.DateTo.Date.AddDays(1)))
-                .OrderBy(log => log.TimeStamp)
-                .ToListAsync();
-            var sheet = CreateResultsSheet(workbook, "Security Anomalies", new[] { "Audit ID", "User ID", "Action", "Timestamp", "Description", "Table", "Record ID" });
-            for (var index = 0; index < logs.Count; index++)
+            var results = await BuildAdHocSecurityResultsAsync(report);
+            var sheet = CreateResultsSheet(workbook, "Security Anomalies", new[] { "When (SAST)", "Who", "Action", "Description" });
+            for (var index = 0; index < results.Count; index++)
             {
-                var log = logs[index];
+                var item = results[index];
                 var row = index + 2;
-                sheet.Cell(row, 1).Value = log.AuditLogId;
-                sheet.Cell(row, 2).Value = log.UserId ?? "System";
-                sheet.Cell(row, 3).Value = log.ActionCode;
-                sheet.Cell(row, 4).Value = log.TimeStamp.DateTime;
-                sheet.Cell(row, 4).Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss";
-                sheet.Cell(row, 5).Value = log.Description ?? string.Empty;
-                sheet.Cell(row, 6).Value = log.TableAffected;
-                if (log.RecordID.HasValue) sheet.Cell(row, 7).Value = log.RecordID.Value;
+                sheet.Cell(row, 1).Value = item.Timestamp;
+                sheet.Cell(row, 1).Style.DateFormat.Format = "yyyy-mm-dd hh:mm:ss";
+                sheet.Cell(row, 2).Value = item.Name;
+                sheet.Cell(row, 3).Value = item.Action;
+                sheet.Cell(row, 4).Value = item.Description;
             }
             FormatResultsSheet(sheet);
         }
@@ -984,7 +1058,7 @@ namespace FourierIT_API.Controllers
                 return new List<DocumentOwnerComplianceReportRowDto>();
             }
 
-            var ownerUserIds = await _context.Set<IdentityUserRole<string>>()
+            var ownerUserIds = await _context.UserRoles
                 .AsNoTracking()
                 .Where(ur => ur.RoleId == docOwnerRole.Id)
                 .Select(ur => ur.UserId)
@@ -1010,6 +1084,7 @@ namespace FourierIT_API.Controllers
                     InstitutionId = u.Department != null ? (int?)u.Department.Branch.InstitutionId : null,
                     InstitutionName = u.Department != null ? u.Department.Branch.Institution.InstitutionName : string.Empty,
                     ComplianceStatus = u.ComplianceStatus != null ? u.ComplianceStatus.OverallStatus : "Pending",
+                    CheckedPercentage = u.ComplianceStatus != null ? (int?)u.ComplianceStatus.CompliancePercentage : null,
                     RiskLevel = u.ComplianceStatus != null ? u.ComplianceStatus.RiskLevel : null,
                     EntityTypeId = u.EntityTypeId,
                     EntityTypeName = u.EntityType != null ? u.EntityType.Name : string.Empty
@@ -1041,10 +1116,15 @@ namespace FourierIT_API.Controllers
             var documents = await _context.Documents
                 .AsNoTracking()
                 .Where(d => filteredUserIds.Contains(d.UserId) && d.CurrentStatus != "Deleted")
-                .Select(d => new { d.UserId, d.DocumentTypeId, d.UploadedDate })
+                .Select(d => new { d.UserId, d.DocumentTypeId, d.UploadedDate, d.CurrentStatus, d.ExpiryDate })
                 .ToListAsync();
 
+            // A rejected or expired document doesn't meet a requirement, so only valid ones count as "uploaded".
+            var nowUtc = DateTimeOffset.UtcNow;
             var userUploadDocTypes = documents
+                .Where(d => !d.CurrentStatus.Contains("Reject", StringComparison.OrdinalIgnoreCase)
+                    && !d.CurrentStatus.Equals("Expired", StringComparison.OrdinalIgnoreCase)
+                    && d.ExpiryDate > nowUtc)
                 .GroupBy(d => d.UserId)
                 .ToDictionary(
                     g => g.Key,
@@ -1131,9 +1211,10 @@ namespace FourierIT_API.Controllers
                     ? uploadedAt
                     : (DateTime?)null;
 
-                var compliancePct = totalRequired == 0
-                    ? 100m
-                    : Math.Round((decimal)matchedUploaded * 100m / totalRequired, 2);
+                // Match the Compliance Status column: use the compliance check's percentage once one has run.
+                var compliancePct = owner.CheckedPercentage.HasValue
+                    ? owner.CheckedPercentage.Value
+                    : totalRequired == 0 ? 100m : Math.Round((decimal)matchedUploaded * 100m / totalRequired, 2);
 
                 rows.Add(new DocumentOwnerComplianceReportRowDto
                 {
@@ -1296,7 +1377,7 @@ namespace FourierIT_API.Controllers
 
             var departmentIds = departments.Select(d => d.DepartmentId).ToList();
 
-            var departmentAdmins = await _context.Set<IdentityUserRole<string>>()
+            var departmentAdmins = await _context.UserRoles
                 .AsNoTracking()
                 .Join(_context.Roles,
                     userRole => userRole.RoleId,
@@ -1524,22 +1605,19 @@ namespace FourierIT_API.Controllers
             int? institutionId,
             string? status)
         {
+            // Access exists only once a request was approved (it may since have been revoked). Pending and denied requests never gave access.
             var query = _context.InstitutionEnquiryRequests
                 .AsNoTracking()
-                .Include(r => r.Institution)
-                .Include(r => r.TargetUser)
-                .Include(r => r.TargetDepartment)
-                .Include(r => r.AccessToken)
-                .AsQueryable();
+                .Where(r => r.Status == "Approved" || r.Status == "Revoked");
 
             if (startDate.HasValue)
             {
-                query = query.Where(r => r.RequestDate >= startDate.Value || r.RespondedAt >= startDate.Value);
+                query = query.Where(r => r.RespondedAt >= startDate.Value.UtcDateTime);
             }
 
             if (endDate.HasValue)
             {
-                query = query.Where(r => r.RequestDate <= endDate.Value || r.RespondedAt <= endDate.Value);
+                query = query.Where(r => r.RespondedAt <= endDate.Value.UtcDateTime);
             }
 
             if (institutionId.HasValue)
@@ -1547,51 +1625,55 @@ namespace FourierIT_API.Controllers
                 query = query.Where(r => r.InstitutionId == institutionId.Value);
             }
 
-            if (!string.IsNullOrWhiteSpace(status))
-            {
-                var normalized = status.Trim().ToLowerInvariant();
-                query = query.Where(r => r.Status.ToLower() == normalized);
-            }
-
-            var requestRows = await query
-                .Select(r => new InstitutionAccessHistoryReportRowDto
+            var requests = await query
+                .Select(r => new
                 {
-                    RequestId = r.EnquiryRequestId,
+                    r.EnquiryRequestId,
                     Institution = r.Institution.InstitutionName,
                     Recipient = r.RequestType == "Department"
                         ? (r.TargetDepartment != null ? r.TargetDepartment.DepartmentName : "Unknown Department")
                         : ((r.TargetUser != null ? r.TargetUser.Profile.FirstName : "") + " " + (r.TargetUser != null ? r.TargetUser.Profile.LastName : "")).Trim(),
-                    RecipientType = r.RequestType,
-                    AccessGrantedDate = r.RespondedAt,
-                    AccessExpiry = r.AccessToken.ExpiryTimeStamp,
-                    AccessStatus = r.Status,
-                    DocumentsAccessed = Array.Empty<string>()
+                    r.RequestType,
+                    r.RespondedAt,
+                    r.Status,
+                    AccessExpiry = r.AccessToken != null ? (DateTimeOffset?)r.AccessToken.ExpiryTimeStamp : null,
+                    TokenRevoked = r.AccessToken != null && r.AccessToken.IsRevoked
                 })
                 .ToListAsync();
 
-            var requestIds = requestRows.Select(r => r.RequestId).ToList();
-            var docPairs = await _context.InstitutionRequestedDocumentTypes
-                .AsNoTracking()
-                .Where(rdt => requestIds.Contains(rdt.EnquiryRequestId))
-                .Select(rdt => new
-                {
-                    rdt.EnquiryRequestId,
-                    Name = rdt.DocumentType.TypeName
-                })
+            // Downloads are in the audit trail; each one names its request ("... under request #12.").
+            var requestIds = requests.Select(r => r.EnquiryRequestId).ToHashSet();
+            var downloadLogs = await _context.AuditLogs.AsNoTracking()
+                .Where(log => log.ActionCode == "INSTITUTION_DOCUMENT_DOWNLOADED" || log.ActionCode == "INSTITUTION_DOCUMENT_VIEWED")
+                .Select(log => log.Description)
                 .ToListAsync();
+            var downloadsByRequest = downloadLogs
+                .Select(description => System.Text.RegularExpressions.Regex.Match(description ?? string.Empty, "^(?:Downloaded|Viewed) \"(.+)\" under request #(\\d+)"))
+                .Where(match => match.Success && requestIds.Contains(int.Parse(match.Groups[2].Value)))
+                .GroupBy(match => int.Parse(match.Groups[2].Value))
+                .ToDictionary(group => group.Key, group => group.Select(match => match.Groups[1].Value).Distinct().OrderBy(name => name).ToArray());
 
-            var docsByRequest = docPairs
-                .GroupBy(x => x.EnquiryRequestId)
-                .ToDictionary(g => g.Key, g => g.Select(x => x.Name).Distinct().OrderBy(n => n).ToArray());
-
-            foreach (var row in requestRows)
+            var now = DateTimeOffset.UtcNow;
+            var rows = requests.Select(r => new InstitutionAccessHistoryReportRowDto
             {
-                row.DocumentsAccessed = docsByRequest.TryGetValue(row.RequestId, out var docs)
-                    ? docs
-                    : Array.Empty<string>();
+                RequestId = r.EnquiryRequestId,
+                Institution = r.Institution,
+                Recipient = string.IsNullOrWhiteSpace(r.Recipient) ? "Unknown" : r.Recipient,
+                RecipientType = r.RequestType,
+                AccessGrantedDate = r.RespondedAt.HasValue ? new DateTimeOffset(DateTime.SpecifyKind(r.RespondedAt.Value, DateTimeKind.Utc)) : null,
+                AccessExpiry = r.AccessExpiry,
+                AccessStatus = r.Status == "Revoked" || r.TokenRevoked
+                    ? "Revoked"
+                    : r.AccessExpiry.HasValue && r.AccessExpiry.Value <= now ? "Expired" : "Active",
+                DocumentsAccessed = downloadsByRequest.GetValueOrDefault(r.EnquiryRequestId, Array.Empty<string>())
+            }).ToList();
+
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                rows = rows.Where(r => r.AccessStatus.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
             }
 
-            return requestRows;
+            return rows;
         }
 
         private async Task<List<ExpiringDocumentsReportRowDto>> BuildExpiringDocumentsRowsAsync(
@@ -1609,7 +1691,7 @@ namespace FourierIT_API.Controllers
                 .ThenInclude(u => u.Department)
                 .ThenInclude(dep => dep!.Branch)
                 .ThenInclude(b => b!.Institution)
-                .Where(d => d.CurrentStatus != "Deleted");
+                .Where(d => d.CurrentStatus != "Deleted" && !d.CurrentStatus.Contains("Reject"));
 
             if (departmentId.HasValue)
             {
@@ -1621,18 +1703,38 @@ namespace FourierIT_API.Controllers
                 query = query.Where(d => d.User.Department != null && d.User.Department.Branch.InstitutionId == institutionId.Value);
             }
 
-            var rows = await query
-                .Select(d => new ExpiringDocumentsReportRowDto
+            var candidates = await query
+                .Select(d => new
                 {
                     Owner = d.User.Profile != null
                         ? (d.User.Profile.FirstName + " " + d.User.Profile.LastName).Trim()
                         : (d.User.Email ?? d.User.UserName ?? d.User.Id),
-                    Department = d.User.Department != null ? d.User.Department.DepartmentName : "Unknown",
+                    // Only Department Admins belong to a department; document owners don't.
+                    Department = d.User.Department != null ? d.User.Department.DepartmentName : "No department",
                     DocumentType = d.DocumentType.TypeName,
-                    ExpiryDate = d.ExpiryDate,
-                    DaysRemaining = (int)((d.ExpiryDate.UtcDateTime - DateTime.UtcNow).TotalDays)
+                    d.ExpiryDate,
+                    d.DocumentType.WarningDays
                 })
                 .ToListAsync();
+
+            var now = DateTime.UtcNow;
+            var rows = candidates
+                .Select(c => new
+                {
+                    Row = new ExpiringDocumentsReportRowDto
+                    {
+                        Owner = c.Owner,
+                        Department = c.Department,
+                        DocumentType = c.DocumentType,
+                        ExpiryDate = c.ExpiryDate,
+                        DaysRemaining = (int)Math.Floor((c.ExpiryDate.UtcDateTime - now).TotalDays)
+                    },
+                    WarningDays = c.WarningDays > 0 ? c.WarningDays : 30
+                })
+                // Without a chosen end date, "near expiry" means inside the document type's warning period.
+                .Where(x => endDate.HasValue || x.Row.DaysRemaining <= x.WarningDays)
+                .Select(x => x.Row)
+                .ToList();
 
             if (startDate.HasValue)
             {

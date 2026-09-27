@@ -11,5 +11,8 @@ namespace FourierIT_API.Interfaces
         Task SendPasswordResetEmailAsync(string toEmail, string resetLink, DateTimeOffset expiresAt);
         Task SendEmailChangeOtpEmailAsync(string toEmail, string otpCode, DateTimeOffset expiresAt);
         Task SendEmailChangedNoticeAsync(string oldEmail, string newEmail);
+
+        /// <summary>A general notification email. actionPath is an app path (e.g. "/my-documents") turned into a button.</summary>
+        Task SendNotificationEmailAsync(string toEmail, string subject, string heading, string message, string? actionPath = null, string? actionLabel = null);
     }
 }

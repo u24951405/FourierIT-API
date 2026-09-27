@@ -165,6 +165,13 @@ namespace FourierIT_API.Services
                 .Distinct()
                 .ToList();
 
+            // Checks are rebuilt below; remember which documents were already queued so Compliance Officers
+            // are only told about documents that newly need a review.
+            var previouslyPendingDocumentIds = status.DocumentChecks
+                .Where(c => c.CheckStatus == "Pending Review")
+                .Select(c => c.DocumentId)
+                .ToHashSet();
+
             if (status.DocumentChecks.Any())
             {
                 _context.DocumentComplianceChecks.RemoveRange(status.DocumentChecks);
@@ -339,7 +346,62 @@ namespace FourierIT_API.Services
             // Generate alerts if needed
             await GenerateAlertsAsync(status);
 
+            await NotifyNewReviewsAsync(user, userDocs, status, previouslyPendingDocumentIds);
+
             return status;
+        }
+
+        /// <summary>Tells Compliance Officers (in the app and by email) about documents that just joined the review queue.</summary>
+        private async Task NotifyNewReviewsAsync(User owner, IReadOnlyCollection<Document> ownerDocuments, ComplianceStatus status, HashSet<int?> previouslyPendingDocumentIds)
+        {
+            if (_inAppNotifications == null) return;
+
+            try
+            {
+                var newlyPending = status.DocumentChecks
+                    .Where(c => c.CheckStatus == "Pending Review" && c.DocumentId != null && !previouslyPendingDocumentIds.Contains(c.DocumentId))
+                    .Select(c => c.DocumentId!.Value)
+                    .Distinct()
+                    .ToList();
+                if (newlyPending.Count == 0) return;
+
+                var officerIds = await _inAppNotifications.GetUserIdsInRoleAsync("Compliance Officer");
+                if (officerIds.Count == 0) return;
+
+                var ownerName = await GetDisplayNameAsync(owner);
+                string subject;
+                string message;
+                int? documentId = null;
+                if (newlyPending.Count == 1)
+                {
+                    var document = ownerDocuments.FirstOrDefault(d => d.DocumentId == newlyPending[0]);
+                    documentId = document?.DocumentId;
+                    subject = "Document waiting for review";
+                    message = $"{ownerName}'s document \"{document?.FileName ?? "Unnamed document"}\" needs a Compliance Officer's review.";
+                }
+                else
+                {
+                    subject = "Documents waiting for review";
+                    message = $"{newlyPending.Count} documents from {ownerName} need a Compliance Officer's review.";
+                }
+
+                await _inAppNotifications.NotifyUsersAsync(officerIds, subject, message, "ReviewRequested",
+                    documentId, link: "/compliance/review-queue", sendEmail: true);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to notify Compliance Officers about new reviews for user {UserId}", owner.Id);
+            }
+        }
+
+        private async Task<string> GetDisplayNameAsync(User user)
+        {
+            var name = await _context.Profiles
+                .AsNoTracking()
+                .Where(p => p.UserId == user.Id)
+                .Select(p => (p.FirstName + " " + p.LastName).Trim())
+                .FirstOrDefaultAsync();
+            return string.IsNullOrWhiteSpace(name) ? user.UserName ?? "A document owner" : name;
         }
 
         public async Task<ComplianceStatus> CheckDepartmentComplianceAsync(int departmentId)
@@ -802,10 +864,7 @@ namespace FourierIT_API.Services
                         DocumentName = document.FileName,
                         DocumentType = document.DocumentType?.TypeName ?? string.Empty,
                         ExpiryDate = document.ExpiryDate,
-                        NeverExpires = document.DocumentType?.NeverExpires == true || document.ExpiryDate == DateTimeOffset.MaxValue,
-                        DaysRemaining = document.DocumentType?.NeverExpires == true || document.ExpiryDate == DateTimeOffset.MaxValue
-                            ? 0
-                            : (int)Math.Floor((document.ExpiryDate - now).TotalDays),
+                        DaysRemaining = (int)Math.Floor((document.ExpiryDate - now).TotalDays),
                         Status = isExpired ? "Expired" : check?.CheckStatus ?? document.CurrentStatus
                     };
                 })
@@ -889,9 +948,8 @@ namespace FourierIT_API.Services
             var now = DateTimeOffset.UtcNow;
             var documentType = document.DocumentType ?? await _context.DocumentTypes.AsNoTracking().FirstOrDefaultAsync(dt => dt.DocumentTypeId == document.DocumentTypeId);
             check.IsExpiryValid = document.ExpiryDate > now;
-            check.NeverExpires = DocumentValidityCalculator.IsNeverExpires(documentType, document.ExpiryDate);
             check.ExpiryCheckDate = DateTime.UtcNow;
-            check.DaysUntilExpiry = check.NeverExpires ? null : (int)(document.ExpiryDate - now).TotalDays;
+            check.DaysUntilExpiry = (int)(document.ExpiryDate - now).TotalDays;
 
             if (!check.IsExpiryValid)
                 issues.Add($"Expired ({document.ExpiryDate:yyyy-MM-dd})");
@@ -1293,7 +1351,9 @@ namespace FourierIT_API.Services
                     subject,
                     $"Your document {documentLabel} {outcome}{ownerAction}",
                     category,
-                    document.DocumentId);
+                    document.DocumentId,
+                    link: "/my-documents",
+                    sendEmail: true);
 
                 if (owner?.DepartmentId == null) return;
 
@@ -1312,7 +1372,8 @@ namespace FourierIT_API.Services
                     subject,
                     $"{ownerName}'s document {documentLabel} {outcome}",
                     category,
-                    document.DocumentId);
+                    document.DocumentId,
+                    link: "/dashboard/department");
             }
             catch (Exception ex)
             {
@@ -1656,17 +1717,96 @@ namespace FourierIT_API.Services
             return true;
         }
 
+        private async Task NotifyExpiredDocumentsAsync(IEnumerable<Document> newlyExpired)
+        {
+            if (_inAppNotifications == null) return;
+
+            foreach (var document in newlyExpired)
+            {
+                try
+                {
+                    await _inAppNotifications.NotifyUsersAsync(
+                        new[] { document.UserId },
+                        "Document expired",
+                        $"Your document \"{document.FileName}\" has expired. Upload a new copy from My Documents to stay compliant.",
+                        "DocumentExpired",
+                        document.DocumentId,
+                        link: "/my-documents",
+                        sendEmail: true);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to send expiry notification for document {DocumentId}", document.DocumentId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Warns owners once per document when it enters its type's warning period (WarningDays before expiry).
+        /// Uploading a new copy starts a new period, so its warning is sent again.
+        /// </summary>
+        private async Task NotifyDocumentsExpiringSoonAsync()
+        {
+            if (_inAppNotifications == null) return;
+
+            try
+            {
+                var now = DateTimeOffset.UtcNow;
+                var candidates = await _context.Documents
+                    .AsNoTracking()
+                    .Where(d => d.CurrentStatus != "Deleted" && d.CurrentStatus != "Expired" && d.ExpiryDate > now)
+                    .Join(_context.DocumentTypes, d => d.DocumentTypeId, t => t.DocumentTypeId,
+                        (d, t) => new { d.DocumentId, d.UserId, d.FileName, d.ExpiryDate, d.UploadedDate, t.WarningDays })
+                    .Where(x => x.WarningDays > 0)
+                    .ToListAsync();
+
+                var dueSoon = candidates.Where(x => x.ExpiryDate <= now.AddDays(x.WarningDays)).ToList();
+                if (dueSoon.Count == 0) return;
+
+                var dueIds = dueSoon.Select(x => x.DocumentId).ToList();
+                var previousWarnings = await _context.Notifications
+                    .AsNoTracking()
+                    .Where(n => n.Category == "DocumentExpiringSoon" && n.DocumentId != null && dueIds.Contains(n.DocumentId.Value))
+                    .Select(n => new { DocumentId = n.DocumentId!.Value, n.CreatedAt })
+                    .ToListAsync();
+
+                foreach (var document in dueSoon)
+                {
+                    var uploadedAt = new DateTimeOffset(DateTime.SpecifyKind(document.UploadedDate, DateTimeKind.Utc));
+                    if (previousWarnings.Any(w => w.DocumentId == document.DocumentId && w.CreatedAt >= uploadedAt))
+                        continue;
+
+                    var daysLeft = Math.Max(1, (int)Math.Ceiling((document.ExpiryDate - now).TotalDays));
+                    await _inAppNotifications.NotifyUsersAsync(
+                        new[] { document.UserId },
+                        "Document expiring soon",
+                        $"Your document \"{document.FileName}\" expires in {daysLeft} day{(daysLeft == 1 ? "" : "s")} ({document.ExpiryDate:d MMM yyyy}). Upload a new copy before then to stay compliant.",
+                        "DocumentExpiringSoon",
+                        document.DocumentId,
+                        link: "/my-documents",
+                        sendEmail: true);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to send expiring-soon notifications");
+            }
+        }
+
         public async Task<bool> ProcessExpiredDocumentComplianceAsync()
         {
             var expiredDocuments = await _context.Documents
                 .Where(d => d.CurrentStatus != "Deleted" && d.ExpiryDate <= DateTimeOffset.UtcNow)
                 .ToListAsync();
 
+            var newlyExpired = new List<Document>();
+
             foreach (var document in expiredDocuments)
             {
                 if (!string.Equals(document.CurrentStatus, "Expired", StringComparison.OrdinalIgnoreCase))
                 {
                     document.CurrentStatus = "Expired";
+                    newlyExpired.Add(document);
 
                     await _auditLogService.CreateAuditLogAsync(new AuditLog
                     {
@@ -1684,6 +1824,9 @@ namespace FourierIT_API.Services
             {
                 await _context.SaveChangesAsync();
             }
+
+            await NotifyExpiredDocumentsAsync(newlyExpired);
+            await NotifyDocumentsExpiringSoonAsync();
 
             var expiredOwnerIds = await _context.Documents
                 .AsNoTracking()

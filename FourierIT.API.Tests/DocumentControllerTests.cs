@@ -216,7 +216,7 @@ public class DocumentControllerTests
 
         var result = await controller.Delete(document.DocumentId);
 
-        Assert.IsType<NoContentResult>(result);
+        Assert.IsType<OkObjectResult>(result); // deletes answer 200 OK with a message (SafeDeleteAsync)
         documentRepositoryMock.Verify(x => x.DeleteDocumentAsync(document.DocumentId), Times.Once);
     }
 

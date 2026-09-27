@@ -8,6 +8,7 @@ using FourierIT_API.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace FourierIT_API.Controllers
 {
@@ -19,17 +20,38 @@ namespace FourierIT_API.Controllers
         private readonly ILogger<InstitutionAuthController> _logger;
         private readonly IEmailService _emailService;
         private readonly ISystemSettingsService _settings;
+        private readonly string _frontendBaseUrl;
 
         public InstitutionAuthController(
             AppDbContext context,
             ILogger<InstitutionAuthController> logger,
             IEmailService emailService,
-            ISystemSettingsService? settings = null)
+            ISystemSettingsService? settings = null,
+            IOptions<EmailSettings>? emailSettings = null)
         {
             _context = context;
             _logger = logger;
             _emailService = emailService;
             _settings = settings ?? new SystemSettingsService(context);
+            _frontendBaseUrl = (emailSettings?.Value.FrontendBaseUrl is { Length: > 0 } url ? url : "http://localhost:4200").TrimEnd('/');
+        }
+
+        /// <summary>Ends a portal session on the server, so its token stops working even if it was copied.</summary>
+        [AllowAnonymous]
+        [HttpPost("logout")]
+        public async Task<IActionResult> Logout([FromQuery] string token)
+        {
+            if (string.IsNullOrWhiteSpace(token)) return NoContent();
+
+            var session = await _context.InstitutionSessionTokens.FirstOrDefaultAsync(st => st.TokenString == token && !st.IsRevoked);
+            if (session != null)
+            {
+                session.IsRevoked = true;
+                session.RevokedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+            }
+
+            return NoContent();
         }
 
         [Authorize]
@@ -220,7 +242,8 @@ namespace FourierIT_API.Controllers
                     TokenString = sessionToken,
                     IssuedAt = DateTime.UtcNow,
                     ExpiresAt = expiresAt.DateTime,
-                    IsRevoked = false
+                    IsRevoked = false,
+                    Email = invitation.Email
                 };
                 _context.InstitutionSessionTokens.Add(sessionRecord);
                 await _context.SaveChangesAsync();
@@ -401,16 +424,9 @@ namespace FourierIT_API.Controllers
             return Guid.NewGuid().ToString("N");
         }
 
-        private string BuildAccessLink(string token)
-        {
-            var origin = Request?.Headers["Origin"].ToString();
-            if (string.IsNullOrWhiteSpace(origin))
-            {
-                origin = Url.ActionContext.HttpContext.Request.Scheme + "://" + Url.ActionContext.HttpContext.Request.Host;
-            }
-
-            return $"{origin}/institution/auth/access?token={token}";
-        }
+        // Built from configuration, never from the request: request-new-token is anonymous, so a caller could
+        // otherwise set the Origin header and have us email the institution a real token on a look-alike site.
+        private string BuildAccessLink(string token) => $"{_frontendBaseUrl}/institution/auth/access?token={token}";
 
         private static string GenerateSessionToken()
         {

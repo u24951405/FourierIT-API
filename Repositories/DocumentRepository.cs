@@ -18,6 +18,12 @@ namespace FourierIT_API.Repositories
         public async Task<Document> AddDocumentAsync(Document document)
         {
             _context.Documents.Add(document);
+            if (!_context.Database.IsRelational())
+            {
+                await _context.SaveChangesAsync();
+                return document;
+            }
+
             var previousCommandTimeout = _context.Database.GetCommandTimeout();
             _context.Database.SetCommandTimeout(120);
             try
@@ -131,6 +137,7 @@ namespace FourierIT_API.Repositories
                 .Include(d => d.SharedWith)
                 .Include(d => d.DocumentBlob)
                 .Include(d => d.DocumentType)
+                .Include(d => d.CertificationDetails)
                 .ToListAsync();
         }
 

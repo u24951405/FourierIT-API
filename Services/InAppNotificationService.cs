@@ -2,6 +2,7 @@ using FourierIT_API.Data;
 using FourierIT_API.DTOs.Notification;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
 namespace FourierIT_API.Services
@@ -16,13 +17,16 @@ namespace FourierIT_API.Services
         private const int MessageMaxLength = 500;
 
         private readonly AppDbContext _context;
+        private readonly INotificationEmailQueue? _emailQueue;
 
-        public InAppNotificationService(AppDbContext context)
+        public InAppNotificationService(AppDbContext context, INotificationEmailQueue? emailQueue = null)
         {
             _context = context;
+            _emailQueue = emailQueue;
         }
 
-        public async Task NotifyUsersAsync(IEnumerable<string> userIds, string subject, string message, string? category = null, int? documentId = null)
+        public async Task NotifyUsersAsync(IEnumerable<string> userIds, string subject, string message, string? category = null,
+            int? documentId = null, string? link = null, bool sendEmail = false)
         {
             var recipients = userIds
                 .Where(id => !string.IsNullOrWhiteSpace(id))
@@ -37,6 +41,7 @@ namespace FourierIT_API.Services
                 Message = Truncate(message, MessageMaxLength),
                 Category = category,
                 DocumentId = documentId,
+                Link = link,
                 CreatedAt = DateTimeOffset.UtcNow
             };
 
@@ -51,8 +56,56 @@ namespace FourierIT_API.Services
                 SentAt = notification.CreatedAt
             });
 
+            var emailAddresses = new List<string>();
+            if (sendEmail && _emailQueue != null)
+            {
+                emailAddresses = await _context.Users
+                    .AsNoTracking()
+                    .Where(u => recipients.Contains(u.Id) && u.EmailNotificationsEnabled && u.Email != null && u.Email != "")
+                    .Select(u => u.Email!)
+                    .ToListAsync();
+
+                if (emailAddresses.Count > 0)
+                {
+                    notification.NotificationHistories.Add(new NotificationHistory
+                    {
+                        DeliveryMethod = "Email",
+                        SentAt = notification.CreatedAt
+                    });
+                }
+            }
+
             _context.Notifications.Add(notification);
             await _context.SaveChangesAsync();
+
+            // Queued after saving, so an email is only sent for a notification that exists in the app.
+            foreach (var email in emailAddresses)
+            {
+                _emailQueue!.Enqueue(new NotificationEmail(email, subject, subject, message,
+                    link ?? (documentId != null ? "/my-documents" : null), "Open in DocuVault"));
+            }
+        }
+
+        public void EmailExternal(string? toEmail, string subject, string message, string? actionUrl = null, string? actionLabel = null)
+        {
+            if (_emailQueue == null || string.IsNullOrWhiteSpace(toEmail)) return;
+            _emailQueue.Enqueue(new NotificationEmail(toEmail.Trim(), subject, subject, message, actionUrl, actionLabel));
+        }
+
+        public async Task<List<string>> GetUserIdsInRoleAsync(string roleName, int? departmentId = null)
+        {
+            var normalizedRole = roleName.ToUpperInvariant();
+            var query =
+                from userRole in _context.UserRoles
+                join role in _context.Roles on userRole.RoleId equals role.Id
+                join user in _context.Users on userRole.UserId equals user.Id
+                where role.NormalizedName == normalizedRole
+                select user;
+
+            if (departmentId != null)
+                query = query.Where(user => user.DepartmentId == departmentId);
+
+            return await query.Select(user => user.Id).Distinct().ToListAsync();
         }
 
         public async Task<List<UserNotificationDto>> GetForUserAsync(string userId, int take = 20)
@@ -72,6 +125,7 @@ namespace FourierIT_API.Services
                     Message = un.Notification.Message,
                     Category = un.Notification.Category,
                     DocumentId = un.Notification.DocumentId,
+                    Link = un.Notification.Link,
                     CreatedAt = un.Notification.CreatedAt,
                     IsRead = un.IsRead
                 })

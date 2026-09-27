@@ -7,6 +7,7 @@ namespace FourierIT_API.DTOs.Notification
         public string Message { get; set; } = string.Empty;
         public string? Category { get; set; }
         public int? DocumentId { get; set; }
+        public string? Link { get; set; }
         public DateTimeOffset CreatedAt { get; set; }
         public bool IsRead { get; set; }
     }

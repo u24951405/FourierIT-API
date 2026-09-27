@@ -39,6 +39,8 @@ namespace FourierIT_API.DTOs.Reports
     {
         public int StatusId { get; set; }
         public string UserId { get; set; } = string.Empty;
+        /// <summary>The document owner's name (reports show people, not IDs).</summary>
+        public string Name { get; set; } = string.Empty;
         public string OverallStatus { get; set; } = string.Empty;
         public string RiskLevel { get; set; } = string.Empty;
         public decimal CompliancePercentage { get; set; }
@@ -61,6 +63,8 @@ namespace FourierIT_API.DTOs.Reports
     {
         public int AuditLogId { get; set; }
         public string UserId { get; set; } = string.Empty;
+        /// <summary>Who did it: a person's name, an institution, or "System".</summary>
+        public string Name { get; set; } = string.Empty;
         public string Action { get; set; } = string.Empty;
         public DateTime Timestamp { get; set; }
         public string Description { get; set; } = string.Empty;
@@ -205,7 +209,6 @@ namespace FourierIT_API.DTOs.Reports
         public string Department { get; set; } = string.Empty;
         public string DocumentType { get; set; } = string.Empty;
         public DateTimeOffset ExpiryDate { get; set; }
-        public bool NeverExpires { get; set; }
         public int DaysRemaining { get; set; }
     }
 
@@ -227,6 +230,9 @@ namespace FourierIT_API.DTOs.Reports
         public DateTime DateGenerated { get; set; } = DateTime.UtcNow;
         public string DocumentOwner { get; set; } = string.Empty;
         public string OwnerId { get; set; } = string.Empty;
+        /// <summary>The owner's latest compliance result; null when no compliance check has run yet.</summary>
+        public string? ComplianceStatus { get; set; }
+        public int? CompliancePercentage { get; set; }
         public int ActiveDocuments { get; set; }
         public int InactiveDocuments { get; set; }
         public int TotalDocuments { get; set; }

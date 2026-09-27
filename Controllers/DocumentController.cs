@@ -28,10 +28,12 @@ namespace FourierIT_API.Controllers
         private readonly IComplianceService _complianceService;
         private readonly IAuditLogService _auditLogService;
         private readonly ILogger<DocumentController> _logger;
+        private readonly IInAppNotificationService? _notifications;
         private readonly DocumentValidityCalculator _documentValidityCalculator;
 
-        public DocumentController(IDocumentService documentService, IDocumentRepository documentRepository, UserManager<User> userManager, AppDbContext context, IComplianceService complianceService, IAuditLogService auditLogService, ILogger<DocumentController> logger, DocumentValidityCalculator? documentValidityCalculator = null)
+        public DocumentController(IDocumentService documentService, IDocumentRepository documentRepository, UserManager<User> userManager, AppDbContext context, IComplianceService complianceService, IAuditLogService auditLogService, ILogger<DocumentController> logger, DocumentValidityCalculator? documentValidityCalculator = null, IInAppNotificationService? notifications = null)
         {
+            _notifications = notifications;
             _documentService = documentService;
             _documentRepository = documentRepository;
             _userManager = userManager;
@@ -262,7 +264,7 @@ namespace FourierIT_API.Controllers
 
         private async Task<bool> HasDocumentManagePermissionAsync(string userId)
         {
-            return await _context.Set<IdentityUserRole<string>>()
+            return await _context.UserRoles
                 .Where(userRole => userRole.UserId == userId)
                 .Join(
                     _context.RolePermissions,
@@ -364,6 +366,20 @@ namespace FourierIT_API.Controllers
                 return BadRequest(new { error = validationResult.ErrorMessage });
             }
 
+            // Documents counted from their certification date need that date: it is when their validity starts.
+            var validityBasis = await _context.DocumentTypes.AsNoTracking()
+                .Where(t => t.DocumentTypeId == dto.DocumentTypeId)
+                .Select(t => (ValidityBasis?)t.ValidityBasis)
+                .FirstOrDefaultAsync();
+            if (validityBasis == ValidityBasis.CertificationDate && !dto.CertificationDate.HasValue)
+            {
+                return BadRequest(new { error = "This document is valid from the date it was certified. Enter the certification date shown on the copy." });
+            }
+            if (dto.CertificationDate.HasValue && dto.CertificationDate.Value.Date > DateTime.UtcNow.AddHours(2).Date) // "today" in South African time
+            {
+                return BadRequest(new { error = "The certification date can't be in the future." });
+            }
+
             // If user had no saved entity (registered with both roles) and supplied one now, persist it to their account
             if (user.EntityTypeId == null && dto.EntityTypeId.HasValue)
             {
@@ -451,6 +467,7 @@ namespace FourierIT_API.Controllers
             {
                 var superAdminDocs = await _context.Documents
                     .Include(d => d.DocumentType)
+                    .Include(d => d.CertificationDetails)
                     .Where(d => d.CurrentStatus != "Deleted")
                     .OrderByDescending(d => d.UploadedDate)
                     .ToListAsync();
@@ -615,6 +632,21 @@ namespace FourierIT_API.Controllers
             approval.RevokedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
 
+            // The institution has no account here, so it is told by email.
+            try
+            {
+                var requesterEmail = await _context.InstitutionEnquiryRequests
+                    .Where(r => r.EnquiryRequestId == approval.EnquiryRequestId)
+                    .Select(r => r.RequesterEmail)
+                    .FirstOrDefaultAsync();
+                _notifications?.EmailExternal(requesterEmail, "Access to a document was withdrawn",
+                    $"The owner withdrew your access to the document \"{doc.FileName}\" (request #{approval.EnquiryRequestId}). It is no longer available in the institution portal.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to email the institution about revoked access {ApprovalId}", approvalId);
+            }
+
             await TryCreateAuditLogAsync(new AuditLog
             {
                 UserId = user.Id,
@@ -669,7 +701,7 @@ namespace FourierIT_API.Controllers
 
         [HttpPost("{id}/flags/{flagId}/resolve")]
         [Authorize]
-        public async Task<IActionResult> ResolveDocumentFlag(int id, int flagId)
+        public async Task<IActionResult> ResolveDocumentFlag(int id, int flagId, [FromBody] FollowUpNoteDto? dto = null)
         {
             var user = await _userManager.GetUserAsync(User);
             if (user == null) return Unauthorized();
@@ -685,15 +717,35 @@ namespace FourierIT_API.Controllers
 
             if (flag == null) return NotFound(new { error = "Flag not found." });
 
+            if (flag.IsResolved) return NoContent();
+
             flag.IsResolved = true;
+            flag.ResolvedAt = DateTimeOffset.UtcNow;
+            flag.ResolutionNote = string.IsNullOrWhiteSpace(dto?.Note) ? null : dto!.Note!.Trim();
             await _context.SaveChangesAsync();
+
+            // The institution that raised the flag hears it was dealt with (it also shows in its portal updates).
+            try
+            {
+                var requesterEmail = await _context.InstitutionEnquiryRequests
+                    .Where(r => r.EnquiryRequestId == flag.EnquiryId)
+                    .Select(r => r.RequesterEmail)
+                    .FirstOrDefaultAsync();
+                var what = flag.ResolutionNote == null ? string.Empty : $" What was done: {flag.ResolutionNote}";
+                _notifications?.EmailExternal(requesterEmail, "Your flag on a document was dealt with",
+                    $"The owner has dealt with the problem you flagged on \"{doc.FileName}\" (request #{flag.EnquiryId}).{what}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to email the institution about resolved flag {FlagId}", flagId);
+            }
 
             await TryCreateAuditLogAsync(new AuditLog
             {
                 UserId = user.Id,
                 ActionCode = "DOCUMENT_FLAG_RESOLVED",
                 TimeStamp = DateTimeOffset.UtcNow,
-                Description = $"Document {id} flag {flagId} marked resolved by owner.",
+                Description = $"Document {id} flag {flagId} marked resolved by owner." + (flag.ResolutionNote == null ? string.Empty : $" Note: {flag.ResolutionNote}"),
                 TableAffected = "EnquiryFlags",
                 RecordID = flagId
             });
@@ -711,6 +763,9 @@ namespace FourierIT_API.Controllers
             var doc = await _documentRepository.GetDocumentByIdAsync(id);
             if (doc == null) return NotFound();
             if (!await CanManageDocumentAsync(user, doc)) return Forbid();
+
+            if (dto.CertificationDate.HasValue && dto.CertificationDate.Value.Date > DateTime.UtcNow.AddHours(2).Date) // "today" in South African time
+                return BadRequest(new { error = "The certification date can't be in the future." });
 
             if (dto.File != null && dto.File.Length > 0)
             {
@@ -822,25 +877,36 @@ namespace FourierIT_API.Controllers
             if (doc == null) return NotFound();
             if (!await CanManageDocumentAsync(user, doc)) return Forbid();
 
+            // Institutions that can still open the document block its deletion. My Documents lists them
+            // (with a Revoke button each), so the conflict carries the approvals, not just a message.
+            var accessApprovals = await _context.DocumentAccessApprovals
+                .Include(daa => daa.InstitutionEnquiryRequest)
+                    .ThenInclude(ier => ier.Institution)
+                .Include(daa => daa.ApprovedByUser)
+                .Where(daa => daa.DocumentId == id && !daa.IsRevoked)
+                .ToListAsync();
+
+            if (accessApprovals.Any())
+            {
+                return Conflict(new
+                {
+                    message = "Document cannot be deleted while access approvals exist.",
+                    approvals = accessApprovals.Select(daa => new
+                    {
+                        approvalId = daa.ApprovalId,
+                        institutionId = daa.InstitutionEnquiryRequest.InstitutionId,
+                        institutionName = daa.InstitutionEnquiryRequest.Institution.InstitutionName,
+                        approvedByUserName = daa.ApprovedByUser?.UserName ?? string.Empty,
+                        approvedAt = daa.ApprovedAt
+                    })
+                });
+            }
+
             return await this.SafeDeleteAsync(
                 "Document",
                 id.ToString(),
                 async () =>
                 {
-                    var accessApprovals = await _context.DocumentAccessApprovals
-                        .Include(daa => daa.InstitutionEnquiryRequest)
-                            .ThenInclude(ier => ier.Institution)
-                        .Include(daa => daa.ApprovedByUser)
-                        .Where(daa => daa.DocumentId == id && !daa.IsRevoked)
-                        .ToListAsync();
-
-                    if (accessApprovals.Any())
-                        throw new DeletionConflictException(
-                            "Document",
-                            id.ToString(),
-                            new List<string> { "Active Access Approvals" }
-                        );
-
                     await _documentRepository.DeleteDocumentAsync(id);
 
                     await TryCreateAuditLogAsync(new AuditLog
@@ -954,8 +1020,11 @@ namespace FourierIT_API.Controllers
                 EncryptionAlgorithm = doc.EncryptionAlgorithm,
                 FileSizeBytes = doc.FileSizeBytes,
                 UploadedDate = doc.UploadedDate,
+                CertificationDate = doc.CertificationDetails?
+                    .OrderByDescending(detail => detail.CertificationDate)
+                    .Select(detail => (DateTimeOffset?)detail.CertificationDate)
+                    .FirstOrDefault(),
                 ExpiryDate = doc.ExpiryDate,
-                NeverExpires = doc.DocumentType?.NeverExpires == true || doc.ExpiryDate == DateTimeOffset.MaxValue,
                 LastModifiedDate = doc.LastModifiedDate,
                 DocumentTypeId = doc.DocumentTypeId,
                 DocumentTypeName = doc.DocumentType?.TypeName ?? string.Empty,
@@ -1081,9 +1150,9 @@ namespace FourierIT_API.Controllers
                 entityTypes = await hierarchyRepository.GetFullHierarchyAsync();
                 userIdForMapping = null; // SuperAdmin sees all documents
             }
-            else if (IsStakeholderViewer())
+            else if (IsReadOnlyViewer())
             {
-                // Stakeholders oversee the whole system: they see every document but can't change any.
+                // Stakeholders and Compliance Officers see every document but can't change any.
                 entityTypes = await hierarchyRepository.GetFullHierarchyAsync();
                 userIdForMapping = null;
                 readOnly = true;
@@ -1125,10 +1194,10 @@ namespace FourierIT_API.Controllers
             var hierarchyRepository = new DocumentHierarchyRepository(_context);
             List<Document> results;
 
-            var stakeholderViewer = IsStakeholderViewer();
-            if (User.HasClaim("superadmin", "true") || stakeholderViewer)
+            var readOnlyViewer = IsReadOnlyViewer();
+            if (User.HasClaim("superadmin", "true") || readOnlyViewer)
             {
-                // Stakeholders search the whole system, read-only.
+                // Stakeholders and Compliance Officers search the whole system, read-only.
                 results = await hierarchyRepository.SearchDocumentsAsync(q);
             }
             else
@@ -1136,7 +1205,7 @@ namespace FourierIT_API.Controllers
                 results = await hierarchyRepository.SearchDocumentsForUserAsync(user.Id, q);
             }
 
-            var canManageDocuments = !stakeholderViewer
+            var canManageDocuments = !readOnlyViewer
                 && (User.HasClaim("superadmin", "true") || await HasDocumentManagePermissionAsync(user.Id));
 
             var searchResults = results.Select(doc => new SearchResultDto
@@ -1150,8 +1219,8 @@ namespace FourierIT_API.Controllers
                 UploadedDate = doc.UploadedDate,
                 FileSizeBytes = doc.FileSizeBytes,
                 UserCanView = true,
-                UserCanDownload = stakeholderViewer || doc.UserId == user.Id,
-                UserCanDelete = !stakeholderViewer && (canManageDocuments || doc.UserId == user.Id)
+                UserCanDownload = readOnlyViewer || doc.UserId == user.Id,
+                UserCanDelete = !readOnlyViewer && (canManageDocuments || doc.UserId == user.Id)
             }).ToList();
 
             return Ok(searchResults);
@@ -1216,9 +1285,13 @@ namespace FourierIT_API.Controllers
 
         #region Helper Methods
 
-        /// <summary>Stakeholders (who aren't also Department Admins) view everything and change nothing.</summary>
-        private bool IsStakeholderViewer() =>
-            User.IsInRole("Stakeholder") && !User.IsInRole("Department Admin") && !User.HasClaim("superadmin", "true");
+        /// <summary>
+        /// Stakeholders and Compliance Officers (who aren't also Department Admins) oversee every document
+        /// but change none: they don't upload, so a view limited to their own documents would always be empty.
+        /// </summary>
+        private bool IsReadOnlyViewer() =>
+            (User.IsInRole("Stakeholder") || User.IsInRole("Compliance Officer"))
+            && !User.IsInRole("Department Admin") && !User.HasClaim("superadmin", "true");
 
         private EntityTypeHierarchyDto MapToEntityTypeHierarchyDto(EntityType entityType, string? userId, bool readOnly = false)
         {

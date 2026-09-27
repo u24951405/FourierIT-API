@@ -115,12 +115,11 @@ namespace FourierIT_API.Services
 
         private static string BuildPasswordResetEmailHtmlBody(string resetLink, DateTimeOffset expiresAt)
         {
-            var logoData = GetInlineLogoSvgBase64();
             return $"<html><body style=\"font-family:Segoe UI,Arial,sans-serif;color:#111827;background:#f3f4f6;margin:0;padding:0;\">" +
                    "<div style=\"max-width:680px;margin:0 auto;padding:32px 16px;\">" +
                    "<div style=\"background:#ffffff;border-radius:24px;box-shadow:0 24px 80px rgba(15,23,42,0.08);overflow:hidden;\">" +
                    "<div style=\"padding:32px 40px;background:#0f172a;color:#f8fafc;text-align:center;\">" +
-                   $"<img src=\"data:image/svg+xml;base64,{logoData}\" alt=\"M5CS logo\" width=60 height=60 style=\"display:block;margin:0 auto 18px;\" />" +
+                   "<p style=\"margin:0 0 14px;font-size:22px;font-weight:800;letter-spacing:0.02em;color:#ffffff;\">DocuVault</p>" +
                    "<p style=\"margin:0;font-size:14px;letter-spacing:0.16em;color:#94a3b8;text-transform:uppercase;\">Password reset request</p>" +
                    "<h1 style=\"margin:16px 0 0;font-size:30px;font-weight:700;line-height:1.1;\">Reset your password</h1>" +
                    "</div>" +
@@ -251,12 +250,11 @@ namespace FourierIT_API.Services
 
         private static string BuildEmailHtmlBody(string institutionName, string accessLink, DateTimeOffset expiresAt)
         {
-            var logoData = GetInlineLogoSvgBase64();
             return $"<html><body style=\"font-family:Segoe UI,Arial,sans-serif;color:#111827;background:#f3f4f6;margin:0;padding:0;\">" +
                    "<div style=\"max-width:680px;margin:0 auto;padding:32px 16px;\">" +
                    "<div style=\"background:#ffffff;border-radius:24px;box-shadow:0 24px 80px rgba(15,23,42,0.08);overflow:hidden;\">" +
                    "<div style=\"padding:32px 40px;background:#0f172a;color:#f8fafc;text-align:center;\">" +
-                   $"<img src=\"data:image/svg+xml;base64,{logoData}\" alt=\"M5CS logo\" width=60 height=60 style=\"display:block;margin:0 auto 18px;\" />" +
+                   "<p style=\"margin:0 0 14px;font-size:22px;font-weight:800;letter-spacing:0.02em;color:#ffffff;\">DocuVault</p>" +
                    "<p style=\"margin:0;font-size:14px;letter-spacing:0.16em;color:#94a3b8;text-transform:uppercase;\">Secure access invitation</p>" +
                    "<h1 style=\"margin:16px 0 0;font-size:30px;font-weight:700;line-height:1.1;\">Your secure DocuVault invitation is ready</h1>" +
                    "</div>" +
@@ -328,7 +326,38 @@ namespace FourierIT_API.Services
             return SendSecurityEmailAsync(oldEmail, "DocuVault — your email address was changed", html, text);
         }
 
-        private async Task SendSecurityEmailAsync(string toEmail, string subject, string htmlBody, string textBody)
+        public Task SendNotificationEmailAsync(string toEmail, string subject, string heading, string message, string? actionPath = null, string? actionLabel = null)
+        {
+            var actionUrl = string.IsNullOrWhiteSpace(actionPath)
+                ? null
+                : actionPath.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                    ? actionPath
+                    : $"{_settings.FrontendBaseUrl.TrimEnd('/')}/{actionPath.TrimStart('/')}";
+            var label = string.IsNullOrWhiteSpace(actionLabel) ? "Open DocuVault" : actionLabel;
+
+            var text = $"{heading}\n\n{message}\n\n" +
+                       (actionUrl == null ? string.Empty : $"{label}: {actionUrl}\n\n") +
+                       "You are receiving this because of activity on your DocuVault account.\n\n" +
+                       "Thank you,\n" +
+                       "M5CS | DocuVault\n";
+
+            var button = actionUrl == null
+                ? string.Empty
+                : "<div style=\"margin-bottom:32px;\">" +
+                  $"<a href=\"{WebUtility.HtmlEncode(actionUrl)}\" style=\"display:inline-block;padding:14px 26px;background:#2563eb;color:#ffffff;border-radius:12px;font-weight:700;text-decoration:none;\">{WebUtility.HtmlEncode(label)}</a>" +
+                  "</div>";
+
+            var html = BuildSecurityEmailHtml(
+                "Notification",
+                WebUtility.HtmlEncode(heading),
+                WebUtility.HtmlEncode(message),
+                button,
+                "You are receiving this because of activity on your DocuVault account.");
+
+            return SendSecurityEmailAsync(toEmail, $"DocuVault — {subject}", html, text, highPriority: false);
+        }
+
+        private async Task SendSecurityEmailAsync(string toEmail, string subject, string htmlBody, string textBody, bool highPriority = true)
         {
             if (string.IsNullOrWhiteSpace(_settings.Host))
                 throw new InvalidOperationException("SMTP host is not configured.");
@@ -344,11 +373,14 @@ namespace FourierIT_API.Services
                 IsBodyHtml = true,
                 BodyEncoding = Encoding.UTF8,
                 SubjectEncoding = Encoding.UTF8,
-                Priority = MailPriority.High
+                Priority = highPriority ? MailPriority.High : MailPriority.Normal
             };
-            message.Headers.Add("X-Priority", "1");
-            message.Headers.Add("Importance", "High");
-            message.Headers.Add("X-MSMail-Priority", "High");
+            if (highPriority)
+            {
+                message.Headers.Add("X-Priority", "1");
+                message.Headers.Add("Importance", "High");
+                message.Headers.Add("X-MSMail-Priority", "High");
+            }
 
             message.To.Add(toEmail);
             message.AlternateViews.Add(AlternateView.CreateAlternateViewFromString(textBody, null, "text/plain"));
@@ -371,12 +403,11 @@ namespace FourierIT_API.Services
         // Same layout as the registration verification email.
         private static string BuildSecurityEmailHtml(string eyebrow, string title, string introHtml, string highlightHtml, string footnote)
         {
-            var logoData = GetInlineLogoSvgBase64();
             return $"<html><body style=\"font-family:Segoe UI,Arial,sans-serif;color:#111827;background:#f3f4f6;margin:0;padding:0;\">" +
                    "<div style=\"max-width:680px;margin:0 auto;padding:32px 16px;\">" +
                    "<div style=\"background:#ffffff;border-radius:24px;box-shadow:0 24px 80px rgba(15,23,42,0.08);overflow:hidden;\">" +
                    "<div style=\"padding:32px 40px;background:#0f172a;color:#f8fafc;text-align:center;\">" +
-                   $"<img src=\"data:image/svg+xml;base64,{logoData}\" alt=\"M5CS logo\" width=60 height=60 style=\"display:block;margin:0 auto 18px;\" />" +
+                   "<p style=\"margin:0 0 14px;font-size:22px;font-weight:800;letter-spacing:0.02em;color:#ffffff;\">DocuVault</p>" +
                    $"<p style=\"margin:0;font-size:14px;letter-spacing:0.16em;color:#94a3b8;text-transform:uppercase;\">{eyebrow}</p>" +
                    $"<h1 style=\"margin:16px 0 0;font-size:30px;font-weight:700;line-height:1.1;\">{title}</h1>" +
                    "</div>" +
@@ -411,12 +442,11 @@ namespace FourierIT_API.Services
 
         private static string BuildUserRegistrationOtpEmailHtmlBody(string otpCode, DateTimeOffset expiresAt)
         {
-            var logoData = GetInlineLogoSvgBase64();
             return $"<html><body style=\"font-family:Segoe UI,Arial,sans-serif;color:#111827;background:#f3f4f6;margin:0;padding:0;\">" +
                    "<div style=\"max-width:680px;margin:0 auto;padding:32px 16px;\">" +
                    "<div style=\"background:#ffffff;border-radius:24px;box-shadow:0 24px 80px rgba(15,23,42,0.08);overflow:hidden;\">" +
                    "<div style=\"padding:32px 40px;background:#0f172a;color:#f8fafc;text-align:center;\">" +
-                   $"<img src=\"data:image/svg+xml;base64,{logoData}\" alt=\"M5CS logo\" width=60 height=60 style=\"display:block;margin:0 auto 18px;\" />" +
+                   "<p style=\"margin:0 0 14px;font-size:22px;font-weight:800;letter-spacing:0.02em;color:#ffffff;\">DocuVault</p>" +
                    "<p style=\"margin:0;font-size:14px;letter-spacing:0.16em;color:#94a3b8;text-transform:uppercase;\">Welcome</p>" +
                    "<h1 style=\"margin:16px 0 0;font-size:30px;font-weight:700;line-height:1.1;\">Verify your email to complete registration</h1>" +
                    "</div>" +
@@ -457,12 +487,11 @@ namespace FourierIT_API.Services
 
         private static string BuildInstitutionOtpEmailHtmlBody(string institutionName, string otpCode, DateTimeOffset expiresAt)
         {
-            var logoData = GetInlineLogoSvgBase64();
             return $"<html><body style=\"font-family:Segoe UI,Arial,sans-serif;color:#111827;background:#f3f4f6;margin:0;padding:0;\">" +
                    "<div style=\"max-width:680px;margin:0 auto;padding:32px 16px;\">" +
                    "<div style=\"background:#ffffff;border-radius:24px;box-shadow:0 24px 80px rgba(15,23,42,0.08);overflow:hidden;\">" +
                    "<div style=\"padding:32px 40px;background:#0f172a;color:#f8fafc;text-align:center;\">" +
-                   $"<img src=\"data:image/svg+xml;base64,{logoData}\" alt=\"M5CS logo\" width=60 height=60 style=\"display:block;margin:0 auto 18px;\" />" +
+                   "<p style=\"margin:0 0 14px;font-size:22px;font-weight:800;letter-spacing:0.02em;color:#ffffff;\">DocuVault</p>" +
                    "<p style=\"margin:0;font-size:14px;letter-spacing:0.16em;color:#94a3b8;text-transform:uppercase;\">Institution access</p>" +
                    "<h1 style=\"margin:16px 0 0;font-size:30px;font-weight:700;line-height:1.1;\">Your institution portal access code</h1>" +
                    "</div>" +
@@ -488,21 +517,5 @@ namespace FourierIT_API.Services
                    "</body></html>";
         }
 
-        private static string GetInlineLogoSvgBase64()
-        {
-            const string svg =
-                "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 120\">" +
-                "<defs>" +
-                "<linearGradient id=\"g\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"1\">" +
-                "<stop offset=\"0%\" stop-color=\"#2563eb\"/><stop offset=\"100%\" stop-color=\"#22c55e\"/></linearGradient>" +
-                "</defs>" +
-                "<rect x=\"12\" y=\"12\" width=\"96\" height=\"96\" rx=\"24\" fill=\"url(#g)\"/>" +
-                "<path d=\"M36 84 L36 48 A12 12 0 0 1 60 48 L60 84\" fill=\"none\" stroke=\"#ffffff\" stroke-width=\"10\" stroke-linecap=\"round\"/>" +
-                "<path d=\"M64 84 L64 36 A12 12 0 0 1 88 36 L88 84\" fill=\"none\" stroke=\"#ffffff\" stroke-width=\"10\" stroke-linecap=\"round\"/>" +
-                "<text x=\"50%\" y=\"90%\" font-family=\"Segoe UI,Arial,sans-serif\" font-size=\"24\" font-weight=\"700\" fill=\"#ffffff\" text-anchor=\"middle\">M5</text>" +
-                "</svg>";
-
-            return Convert.ToBase64String(Encoding.UTF8.GetBytes(svg));
-        }
     }
 }

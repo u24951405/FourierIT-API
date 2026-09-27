@@ -141,7 +141,6 @@ namespace FourierIT_API.DTOs.Compliance
 
         public int QualityScore { get; set; }
         public bool IsExpiryValid { get; set; }
-        public bool NeverExpires { get; set; }
         public int? DaysUntilExpiry { get; set; }
         public bool IsCertified { get; set; }
         public bool IsRecent { get; set; }

@@ -20,6 +20,7 @@ public sealed class MonthlyProcessingStatsDto
 {
     public int Verified { get; set; }
     public int PendingVerification { get; set; }
+    public int Rejected { get; set; }
     public int FlaggedAnomalies { get; set; }
     public int PartOfEnquiry { get; set; }
 }

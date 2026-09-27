@@ -9,29 +9,14 @@ public class DocumentValidityCalculatorTests
     private readonly DocumentValidityCalculator _calculator = new();
 
     [Fact]
-    public void NeverExpires_NeverExpires()
+    public void CertificationBasisWithoutCertificationDate_CountsFromTheUploadDate()
     {
-        var policy = new DocumentType
-        {
-            NeverExpires = true,
-            ValidityMonths = 3,
-            ValidityBasis = ValidityBasis.CertificationDate
-        };
-
-        var result = _calculator.Calculate(policy, new DateTime(2026, 1, 1));
-
-        Assert.Equal(DateTimeOffset.MaxValue, result.ExpiryDate);
-        Assert.False(result.MissingSourceDate);
-    }
-
-    [Fact]
-    public void CertificationBasisWithoutCertificationDate_ReportsMissingSourceDate()
-    {
+        // Every document expires: without a certification date the upload date is the starting point.
         var policy = new DocumentType { ValidityMonths = 3, ValidityBasis = ValidityBasis.CertificationDate };
 
-        var result = _calculator.Calculate(policy, new DateTime(2026, 1, 1));
+        var result = _calculator.Calculate(policy, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
 
-        Assert.Equal(DateTimeOffset.MaxValue, result.ExpiryDate);
+        Assert.Equal(new DateTimeOffset(2026, 4, 1, 0, 0, 0, TimeSpan.Zero), result.ExpiryDate);
         Assert.True(result.MissingSourceDate);
     }
 
@@ -140,15 +125,6 @@ public class DocumentValidityCalculatorTests
         var policy = new DocumentType { WarningDays = 0 };
 
         Assert.False(_calculator.IsExpiringSoon(policy, now.AddDays(5), now));
-    }
-
-    [Fact]
-    public void IsExpiringSoon_NeverExpires_IsFalse()
-    {
-        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        var policy = new DocumentType { WarningDays = 30, NeverExpires = true };
-
-        Assert.False(_calculator.IsExpiringSoon(policy, now.AddDays(365), now));
     }
 
     [Fact]

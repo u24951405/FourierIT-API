@@ -27,6 +27,10 @@ namespace FourierIT_API.Models
 
         public bool IsRevoked { get; set; }
 
+        // The invited person who signed in, so replies to their requests can be emailed to them.
+        [StringLength(256)]
+        public string? Email { get; set; }
+
         public DateTime? RevokedAt { get; set; }
     }
 }

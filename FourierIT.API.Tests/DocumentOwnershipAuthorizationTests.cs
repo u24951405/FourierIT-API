@@ -28,7 +28,7 @@ public class DocumentOwnershipAuthorizationTests
 
         if (isOwner || hasManagePermission)
         {
-            Assert.IsType<NoContentResult>(result);
+            Assert.IsType<OkObjectResult>(result); // deletes answer 200 OK with a message (SafeDeleteAsync)
             fixture.Repository.Verify(x => x.DeleteDocumentAsync(fixture.Document.DocumentId), Times.Once);
         }
         else
@@ -141,7 +141,7 @@ public class DocumentOwnershipAuthorizationTests
         {
             context.Permissions.Add(new Permission { PermissionId = 901, PermissionKey = "Documents.Manage" });
             context.RolePermissions.Add(new RolePermission { RoleId = "manage-role", PermissionId = 901 });
-            context.Set<IdentityUserRole<string>>().Add(new IdentityUserRole<string> { UserId = currentUser.Id, RoleId = "manage-role" });
+            context.UserRoles.Add(new UserRole { UserId = currentUser.Id, RoleId = "manage-role" });
         }
         await context.SaveChangesAsync();
 

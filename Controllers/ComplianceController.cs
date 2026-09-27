@@ -522,9 +522,18 @@ namespace FourierIT_API.Controllers
                     return Unauthorized(new { error = "Unable to determine current user." });
                 }
 
-                var count = await _complianceService.BulkApproveDocumentsAsync(checkIds, currentUserId);
+                // Only documents the automatic checks found nothing wrong with can be approved in bulk;
+                // anything else needs a Compliance Officer to look at it on its own.
+                var checks = await _context.DocumentComplianceChecks
+                    .AsNoTracking()
+                    .Where(c => checkIds.Contains(c.CheckId) && c.RequiresManualReview && !c.IsManuallyApproved)
+                    .ToListAsync();
+                var eligible = checks.Where(c => ClearlyValidConcerns(c).Count == 0).Select(c => c.CheckId).ToList();
+                var skipped = checkIds.Except(eligible).ToList();
 
-                return Ok(new { success = true, approved = count });
+                var count = await _complianceService.BulkApproveDocumentsAsync(eligible, currentUserId);
+
+                return Ok(new { success = true, approved = count, skipped });
             }
             catch
             {
@@ -618,8 +627,30 @@ namespace FourierIT_API.Controllers
             try
             {
                 var documents = await _complianceService.GetPendingManualReviewsAsync();
+
+                // Institution requests still waiting on these owners: a document one of them needs goes to the front.
+                var ownerIds = documents.Select(check => check.Document?.UserId).Where(id => id != null).Distinct().ToList();
+                var waitingRequests = await _context.InstitutionEnquiryRequests
+                    .AsNoTracking()
+                    .Where(r => r.TargetUserId != null && ownerIds.Contains(r.TargetUserId) && r.Status == "Pending")
+                    .Select(r => new
+                    {
+                        r.TargetUserId,
+                        r.SubmissionDeadline,
+                        InstitutionName = r.Institution.InstitutionName,
+                        TypeIds = r.RequestedDocumentTypes.Select(t => t.DocumentTypeId).ToList()
+                    })
+                    .ToListAsync();
+
+                var now = DateTime.UtcNow;
                 var data = documents.Select(check =>
                 {
+                    var neededFor = waitingRequests
+                        .Where(r => r.TargetUserId == check.Document?.UserId && check.Document != null && r.TypeIds.Contains(check.Document.DocumentTypeId))
+                        .OrderBy(r => r.SubmissionDeadline ?? DateTimeOffset.MaxValue)
+                        .FirstOrDefault();
+                    var concerns = ClearlyValidConcerns(check);
+
                     var user = check.Document?.User;
                     var profileName = user?.Profile == null
                         ? string.Empty
@@ -657,7 +688,14 @@ namespace FourierIT_API.Controllers
                         isRecent = check.IsRecent,
                         requiresManualReview = check.RequiresManualReview,
                         remediationAction = check.RemediationAction,
-                        actionDueDate = check.ActionDueDate
+                        actionDueDate = check.ActionDueDate,
+                        // How long it has been waiting for a decision.
+                        waitingSince = check.CheckedAt,
+                        waitingDays = (int)Math.Floor((now - check.CheckedAt).TotalDays),
+                        neededBy = neededFor?.SubmissionDeadline,
+                        neededByInstitution = neededFor?.InstitutionName,
+                        isClearlyValid = concerns.Count == 0,
+                        concerns
                     };
                 }).ToList();
 
@@ -667,6 +705,21 @@ namespace FourierIT_API.Controllers
             {
                 throw;
             }
+        }
+
+        /// <summary>
+        /// What stops a document counting as clearly valid (nothing means it can be approved in bulk):
+        /// the automatic checks found it expired, uncertified, unreadable or unsafe, or gave another reason.
+        /// </summary>
+        public static List<string> ClearlyValidConcerns(DocumentComplianceCheck check)
+        {
+            var concerns = new List<string>();
+            if (!check.IsExpiryValid || check.DaysUntilExpiry is <= 0) concerns.Add("Expired or expiry date not valid");
+            if (!check.IsCertified) concerns.Add("Not certified");
+            if (!check.IsLegible || !check.IsHighQuality) concerns.Add("Hard to read");
+            if (!check.IsVirusFree) concerns.Add("Failed the virus scan");
+            if (!string.IsNullOrWhiteSpace(check.NonComplianceReason)) concerns.Add(check.NonComplianceReason!);
+            return concerns;
         }
 
         // ===== HISTORY & AUDIT =====

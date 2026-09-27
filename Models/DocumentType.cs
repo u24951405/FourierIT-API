@@ -17,7 +17,6 @@ namespace FourierIT_API.Models
 
         public int ValidityMonths { get; set; } = 3;
 
-        public bool NeverExpires { get; set; } = false;
 
         [Required]
         public ValidityBasis ValidityBasis { get; set; } = ValidityBasis.CertificationDate;

@@ -30,6 +30,7 @@ public static class SystemSettingDefinitions
     public const string Sessions = "Sessions";
     public const string Links = "Links";
     public const string SecurityLimits = "Security limits";
+    public const string Reminders = "Reminders";
 
     public const string UserOtpExpiryMinutes = "UserOtpExpiryMinutes";
     public const string InstitutionOtpExpiryMinutes = "InstitutionOtpExpiryMinutes";
@@ -40,6 +41,9 @@ public static class SystemSettingDefinitions
     public const string DocumentAccessLinkExpiryHours = "DocumentAccessLinkExpiryHours";
     public const string MaxCodeAttempts = "MaxCodeAttempts";
     public const string CodeResendCooldownSeconds = "CodeResendCooldownSeconds";
+    public const string OwnerReminderAfterHours = "OwnerReminderAfterHours";
+    public const string AccessExpiryReminderHours = "AccessExpiryReminderHours";
+    public const string MaxAccessExtensionDays = "MaxAccessExtensionDays";
 
     public static readonly IReadOnlyList<SystemSettingDefinition> All = new[]
     {
@@ -82,6 +86,19 @@ public static class SystemSettingDefinitions
             "Wait before resending a code",
             "How long someone must wait before another verification code or access link can be emailed.",
             SettingUnit.Seconds, Default: 60, Min: 30, Max: 300),
+
+        new SystemSettingDefinition(OwnerReminderAfterHours, Reminders,
+            "Remind owners about unanswered requests",
+            "How long a document request can wait for an answer before the owner (or department admin) is reminded.",
+            SettingUnit.Hours, Default: 48, Min: 12, Max: 168),
+        new SystemSettingDefinition(AccessExpiryReminderHours, Reminders,
+            "Warn institutions before access ends",
+            "How long before an institution's access to documents ends that it is emailed a reminder.",
+            SettingUnit.Hours, Default: 24, Min: 2, Max: 72),
+        new SystemSettingDefinition(MaxAccessExtensionDays, Reminders,
+            "Longest access extension",
+            "The most extra time an institution can ask for when it needs approved documents for longer.",
+            SettingUnit.Days, Default: 7, Min: 1, Max: 30),
     };
 
     public static SystemSettingDefinition? Find(string key) =>

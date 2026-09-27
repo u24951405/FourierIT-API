@@ -54,7 +54,7 @@ public class DepartmentAdminRestrictionTests
 
         var result = await controller.DeleteManagedUser(targetProfile.ProfileId);
 
-        Assert.IsType<NoContentResult>(result);
+        Assert.IsType<OkObjectResult>(result); // deletes answer 200 OK with a message (SafeDeleteAsync)
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class DepartmentAdminRestrictionTests
 
         var result = await controller.DeleteUserById("target-user");
 
-        Assert.IsType<NoContentResult>(result);
+        Assert.IsType<OkObjectResult>(result);
     }
 
     private static UpdateUserManagementRequestDto ValidUpdateDto() => new()

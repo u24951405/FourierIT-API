@@ -118,10 +118,12 @@ public class AdHocExcelExportTests
         var dataSheet = workbook.Worksheet("Compliance Results");
 
         Assert.Equal(2, dataSheet.LastRowUsed()!.RowNumber());
-        Assert.Equal("Compliance %", dataSheet.Cell("E1").GetString());
-        Assert.Equal(XLDataType.Number, dataSheet.Cell("E2").DataType);
-        Assert.Equal(92, dataSheet.Cell("E2").GetDouble());
-        Assert.Equal(XLDataType.DateTime, dataSheet.Cell("G2").DataType);
+        // The owner's name comes first (reports show people, not IDs).
+        Assert.Equal("Document owner", dataSheet.Cell("A1").GetString());
+        Assert.Equal("Compliance %", dataSheet.Cell("D1").GetString());
+        Assert.Equal(XLDataType.Number, dataSheet.Cell("D2").DataType);
+        Assert.Equal(92, dataSheet.Cell("D2").GetDouble());
+        Assert.Equal(XLDataType.DateTime, dataSheet.Cell("F2").DataType);
         Assert.Throws<ArgumentException>(() => workbook.Worksheet("Document Processing"));
     }
 

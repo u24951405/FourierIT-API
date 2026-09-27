@@ -8,7 +8,6 @@ public class DocumentTypeSummaryDto
     public string Name { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public int ValidityMonths { get; set; }
-    public bool NeverExpires { get; set; }
     public ValidityBasis ValidityBasis { get; set; }
     public int WarningDays { get; set; }
     public int DocumentCount { get; set; }
@@ -17,7 +16,6 @@ public class DocumentTypeSummaryDto
 public class DocumentTypeValidityUpdateRequest
 {
     public int ValidityMonths { get; set; }
-    public bool NeverExpires { get; set; }
     public ValidityBasis ValidityBasis { get; set; }
     public int WarningDays { get; set; }
 }

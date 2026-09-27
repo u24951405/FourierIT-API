@@ -10,8 +10,9 @@
         public string EncryptionAlgorithm { get; set; } = string.Empty;
         public long FileSizeBytes { get; set; }
         public DateTime UploadedDate { get; set; }
+        /// <summary>When the copy was certified (the latest certification), if it has one.</summary>
+        public DateTimeOffset? CertificationDate { get; set; }
         public DateTimeOffset ExpiryDate { get; set; }
-        public bool NeverExpires { get; set; }
         public DateTime? LastModifiedDate { get; set; }
         public int DocumentTypeId { get; set; }
         public string DocumentTypeName { get; set; } = string.Empty;
