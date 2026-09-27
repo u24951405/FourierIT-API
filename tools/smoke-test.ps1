@@ -61,9 +61,10 @@ $roles = [ordered]@{
     }
     'Document Owner' = @{
         Prefix = 'SMOKE_OWNER'
-        Paths  = @('user/me', 'notifications/unread-count', 'documents', 'documents/flags', 'users/me/documents/required',
+        # Owners don't get reports (no Reports.View); the required-documents address sits under api/documents.
+        Paths  = @('user/me', 'notifications/unread-count', 'documents', 'documents/flags', 'documents/api/users/me/documents/required',
                    'document-access-requests/pending', 'document-access-requests/extensions',
-                   'compliance/users/{me}', 'reports/activity/{me}')
+                   'compliance/users/{me}', 'compliance/users/{me}/history')
     }
     'Department Admin' = @{
         Prefix = 'SMOKE_DEPTADMIN'
