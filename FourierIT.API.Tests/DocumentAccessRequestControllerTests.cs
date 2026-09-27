@@ -77,19 +77,22 @@ public class DocumentAccessRequestControllerTests
     }
 
     [Fact]
-    public async Task GetInstitutionUsers_ReturnsOnlyUsersWithDocumentOwnerRole()
+    public async Task GetInstitutionUsers_IncludesDocumentOwnersAndDepartmentAdmins()
     {
         await using var context = CreateContext();
         var institution = new Institution { InstitutionId = 1, InstitutionName = "Test Institution" };
         var documentOwnerRole = await context.Roles.SingleAsync(role => role.Id == "DO");
+        var departmentAdminRole = await context.Roles.SingleAsync(role => role.Id == "DA");
         var otherRole = new Role { Id = "USER", Name = "User", NormalizedName = "USER" };
         var owner = CreateUser("owner", "Owner", "Person");
+        var departmentAdmin = CreateUser("department-admin", "Department", "Admin");
         var nonOwner = CreateUser("non-owner", "Other", "Person");
 
         context.Institutions.Add(institution);
         context.Roles.Add(otherRole);
-        context.Users.AddRange(owner, nonOwner);
+        context.Users.AddRange(owner, departmentAdmin, nonOwner);
         context.UserRoles.Add(new UserRole { UserId = owner.Id, RoleId = documentOwnerRole.Id });
+        context.UserRoles.Add(new UserRole { UserId = departmentAdmin.Id, RoleId = departmentAdminRole.Id });
         context.UserRoles.Add(new UserRole { UserId = nonOwner.Id, RoleId = otherRole.Id });
         context.InstitutionSessionTokens.Add(CreateSession(institution.InstitutionId, "session-token"));
         await context.SaveChangesAsync();
@@ -102,11 +105,11 @@ public class DocumentAccessRequestControllerTests
             .Select(user => user.GetType().GetProperty("userId")!.GetValue(user)!.ToString())
             .ToList();
 
-        Assert.Equal([owner.Id], userIds);
+        Assert.Equal(new[] { departmentAdmin.Id, owner.Id }.OrderBy(x => x), userIds.OrderBy(x => x));
     }
 
     [Fact]
-    public async Task GetInstitutionUsers_WhenDocumentOwnerRoleIsMissing_ReturnsServerErrorInsteadOfAllUsers()
+    public async Task GetInstitutionUsers_WhenDocumentOwnerAndDepartmentAdminRolesAreMissing_ReturnsServerErrorInsteadOfAllUsers()
     {
         await using var context = CreateContext();
         var institution = new Institution { InstitutionId = 2, InstitutionName = "Test Institution" };
@@ -114,6 +117,8 @@ public class DocumentAccessRequestControllerTests
 
         var seededDocumentOwnerRole = await context.Roles.SingleAsync(role => role.Id == "DO");
         context.Roles.Remove(seededDocumentOwnerRole);
+        var seededDepartmentAdminRole = await context.Roles.SingleAsync(role => role.Name == "Department Admin");
+        context.Roles.Remove(seededDepartmentAdminRole);
         context.Institutions.Add(institution);
         context.Users.Add(user);
         context.InstitutionSessionTokens.Add(CreateSession(institution.InstitutionId, "session-token"));
@@ -124,7 +129,7 @@ public class DocumentAccessRequestControllerTests
         var response = Assert.IsType<ObjectResult>(result);
         Assert.Equal(500, response.StatusCode);
         var error = response.Value?.GetType().GetProperty("error")?.GetValue(response.Value)?.ToString();
-        Assert.Equal("Document Owner role is not configured.", error);
+        Assert.Equal("Document Owner or Department Admin roles are not configured.", error);
     }
 
     private static AppDbContext CreateContext()

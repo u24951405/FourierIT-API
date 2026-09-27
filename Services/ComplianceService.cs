@@ -1491,7 +1491,12 @@ namespace FourierIT_API.Services
         {
             return await _context.DocumentComplianceChecks
                 .AsNoTracking()
-                .Where(c => c.RequiresManualReview && !c.IsManuallyApproved)
+                .Where(c => !c.IsManuallyApproved &&
+                    (c.RequiresManualReview ||
+                     c.CheckStatus == "Pending Review" ||
+                     c.CheckStatus == "Pending" ||
+                     c.CheckStatus == "Under Review"))
+                .OrderByDescending(c => c.CheckedAt)
                 .Include(c => c.Document)
                     .ThenInclude(d => d!.User)
                         .ThenInclude(u => u.Profile)

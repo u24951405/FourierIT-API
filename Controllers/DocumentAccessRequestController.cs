@@ -737,27 +737,22 @@ namespace FourierIT_API.Controllers
             if (sessionToken == null)
                 return Unauthorized(new { error = "Invalid or expired session token." });
 
-            // Return all registered users who have the Document Owner role.
-            // Resolve the role first (by NormalizedName) then match UserRoles by RoleId to avoid navigation/translation edge cases.
-            var docRole = await _context.Roles.FirstOrDefaultAsync(r => r.NormalizedName == "DOCUMENT OWNER");
-            // If exact normalized lookup fails, try more permissive matches to handle unexpected DB values
-            if (docRole == null)
-            {
-                docRole = await _context.Roles
-                    .FirstOrDefaultAsync(r => r.NormalizedName != null && r.NormalizedName.Contains("DOCUMENT") && r.NormalizedName.Contains("OWNER"));
-            }
-            if (docRole == null)
-            {
-                docRole = await _context.Roles
-                    .FirstOrDefaultAsync(r => r.Name != null && r.Name.Contains("Document") && r.Name.Contains("Owner"));
-            }
+            // Return all registered users who act like document owners for document upload/review flows.
+            var ownerLikeRoleIds = await _context.Roles
+                .AsNoTracking()
+                .Where(r =>
+                    (r.NormalizedName == "DOCUMENT OWNER" || r.NormalizedName == "DEPARTMENT ADMIN") ||
+                    (r.Name != null && (r.Name == "Document Owner" || r.Name == "Department Admin")))
+                .Select(r => r.Id)
+                .Distinct()
+                .ToListAsync();
 
             List<object> members;
 
-            if (docRole != null)
+            if (ownerLikeRoleIds.Count > 0)
             {
                 var documentOwnerUserIds = _context.UserRoles
-                    .Where(userRole => userRole.RoleId == docRole.Id)
+                    .Where(userRole => ownerLikeRoleIds.Contains(userRole.RoleId))
                     .Select(userRole => userRole.UserId);
 
                 members = await _context.Users
@@ -780,7 +775,7 @@ namespace FourierIT_API.Controllers
             {
                 return StatusCode(StatusCodes.Status500InternalServerError, new
                 {
-                    error = "Document Owner role is not configured."
+                    error = "Document Owner or Department Admin roles are not configured."
                 });
             }
 

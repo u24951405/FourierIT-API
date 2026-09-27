@@ -524,10 +524,10 @@ namespace FourierIT_API.Controllers
 
                 // Only documents the automatic checks found nothing wrong with can be approved in bulk;
                 // anything else needs a Compliance Officer to look at it on its own.
-                var checks = await _context.DocumentComplianceChecks
-                    .AsNoTracking()
-                    .Where(c => checkIds.Contains(c.CheckId) && c.RequiresManualReview && !c.IsManuallyApproved)
-                    .ToListAsync();
+                // The same documents the review queue shows (GetPendingManualReviewsAsync), limited to the ones picked.
+                var checks = (await _complianceService.GetPendingManualReviewsAsync())
+                    .Where(c => checkIds.Contains(c.CheckId))
+                    .ToList();
                 var eligible = checks.Where(c => ClearlyValidConcerns(c).Count == 0).Select(c => c.CheckId).ToList();
                 var skipped = checkIds.Except(eligible).ToList();
 
