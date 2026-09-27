@@ -59,7 +59,7 @@ namespace FourierIT_API.Controllers
 
         private async Task<bool> UserCanAccessDepartmentAsync(int departmentId)
         {
-            if (User.IsInRole("Admin"))
+            if (User.HasClaim("superadmin", "true") || User.IsInRole("Admin")) // the Super Admin has no role, only the claim
                 return true;
 
             if (!User.IsInRole("Department Admin") && !User.IsInRole("Stakeholder"))
