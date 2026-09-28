@@ -1,0 +1,45 @@
+name: Deploy API to SmarterASP.NET
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish API
+        run: dotnet publish FourierIT-API.csproj -c Release -o ./out -p:UseAppHost=false
+
+      - name: Install lftp
+        run: sudo apt-get update && sudo apt-get install -y lftp
+
+      # IIS locks FourierIT-API.dll while the app runs, so take the site offline
+      # with app_offline.htm, upload, then remove it to bring the site back up.
+      - name: Upload to SmarterASP via FTP
+        env:
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
+        run: |
+          echo "<html><body>Deploying, back in a minute.</body></html>" > app_offline.htm
+          lftp -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_HOST" <<EOF
+          set ftp:ssl-allow yes
+          set ssl:verify-certificate no
+          cd "$FTP_REMOTE_DIR"
+          put app_offline.htm
+          mirror --reverse --overwrite --parallel=4 --verbose --exclude-glob logs/ ./out/ ./
+          rm app_offline.htm
+          bye
+          EOF
