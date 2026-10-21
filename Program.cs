@@ -63,7 +63,11 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AngularClient", policy =>
     {
-        policy.WithOrigins(allowedOrigins)
+        policy.WithOrigins(
+                "https://docuvault-001-site1.ktempuri.com",
+                "http://docuvault-001-site1.ktempuri.com",
+                "http://localhost:4200",
+                "http://127.0.0.1:4200")
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
@@ -138,6 +142,8 @@ builder.Services.AddSingleton(sp =>
 
 // Register Backup Service
 builder.Services.AddScoped<FourierIT_API.Interfaces.IBackupService, FourierIT_API.Services.BackupService>();
+// Runs manual backups in the background (one at a time) so the page doesn't wait on the upload.
+builder.Services.AddSingleton<FourierIT_API.Services.BackupJobTracker>();
 
 // Register Daily Backup Service as a Hosted Service
 builder.Services.AddHostedService<DailyBackupService>();
@@ -346,10 +352,17 @@ using (var scope = app.Services.CreateScope())
         var userMgr = scope.ServiceProvider.GetRequiredService<Microsoft.AspNetCore.Identity.UserManager<FourierIT_API.Models.User>>();
         var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
         var superUserName = builder.Configuration["SuperAdmin:Username"] ?? "superadmin";
+        // The password comes from User Secrets (dotnet user-secrets set "SuperAdmin:Password" "...") or an environment
+        // variable (SuperAdmin__Password); it is never kept in a tracked file.
         var superPassword = builder.Configuration["SuperAdmin:Password"];
         var superEmail = builder.Configuration["SuperAdmin:Email"] ?? "superadmin@fourier.local";
 
-        if (string.IsNullOrWhiteSpace(superPassword))
+        var superUser = await userMgr.FindByNameAsync(superUserName);
+        if (superUser == null && string.IsNullOrWhiteSpace(superPassword))
+        {
+            logger.LogWarning("No Super Admin password is configured, so the Super Admin account was not created. Set it with: dotnet user-secrets set \"SuperAdmin:Password\" \"<password>\"");
+        }
+        else if (superUser == null)
         {
             logger.LogError("Super Admin password is not configured. Set SuperAdmin:Password using user-secrets or an environment variable before starting the API.");
         }

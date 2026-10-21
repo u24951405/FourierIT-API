@@ -123,7 +123,7 @@ namespace FourierIT_API.Controllers
             {
                 // Users can only view their own details unless they're Admin
                 var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                if (currentUserId != userId && !User.IsInRole("Admin") && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
+                if (currentUserId != userId && !IsSuperAdmin() && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
                     return Forbid();
 
                 await _complianceService.CheckUserComplianceAsync(userId, false);
@@ -135,6 +135,11 @@ namespace FourierIT_API.Controllers
                 throw;
             }
         }
+
+        /// <summary>
+        /// The Super Admin has no role: full access comes from the "superadmin" claim. ("Admin" is kept for older accounts.)
+        /// </summary>
+        private bool IsSuperAdmin() => User.HasClaim("superadmin", "true") || User.IsInRole("Admin");
 
         private async Task<User?> GetCurrentUserAsync()
         {
@@ -159,7 +164,7 @@ namespace FourierIT_API.Controllers
 
         private async Task<bool> UserCanAccessDepartmentAsync(int departmentId)
         {
-            if (User.IsInRole("Admin"))
+            if (IsSuperAdmin())
                 return true;
 
             if (!User.IsInRole("Department Admin") && !User.IsInRole("Stakeholder"))
@@ -202,7 +207,7 @@ namespace FourierIT_API.Controllers
         {
             // Department Admins see only their own department's figures (the department dashboard), never
             // organisation-wide totals. They hold Compliance.Manage, so this has to be a role check.
-            var isOrganisationWideViewer = User.HasClaim("superadmin", "true") || User.IsInRole("Admin");
+            var isOrganisationWideViewer = IsSuperAdmin();
             if (User.IsInRole("Department Admin") && !isOrganisationWideViewer)
                 return Forbid();
 
@@ -280,7 +285,7 @@ namespace FourierIT_API.Controllers
             try
             {
                 var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                if (currentUserId != userId && !User.IsInRole("Admin") && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
+                if (currentUserId != userId && !IsSuperAdmin() && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
                     return Forbid();
 
                 var snapshot = await _complianceService.GetUserDashboardSnapshotAsync(userId);
@@ -323,7 +328,7 @@ namespace FourierIT_API.Controllers
             try
             {
                 var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                if (currentUserId != userId && !User.IsInRole("Admin") && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
+                if (currentUserId != userId && !IsSuperAdmin() && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
                     return Forbid();
 
                 await _complianceService.CheckUserComplianceAsync(userId, false);
@@ -346,7 +351,7 @@ namespace FourierIT_API.Controllers
             try
             {
                 var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                if (currentUserId != userId && !User.IsInRole("Admin") && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
+                if (currentUserId != userId && !IsSuperAdmin() && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
                     return Forbid();
 
                 await _complianceService.CheckUserComplianceAsync(userId, false);
@@ -375,7 +380,7 @@ namespace FourierIT_API.Controllers
                 // Users can only view their own alerts unless they're Admin
                 if (string.IsNullOrEmpty(userId))
                     userId = currentUserId;
-                else if (userId != currentUserId && !User.IsInRole("Admin"))
+                else if (userId != currentUserId && !IsSuperAdmin())
                     return Forbid();
 
                 var alerts = await _complianceService.GetOpenAlertsAsync(userId);
@@ -524,10 +529,10 @@ namespace FourierIT_API.Controllers
 
                 // Only documents the automatic checks found nothing wrong with can be approved in bulk;
                 // anything else needs a Compliance Officer to look at it on its own.
-                var checks = await _context.DocumentComplianceChecks
-                    .AsNoTracking()
-                    .Where(c => checkIds.Contains(c.CheckId) && c.RequiresManualReview && !c.IsManuallyApproved)
-                    .ToListAsync();
+                // The same documents the review queue shows (GetPendingManualReviewsAsync), limited to the ones picked.
+                var checks = (await _complianceService.GetPendingManualReviewsAsync())
+                    .Where(c => checkIds.Contains(c.CheckId))
+                    .ToList();
                 var eligible = checks.Where(c => ClearlyValidConcerns(c).Count == 0).Select(c => c.CheckId).ToList();
                 var skipped = checkIds.Except(eligible).ToList();
 
@@ -754,7 +759,8 @@ namespace FourierIT_API.Controllers
             try
             {
                 var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                if (currentUserId != userId && !User.IsInRole("Admin"))
+                // The same people who can see someone's compliance details can see how it changed over time.
+                if (currentUserId != userId && !IsSuperAdmin() && !User.IsInRole("Department Admin") && !User.IsInRole("Compliance Officer"))
                     return Forbid();
 
                 await _complianceService.CheckUserComplianceAsync(userId, false);

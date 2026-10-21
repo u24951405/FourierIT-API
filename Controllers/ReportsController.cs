@@ -1040,27 +1040,23 @@ namespace FourierIT_API.Controllers
             int? institutionId,
             string? complianceStatus)
         {
-            var docOwnerRole = await _context.Roles
+            var ownerLikeRoleIds = await _context.Roles
                 .AsNoTracking()
-                .FirstOrDefaultAsync(r => r.NormalizedName == "DOCUMENT OWNER"
-                    || (r.Name != null && r.Name.ToUpper() == "DOCUMENT OWNER"));
+                .Where(r =>
+                    (r.NormalizedName == "DOCUMENT OWNER" || r.NormalizedName == "DEPARTMENT ADMIN") ||
+                    (r.Name != null && (r.Name == "Document Owner" || r.Name == "Department Admin")))
+                .Select(r => r.Id)
+                .Distinct()
+                .ToListAsync();
 
-            if (docOwnerRole == null)
-            {
-                docOwnerRole = await _context.Roles
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(r => (r.NormalizedName != null && r.NormalizedName.Contains("DOCUMENT") && r.NormalizedName.Contains("OWNER"))
-                        || (r.Name != null && r.Name.Contains("Document") && r.Name.Contains("Owner")));
-            }
-
-            if (docOwnerRole == null)
+            if (ownerLikeRoleIds.Count == 0)
             {
                 return new List<DocumentOwnerComplianceReportRowDto>();
             }
 
             var ownerUserIds = await _context.UserRoles
                 .AsNoTracking()
-                .Where(ur => ur.RoleId == docOwnerRole.Id)
+                .Where(ur => ownerLikeRoleIds.Contains(ur.RoleId))
                 .Select(ur => ur.UserId)
                 .Distinct()
                 .ToListAsync();

@@ -73,7 +73,27 @@ namespace FourierIT_API.Services
 
         // ===== MAIN COMPLIANCE CHECK =====
 
+        /// <summary>
+        /// One compliance check per person at a time. Pages ask for several parts of a record at once, and two checks
+        /// rewriting the same rows together made one of them fail. The second now waits and then reuses the fresh result.
+        /// </summary>
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> CheckLocks = new();
+
         public async Task<ComplianceStatus> CheckUserComplianceAsync(string userId, bool runDetailedCheck = true)
+        {
+            var gate = CheckLocks.GetOrAdd(userId, _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync();
+            try
+            {
+                return await CheckUserComplianceUnlockedAsync(userId, runDetailedCheck);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+
+        private async Task<ComplianceStatus> CheckUserComplianceUnlockedAsync(string userId, bool runDetailedCheck)
         {
             if (!runDetailedCheck)
             {
@@ -1537,7 +1557,12 @@ namespace FourierIT_API.Services
         {
             return await _context.DocumentComplianceChecks
                 .AsNoTracking()
-                .Where(c => c.RequiresManualReview && !c.IsManuallyApproved)
+                .Where(c => !c.IsManuallyApproved &&
+                    (c.RequiresManualReview ||
+                     c.CheckStatus == "Pending Review" ||
+                     c.CheckStatus == "Pending" ||
+                     c.CheckStatus == "Under Review"))
+                .OrderByDescending(c => c.CheckedAt)
                 .Include(c => c.Document)
                     .ThenInclude(d => d!.User)
                         .ThenInclude(u => u.Profile)

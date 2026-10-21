@@ -198,6 +198,33 @@ public class ReportInsightsTests
     }
 
     [Fact]
+    public async Task DocumentOwnerReport_IncludesDepartmentAdminsAsUploaderOwners()
+    {
+        await using var context = CreateContext();
+        context.Roles.Add(new Role { Id = "DA", Name = "Department Admin", NormalizedName = "DEPARTMENT ADMIN" });
+        var departmentAdmin = AddUser(context, "dept-admin", "DA", "Dana");
+        departmentAdmin.EntityTypeId = 1;
+        context.EntityTypes.Add(new EntityType { EntityTypeId = 1, Name = "Individual" });
+        context.RequiredDocuments.Add(new RequiredDocument { RequiredDocumentId = 1, EntityTypeId = 1, DocumentTypeId = 1 });
+        context.Documents.Add(new Document
+        {
+            DocumentId = 99,
+            UserId = "dept-admin",
+            DocumentTypeId = 1,
+            FileName = "dept-id.pdf",
+            CurrentStatus = "Verified",
+            UploadedDate = DateTime.UtcNow,
+            ExpiryDate = DateTimeOffset.UtcNow.AddYears(1)
+        });
+        await context.SaveChangesAsync();
+
+        var result = await new ReportsController(context).GetDocumentOwnerComplianceReport(null, null, null, null, null, null, null);
+        var rows = Assert.IsAssignableFrom<IEnumerable<FourierIT_API.DTOs.Reports.DocumentOwnerComplianceReportRowDto>>(Assert.IsType<OkObjectResult>(result.Result).Value).ToList();
+
+        Assert.Contains(rows, row => row.DocumentOwner == "Dana Test");
+    }
+
+    [Fact]
     public async Task OwnerCompliance_DoesNotCountARejectedDocumentAsUploaded()
     {
         await using var context = CreateContext();

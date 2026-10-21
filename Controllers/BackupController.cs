@@ -4,6 +4,8 @@ using Microsoft.Extensions.Logging;
 using FourierIT_API.DTOs;
 using FourierIT_API.Interfaces;
 using FourierIT_API.Models;
+using FourierIT_API.Services;
+using System.Security.Claims;
 
 namespace FourierIT_API.Controllers
 {
@@ -13,42 +15,40 @@ namespace FourierIT_API.Controllers
     public class BackupController : ControllerBase
     {
         private readonly IBackupService _backupService;
+        private readonly BackupJobTracker _jobs;
         private readonly ILogger<BackupController> _logger;
 
-        public BackupController(IBackupService backupService, ILogger<BackupController> logger)
+        public BackupController(IBackupService backupService, BackupJobTracker jobs, ILogger<BackupController> logger)
         {
             _backupService = backupService;
+            _jobs = jobs;
             _logger = logger;
         }
 
+        /// <summary>
+        /// Starts a backup in the background and returns straight away (202); the page then asks <c>status</c>
+        /// until it finishes. Only one backup runs at a time (409 while one is running).
+        /// </summary>
         [HttpPost("create")]
-        public async Task<IActionResult> Create([FromBody] CreateBackupRequestDto request)
+        public IActionResult Create([FromBody] CreateBackupRequestDto request)
         {
             if (request == null)
             {
                 return BadRequest("Request body is required.");
             }
 
-            var result = await _backupService.CreateDatabaseBackupAsync(request);
-
-            if (!string.IsNullOrWhiteSpace(result.StatusMessage))
+            if (!_jobs.TryStart(request, out var job))
             {
-                _logger.LogInformation("Backup creation returned status: {Status}", result.StatusMessage);
+                return Conflict(new { error = "A backup is already running. Wait for it to finish.", job });
             }
 
-            // If status indicates an error or failure, return 400 so frontend knows the operation failed.
-            if (!string.IsNullOrWhiteSpace(result.StatusMessage) &&
-                (result.StatusMessage.Contains("error", StringComparison.OrdinalIgnoreCase)
-                 || result.StatusMessage.Contains("failed", StringComparison.OrdinalIgnoreCase)
-                 || result.StatusMessage.Contains("not configured", StringComparison.OrdinalIgnoreCase)
-                 || result.StatusMessage.Contains("not available", StringComparison.OrdinalIgnoreCase)))
-            {
-                _logger.LogWarning("Backup creation failed: {Status}", result.StatusMessage);
-                return BadRequest(result);
-            }
-
-            return Ok(result);
+            _logger.LogInformation("Manual backup {JobId} started.", job.JobId);
+            return Accepted(job);
         }
+
+        /// <summary>The backup running now, or the last one to finish (null if none since the API started).</summary>
+        [HttpGet("status")]
+        public IActionResult Status() => Ok(_jobs.Current);
 
         [HttpGet("history")]
         public async Task<IActionResult> History()
@@ -68,7 +68,8 @@ namespace FourierIT_API.Controllers
         public async Task<IActionResult> RestoreDatabase([FromRoute] int id)
         {
             _logger.LogInformation("API called to restore database from backup id {BackupId}", id);
-            var result = await _backupService.RestoreDatabaseAsync(id);
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            var result = await _backupService.RestoreDatabaseAsync(id, userId);
 
             if (!result.Success)
             {
