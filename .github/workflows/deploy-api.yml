@@ -74,6 +74,12 @@ jobs:
           FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
           FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
         run: |
+          for name in FTP_HOST FTP_USERNAME FTP_PASSWORD FTP_REMOTE_DIR; do
+            if [ -z "${!name}" ]; then
+              echo "The $name secret is not set (Settings > Secrets and variables > Actions)" >&2
+              exit 1
+            fi
+          done
           echo "<html><body>Deploying, back in a minute.</body></html>" > app_offline.htm
           lftp -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_HOST" <<EOF
           set ftp:ssl-allow yes
