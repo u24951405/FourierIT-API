@@ -63,11 +63,14 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AngularClient", policy =>
     {
-        policy.WithOrigins(
-                "https://docuvault-001-site1.ktempuri.com",
-                "http://docuvault-001-site1.ktempuri.com",
-                "http://localhost:4200",
-                "http://127.0.0.1:4200")
+        // Cors:AllowedOrigins (e.g. from the production settings) adds to these defaults.
+        policy.WithOrigins(allowedOrigins.Concat(new[]
+                {
+                    "https://docuvault-001-site1.ktempurl.com",
+                    "http://docuvault-001-site1.ktempurl.com",
+                    "http://localhost:4200",
+                    "http://127.0.0.1:4200"
+                }).Distinct().ToArray())
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
@@ -364,30 +367,27 @@ using (var scope = app.Services.CreateScope())
         }
         else if (superUser == null)
         {
-            logger.LogError("Super Admin password is not configured. Set SuperAdmin:Password using user-secrets or an environment variable before starting the API.");
+            superUser = new FourierIT_API.Models.User
+            {
+                UserName = superUserName,
+                NormalizedUserName = superUserName.ToUpperInvariant(),
+                Email = superEmail,
+                NormalizedEmail = superEmail.ToUpperInvariant(),
+                EmailConfirmed = true,
+                AccountStatus = "Active"
+            };
+
+            var createResult = await userMgr.CreateAsync(superUser, superPassword);
+            if (!createResult.Succeeded)
+            {
+                logger.LogWarning("Failed to seed Super Admin user: {Errors}", string.Join(", ", createResult.Errors.Select(e => e.Description)));
+            }
         }
         else
         {
-            var superUser = await userMgr.FindByNameAsync(superUserName);
-            if (superUser == null)
-            {
-                superUser = new FourierIT_API.Models.User
-                {
-                    UserName = superUserName,
-                    NormalizedUserName = superUserName.ToUpperInvariant(),
-                    Email = superEmail,
-                    NormalizedEmail = superEmail.ToUpperInvariant(),
-                    EmailConfirmed = true,
-                    AccountStatus = "Active"
-                };
-
-                var createResult = await userMgr.CreateAsync(superUser, superPassword);
-                if (!createResult.Succeeded)
-                {
-                    logger.LogWarning("Failed to seed Super Admin user: {Errors}", string.Join(", ", createResult.Errors.Select(e => e.Description)));
-                }
-            }
-            else if (!await userMgr.CheckPasswordAsync(superUser, superPassword))
+            // If the configured Super Admin password has changed since the account was first seeded,
+            // reset the password so the configured credential remains valid.
+            if (!string.IsNullOrWhiteSpace(superPassword) && !await userMgr.CheckPasswordAsync(superUser, superPassword))
             {
                 var resetToken = await userMgr.GeneratePasswordResetTokenAsync(superUser);
                 var resetResult = await userMgr.ResetPasswordAsync(superUser, resetToken, superPassword);
