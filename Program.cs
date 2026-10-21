@@ -269,8 +269,10 @@ if (app.Environment.WebRootFileProvider.GetFileInfo("index.html").Exists)
 // Startup database initialization is intentionally configurable to avoid
 // expensive startup delays on every API run.
 var runDbInit = builder.Configuration.GetValue("StartupTasks:RunDatabaseInitialization", builder.Environment.IsDevelopment());
-var runDevSeed = builder.Environment.IsDevelopment()
-    && builder.Configuration.GetValue("StartupTasks:RunDevSeed", false);
+// The lookup seed (branches, departments, their required documents, institution types, institutions) only adds
+// rows that are missing, so it can also fill a new production database: set RunDatabaseInitialization and
+// RunDevSeed to true for one start, then back to false.
+var runDevSeed = builder.Configuration.GetValue("StartupTasks:RunDevSeed", false);
 
 if (runDbInit)
 {
