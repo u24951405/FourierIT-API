@@ -123,26 +123,6 @@ namespace FourierIT_API.Services
 
             var requiredDocs = await GetRequiredDocumentsForUserAsync(user);
             var requestedDocumentTypeIds = await GetPendingInstitutionDocumentTypeIdsAsync(user);
-            var includedDocumentTypeIds = requiredDocs.Select(document => document.DocumentTypeId).ToHashSet();
-
-            foreach (var documentTypeId in requestedDocumentTypeIds.Where(id => !includedDocumentTypeIds.Contains(id)))
-            {
-                var documentType = await _context.DocumentTypes
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(type => type.DocumentTypeId == documentTypeId);
-
-                if (documentType != null)
-                {
-                    requiredDocs.Add(new RequiredDocument
-                    {
-                        EntityTypeId = user.EntityTypeId ?? 1,
-                        DocumentTypeId = documentTypeId,
-                        DocumentType = documentType,
-                        IsMandatory = true,
-                        Description = "Requested by an institution and requires compliance review."
-                    });
-                }
-            }
 
             var userDocs = await _context.Documents
                 .AsNoTracking()
@@ -287,9 +267,11 @@ namespace FourierIT_API.Services
             var reviewCheckTime = DateTimeOffset.UtcNow;
             foreach (var doc in userDocs.Where(d =>
                          !d.IsManualOverrideActive
-                         && string.Equals(d.CurrentStatus, "Under Review", StringComparison.OrdinalIgnoreCase)
+                         && (string.Equals(d.CurrentStatus, "Under Review", StringComparison.OrdinalIgnoreCase)
+                             || requestedDocumentTypeIds.Contains(d.DocumentTypeId))
                          && !checkedDocumentIds.Contains(d.DocumentId)))
             {
+                var isReplacement = string.Equals(doc.CurrentStatus, "Under Review", StringComparison.OrdinalIgnoreCase);
                 status.DocumentChecks.Add(new DocumentComplianceCheck
                 {
                     DocumentId = doc.DocumentId,
@@ -297,7 +279,9 @@ namespace FourierIT_API.Services
                     CheckStatus = "Pending Review",
                     RequiresManualReview = true,
                     IsManuallyApproved = false,
-                    ManualReviewReason = "The owner replaced this file. Review the new file.",
+                    ManualReviewReason = isReplacement
+                        ? "The owner replaced this file. Review the new file."
+                        : "This document was requested by an institution and requires review before access is released.",
                     IsExpiryValid = doc.ExpiryDate > reviewCheckTime,
                     ExpiryCheckDate = reviewCheckTime.UtcDateTime,
                     DaysUntilExpiry = (int)Math.Min((doc.ExpiryDate - reviewCheckTime).TotalDays, int.MaxValue),
@@ -1229,6 +1213,28 @@ namespace FourierIT_API.Services
             document.ManualOverrideAt = approvalTime;
             document.ManualOverrideReason = notes;
 
+            var approvedVersion = await _context.DocumentVersions
+                .Where(version => version.DocumentId == document.DocumentId)
+                .OrderByDescending(version => version.VersionNumber)
+                .FirstOrDefaultAsync();
+            if (approvedVersion != null)
+            {
+                approvedVersion.ComplianceDecision = "Approved";
+                approvedVersion.ComplianceReviewerUserId = approvedBy;
+                approvedVersion.ComplianceReason = notes;
+                approvedVersion.ComplianceDecisionAt = approvalTime;
+            }
+
+            var activeFlags = await _context.EnquiryFlags
+                .Where(flag => flag.DocumentId == document.DocumentId && !flag.IsResolved)
+                .ToListAsync();
+            foreach (var flag in activeFlags)
+            {
+                flag.IsResolved = true;
+                flag.ResolvedAt = approvalTime;
+                flag.ResolutionNote = notes;
+            }
+
             _context.DocumentComplianceChecks.Update(check);
             _context.Documents.Update(document);
             await _context.SaveChangesAsync();
@@ -1248,6 +1254,7 @@ namespace FourierIT_API.Services
             _logger.LogInformation($"Document check {checkId} approved by {approvedBy}");
 
             await NotifyReviewOutcomeAsync(document, approved: true, notes);
+            await NotifyInstitutionsOfReviewOutcomeAsync(document, approved: true, notes);
 
             return true;
         }
@@ -1292,6 +1299,18 @@ namespace FourierIT_API.Services
             document.ManualOverrideAt = rejectionTime;
             document.ManualOverrideReason = reason;
 
+            var rejectedVersion = await _context.DocumentVersions
+                .Where(version => version.DocumentId == document.DocumentId)
+                .OrderByDescending(version => version.VersionNumber)
+                .FirstOrDefaultAsync();
+            if (rejectedVersion != null)
+            {
+                rejectedVersion.ComplianceDecision = "Rejected";
+                rejectedVersion.ComplianceReviewerUserId = rejectedBy;
+                rejectedVersion.ComplianceReason = reason;
+                rejectedVersion.ComplianceDecisionAt = rejectionTime;
+            }
+
             _context.DocumentComplianceChecks.Update(check);
             _context.Documents.Update(document);
             await _context.SaveChangesAsync();
@@ -1313,6 +1332,33 @@ namespace FourierIT_API.Services
             await NotifyReviewOutcomeAsync(document, approved: false, reason);
 
             return true;
+        }
+
+        private async Task NotifyInstitutionsOfReviewOutcomeAsync(Document document, bool approved, string? reason)
+        {
+            var institutionRecipients = await _context.DocumentAccessApprovals
+                .AsNoTracking()
+                .Where(approval => approval.DocumentId == document.DocumentId && !approval.IsRevoked)
+                .Select(approval => new
+                {
+                    approval.InstitutionEnquiryRequest.RequesterEmail,
+                    approval.InstitutionEnquiryRequest.InstitutionId,
+                    approval.InstitutionEnquiryRequest.EnquiryRequestId
+                })
+                .Distinct()
+                .ToListAsync();
+
+            var documentLabel = $"\"{document.FileName}\"";
+            var subject = approved ? "An updated document is available" : "A document replacement is under review";
+            var message = approved
+                ? $"An updated version of {documentLabel} is now available."
+                : $"The replacement for {documentLabel} is under compliance review. It will remain unavailable until approved."
+                    + (string.IsNullOrWhiteSpace(reason) ? string.Empty : $" Reason: {reason}");
+
+            foreach (var recipient in institutionRecipients)
+            {
+                _inAppNotifications?.EmailExternal(recipient.RequesterEmail, subject, message);
+            }
         }
 
         /// <summary>
@@ -1962,6 +2008,23 @@ namespace FourierIT_API.Services
 
         private async Task<List<RequiredDocument>> GetRequiredDocumentsForUserAsync(User user)
         {
+            if (await _userManager.IsInRoleAsync(user, "Department Admin") && user.DepartmentId.HasValue)
+            {
+                return await _context.DepartmentDocumentTypes
+                    .AsNoTracking()
+                    .Include(item => item.DocumentType)
+                    .Where(item => item.DepartmentId == user.DepartmentId.Value)
+                    .Select(item => new RequiredDocument
+                    {
+                        EntityTypeId = user.EntityTypeId ?? 0,
+                        DocumentTypeId = item.DocumentTypeId,
+                        DocumentType = item.DocumentType,
+                        IsMandatory = item.IsMandatory,
+                        Description = item.DocumentType.Description
+                    })
+                    .ToListAsync();
+            }
+
             var entityTypeId = user.EntityTypeId ?? 1;
 
             return await _context.RequiredDocuments

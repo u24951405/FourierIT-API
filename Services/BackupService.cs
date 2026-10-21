@@ -126,7 +126,7 @@ SELECT @backupdir as BackupDir;";
             {
                 _logger.LogInformation("Starting database backup to local file {FilePath}", tempFilePath);
 
-                string sql = $"BACKUP DATABASE [{dbName}] TO DISK = '{tempFilePath.Replace("'", "''")}' WITH FORMAT, INIT, COMPRESSION, MAXTRANSFERSIZE = 1048576, BUFFERCOUNT = 8;";
+                string sql = $"BACKUP DATABASE [{dbName}] TO DISK = '{tempFilePath.Replace("'", "''")}' WITH FORMAT, INIT, MAXTRANSFERSIZE = 1048576, BUFFERCOUNT = 8;";
                 // Backups can take a long time; ensure the EF Core command timeout is large enough
                 _context.Database.SetCommandTimeout(3600); // 1 hour
                 await _context.Database.ExecuteSqlRawAsync(sql);
@@ -192,7 +192,7 @@ SELECT @backupdir as BackupDir;";
                             var altFilePath = Path.Combine(defaultBackupDir, fileName);
                             _logger.LogInformation("Attempting backup to SQL Server default backup directory: {AltPath}", altFilePath);
 
-                            string altSql = $"BACKUP DATABASE [{dbName}] TO DISK = '{altFilePath.Replace("'", "''")}' WITH FORMAT, INIT, COMPRESSION, MAXTRANSFERSIZE = 1048576, BUFFERCOUNT = 8;";
+                            string altSql = $"BACKUP DATABASE [{dbName}] TO DISK = '{altFilePath.Replace("'", "''")}' WITH FORMAT, INIT, MAXTRANSFERSIZE = 1048576, BUFFERCOUNT = 8;";
                             _context.Database.SetCommandTimeout(3600); // 1 hour for fallback as well
                             await _context.Database.ExecuteSqlRawAsync(altSql);
 

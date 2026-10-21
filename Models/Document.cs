@@ -63,6 +63,8 @@ namespace FourierIT_API.Models
 
         public ICollection<DocumentStatusHistory> DocumentStatusHistories { get; set; } = new List<DocumentStatusHistory>();
 
+        public ICollection<DocumentVersion> Versions { get; set; } = new List<DocumentVersion>();
+
         public ICollection<AccessList> AccessLists { get; set; } = new List<AccessList>();
 
         // Secure vault relationships

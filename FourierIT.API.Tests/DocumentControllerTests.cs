@@ -221,7 +221,7 @@ public class DocumentControllerTests
     }
 
     [Fact]
-    public async Task GetRequiredDocumentsStatus_WhenActiveRequestExists_ReturnsRequestedDocumentChecklist()
+    public async Task GetRequiredDocumentsStatus_WhenActiveRequestExists_KeepsTheEntityChecklist()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(databaseName: $"DocumentControllerTests_ActiveRequestRequiredDocs_{Guid.NewGuid():N}")
@@ -231,10 +231,11 @@ public class DocumentControllerTests
         context.Database.EnsureDeleted();
         context.Database.EnsureCreated();
 
-        var user = new User { Id = "owner-2", UserName = "owner2@test.com" };
+        var user = new User { Id = "owner-2", UserName = "owner2@test.com", EntityTypeId = 999 };
         var documentTypeRequested = new DocumentType { DocumentTypeId = 200, TypeName = "Utility Bill" };
         var documentTypeUnrequested = new DocumentType { DocumentTypeId = 201, TypeName = "Passport" };
         var institution = new Institution { InstitutionId = 501, InstitutionName = "Test Bank" };
+        var entityType = new EntityType { EntityTypeId = 999, Name = "Individual" };
         var request = new InstitutionEnquiryRequest
         {
             EnquiryRequestId = 701,
@@ -247,6 +248,15 @@ public class DocumentControllerTests
 
         context.Users.Add(user);
         context.DocumentTypes.AddRange(documentTypeRequested, documentTypeUnrequested);
+        context.EntityTypes.Add(entityType);
+        context.RequiredDocuments.Add(new RequiredDocument
+        {
+            EntityTypeId = entityType.EntityTypeId,
+            EntityType = entityType,
+            DocumentTypeId = documentTypeUnrequested.DocumentTypeId,
+            DocumentType = documentTypeUnrequested,
+            IsMandatory = true
+        });
         context.Institutions.Add(institution);
         context.InstitutionEnquiryRequests.Add(request);
         context.InstitutionRequestedDocumentTypes.Add(new InstitutionRequestedDocumentType
@@ -302,7 +312,7 @@ public class DocumentControllerTests
         var documentTypeName = firstDocument.GetType().GetProperty("DocumentTypeName")?.GetValue(firstDocument)?.ToString();
         var isUploaded = (bool?)firstDocument.GetType().GetProperty("IsUploaded")?.GetValue(firstDocument);
 
-        Assert.Equal("Utility Bill", documentTypeName);
+        Assert.Equal("Passport", documentTypeName);
         Assert.False(isUploaded.GetValueOrDefault());
     }
 

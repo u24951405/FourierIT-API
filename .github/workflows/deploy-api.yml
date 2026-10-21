@@ -21,6 +21,17 @@ jobs:
       - name: Publish API
         run: dotnet publish FourierIT-API.csproj -c Release -o ./out -p:UseAppHost=false
 
+      # Real production settings live in the APPSETTINGS_PRODUCTION secret, not in git.
+      - name: Write production settings
+        env:
+          APPSETTINGS: ${{ secrets.APPSETTINGS_PRODUCTION }}
+        run: |
+          if [ -z "$APPSETTINGS" ]; then
+            echo "APPSETTINGS_PRODUCTION secret is not set" >&2
+            exit 1
+          fi
+          printf '%s' "$APPSETTINGS" > ./out/appsettings.Production.json
+
       - name: Install lftp
         run: sudo apt-get update && sudo apt-get install -y lftp
 

@@ -179,6 +179,25 @@ public class AccessFollowUpTests
         audit.Verify(a => a.CreateAuditLogAsync(It.Is<AuditLog>(l => l.ActionCode == "INSTITUTION_DOCUMENT_VIEWED")), Times.Once);
     }
 
+    [Theory]
+    [InlineData("Under Review")]
+    [InlineData("Rejected")]
+    public async Task InstitutionCannotViewBlockedDocumentStatuses(string status)
+    {
+        await using var context = CreateContext();
+        var owner = AddOwner(context);
+        AddRequest(context, 1, "Approved", DateTimeOffset.UtcNow.AddDays(-1));
+        context.Documents.Add(new Document { DocumentId = 9, UserId = "owner", DocumentTypeId = 1, FileName = "id.pdf", CurrentStatus = status, ExpiryDate = DateTimeOffset.UtcNow.AddYears(1) });
+        context.DocumentAccessApprovals.Add(new DocumentAccessApproval { ApprovalId = 9, EnquiryRequestId = 1, DocumentId = 9, ApprovedByUserId = "owner", ExpiresAt = DateTime.UtcNow.AddDays(1) });
+        context.InstitutionSessionTokens.Add(new InstitutionSessionToken { InstitutionId = 5, TokenString = "session", IssuedAt = DateTime.UtcNow, ExpiresAt = DateTime.UtcNow.AddHours(1) });
+        await context.SaveChangesAsync();
+
+        var result = await CreateController(context, owner).DownloadWithInstitutionToken(9, "session", inline: true);
+
+        var problem = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(StatusCodes.Status403Forbidden, problem.StatusCode);
+    }
+
     // ── Flags ───────────────────────────────────────────────────────────────
 
     [Fact]
@@ -197,6 +216,107 @@ public class AccessFollowUpTests
 
         var item = feed.EnumerateArray().Single(i => i.GetProperty("Status").GetString() == "Flag resolved");
         Assert.Contains("Uploaded a clearer copy.", item.GetProperty("Message").GetString());
+    }
+
+    [Fact]
+    public async Task InstitutionUpdates_DoNotShowARejectedReplacement()
+    {
+        await using var context = CreateContext();
+        var owner = AddOwner(context);
+        AddRequest(context, 1, "Approved", DateTimeOffset.UtcNow.AddDays(-1));
+        context.Documents.Add(new Document { DocumentId = 8, UserId = "owner", DocumentTypeId = 1, FileName = "id.pdf", CurrentStatus = "Rejected", ExpiryDate = DateTimeOffset.UtcNow.AddYears(1) });
+        context.EnquiryFlags.Add(new EnquiryFlag { EnquiryFlagId = 2, DocumentId = 8, EnquiryId = 1, FlagReason = "Blurry" });
+        context.InstitutionSessionTokens.Add(new InstitutionSessionToken { InstitutionId = 5, TokenString = "session", IssuedAt = DateTime.UtcNow, ExpiresAt = DateTime.UtcNow.AddHours(1) });
+        await context.SaveChangesAsync();
+
+        var feed = JsonDocument.Parse(JsonSerializer.Serialize(
+            Assert.IsType<OkObjectResult>(await CreateController(context, owner).GetInstitutionNotifications("session")).Value)).RootElement;
+
+        Assert.DoesNotContain(feed.EnumerateArray(), item =>
+            item.GetProperty("Message").GetString()!.Contains("under compliance review", StringComparison.OrdinalIgnoreCase)
+            || item.GetProperty("Message").GetString()!.Contains("rejected", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task RequestDocuments_ExposesRejectedStatusAndReasonForOwnerModal()
+    {
+        await using var context = CreateContext();
+        var owner = AddOwner(context);
+        AddRequest(context, 1, "Pending", DateTimeOffset.UtcNow.AddDays(-1));
+        await context.SaveChangesAsync();
+        var documentType = new DocumentType { DocumentTypeId = 77, TypeName = "Identity document" };
+        var request = await context.InstitutionEnquiryRequests.SingleAsync(item => item.EnquiryRequestId == 1);
+        request.RequestedDocumentTypes.Add(new InstitutionRequestedDocumentType
+        {
+            EnquiryRequestId = 1,
+            DocumentTypeId = documentType.DocumentTypeId,
+            DocumentType = documentType,
+            FICARuleId = 1,
+            isMandatory = true
+        });
+        context.DocumentTypes.Add(documentType);
+        context.Documents.Add(new Document
+        {
+            DocumentId = 77,
+            UserId = owner.Id,
+            DocumentTypeId = documentType.DocumentTypeId,
+            DocumentType = documentType,
+            FileName = "id.pdf",
+            CurrentStatus = "Rejected",
+            ManualOverrideReason = "The copy is illegible.",
+            ExpiryDate = DateTimeOffset.UtcNow.AddYears(1)
+        });
+        await context.SaveChangesAsync();
+
+        var response = JsonDocument.Parse(JsonSerializer.Serialize(
+            Assert.IsType<OkObjectResult>(await CreateController(context, owner).GetRequestDocuments(1)).Value)).RootElement;
+        var document = response.GetProperty("Documents").EnumerateArray().Single();
+
+        Assert.Equal("Rejected", document.GetProperty("Status").GetString());
+        Assert.Equal("The copy is illegible.", document.GetProperty("rejectionReason").GetString());
+        Assert.Equal(77, document.GetProperty("documentId").GetInt32());
+    }
+
+    [Fact]
+    public async Task RejectedDocument_IsNotInPendingComplianceReviewQueue()
+    {
+        await using var context = CreateContext();
+        var owner = AddOwner(context);
+        var documentType = new DocumentType { DocumentTypeId = 88, TypeName = "Identity document" };
+        context.DocumentTypes.Add(documentType);
+        context.Documents.Add(new Document
+        {
+            DocumentId = 88,
+            UserId = owner.Id,
+            User = owner,
+            DocumentTypeId = documentType.DocumentTypeId,
+            DocumentType = documentType,
+            FileName = "id.pdf",
+            CurrentStatus = "Rejected",
+            ExpiryDate = DateTimeOffset.UtcNow.AddYears(1)
+        });
+        context.ComplianceStatuses.Add(new ComplianceStatus { ComplianceStatusId = 88, UserId = owner.Id, User = owner });
+        context.DocumentComplianceChecks.Add(new DocumentComplianceCheck
+        {
+            CheckId = 88,
+            DocumentId = 88,
+            ComplianceStatusId = 88,
+            CheckStatus = "Non-Compliant",
+            RequiresManualReview = false,
+            IsManuallyApproved = false
+        });
+        await context.SaveChangesAsync();
+
+        var userManager = new Mock<UserManager<User>>(
+            new Mock<IUserStore<User>>().Object, Options.Create(new IdentityOptions()), new PasswordHasher<User>(),
+            Array.Empty<IUserValidator<User>>(), Array.Empty<IPasswordValidator<User>>(), new UpperInvariantLookupNormalizer(),
+            new IdentityErrorDescriber(), null!, NullLogger<UserManager<User>>.Instance);
+        var service = new ComplianceService(context, userManager.Object, NullLogger<ComplianceService>.Instance,
+            new Mock<IAuditLogService>().Object);
+
+        var pending = await service.GetPendingManualReviewsAsync();
+
+        Assert.Empty(pending);
     }
 
     // ── Review queue ────────────────────────────────────────────────────────

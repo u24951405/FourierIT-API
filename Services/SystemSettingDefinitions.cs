@@ -63,7 +63,7 @@ public static class SystemSettingDefinitions
         new SystemSettingDefinition(InstitutionSessionTimeoutMinutes, Sessions,
             "Institution portal session",
             "How long an institution stays signed in to the portal after entering its code.",
-            SettingUnit.Minutes, Default: 60, Min: 15, Max: 240),
+            SettingUnit.Minutes, Default: 60, Min: 1, Max: 240),
 
         new SystemSettingDefinition(InstitutionInvitationExpiryDays, Links,
             "Institution invitation link",

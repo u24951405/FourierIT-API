@@ -56,11 +56,14 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
         });
     };
 });
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? new[] { "http://localhost:4200" };
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AngularClient", policy =>
     {
-        policy.WithOrigins("http://localhost:4200")
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
@@ -343,33 +346,35 @@ using (var scope = app.Services.CreateScope())
         var userMgr = scope.ServiceProvider.GetRequiredService<Microsoft.AspNetCore.Identity.UserManager<FourierIT_API.Models.User>>();
         var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
         var superUserName = builder.Configuration["SuperAdmin:Username"] ?? "superadmin";
-        var superPassword = builder.Configuration["SuperAdmin:Password"] ?? "Sup3r@dmin!";
+        var superPassword = builder.Configuration["SuperAdmin:Password"];
         var superEmail = builder.Configuration["SuperAdmin:Email"] ?? "superadmin@fourier.local";
 
-        var superUser = await userMgr.FindByNameAsync(superUserName);
-        if (superUser == null)
+        if (string.IsNullOrWhiteSpace(superPassword))
         {
-            superUser = new FourierIT_API.Models.User
-            {
-                UserName = superUserName,
-                NormalizedUserName = superUserName.ToUpperInvariant(),
-                Email = superEmail,
-                NormalizedEmail = superEmail.ToUpperInvariant(),
-                EmailConfirmed = true,
-                AccountStatus = "Active"
-            };
-
-            var createResult = await userMgr.CreateAsync(superUser, superPassword);
-            if (!createResult.Succeeded)
-            {
-                logger.LogWarning("Failed to seed Super Admin user: {Errors}", string.Join(", ", createResult.Errors.Select(e => e.Description)));
-            }
+            logger.LogError("Super Admin password is not configured. Set SuperAdmin:Password using user-secrets or an environment variable before starting the API.");
         }
         else
         {
-            // If the configured Super Admin password has changed since the account was first seeded,
-            // reset the password so the configured credential remains valid.
-            if (!string.IsNullOrWhiteSpace(superPassword) && !await userMgr.CheckPasswordAsync(superUser, superPassword))
+            var superUser = await userMgr.FindByNameAsync(superUserName);
+            if (superUser == null)
+            {
+                superUser = new FourierIT_API.Models.User
+                {
+                    UserName = superUserName,
+                    NormalizedUserName = superUserName.ToUpperInvariant(),
+                    Email = superEmail,
+                    NormalizedEmail = superEmail.ToUpperInvariant(),
+                    EmailConfirmed = true,
+                    AccountStatus = "Active"
+                };
+
+                var createResult = await userMgr.CreateAsync(superUser, superPassword);
+                if (!createResult.Succeeded)
+                {
+                    logger.LogWarning("Failed to seed Super Admin user: {Errors}", string.Join(", ", createResult.Errors.Select(e => e.Description)));
+                }
+            }
+            else if (!await userMgr.CheckPasswordAsync(superUser, superPassword))
             {
                 var resetToken = await userMgr.GeneratePasswordResetTokenAsync(superUser);
                 var resetResult = await userMgr.ResetPasswordAsync(superUser, resetToken, superPassword);

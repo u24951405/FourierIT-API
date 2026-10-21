@@ -76,6 +76,18 @@ namespace FourierIT_API.Service
             return _encryptionService.DecryptData(doc.DocumentBlob.FileData, base64Key);
         }
 
+        public async Task<byte[]> DownloadDocumentVersionAsync(int versionId)
+        {
+            var version = await _context.DocumentVersions.FindAsync(versionId)
+                ?? throw new UnauthorizedAccessException("Document version not found");
+            var rawKey = _config["Vault:EncryptionKey"] ?? _config["JWT:SigningKey"];
+            if (string.IsNullOrWhiteSpace(rawKey))
+                throw new InvalidOperationException("Encryption key is not configured.");
+
+            var hashedBytes = SHA256.HashData(Encoding.UTF8.GetBytes(rawKey));
+            return _encryptionService.DecryptData(version.EncryptedFile, Convert.ToBase64String(hashedBytes));
+        }
+
         public async Task<List<Document>> GetAccessibleDocumentAsync(string userId)
         {
             return await _repo.GetUserDocumentAsync(userId);
@@ -112,12 +124,30 @@ namespace FourierIT_API.Service
                     VersionNumber = 1
                 }
             };
-            return await _repo.AddDocumentAsync(document);
+            document = await _repo.AddDocumentAsync(document);
+            _context.DocumentVersions.Add(new DocumentVersion
+            {
+                DocumentId = document.DocumentId,
+                VersionNumber = document.DocumentBlob.VersionNumber,
+                FileName = document.FileName,
+                EncryptedFile = document.DocumentBlob.FileData,
+                FileHash = document.DocumentBlob.FileHash,
+                UploadedByUserId = userId,
+                UploadedAt = DateTimeOffset.UtcNow
+            });
+            await _context.SaveChangesAsync();
+            return document;
         }
 
         public async Task ReplaceDocumentFileAsync(Document document, string fileName, byte[] fileData, int documentTypeId)
         {
             var encryptedData = await ScanAndEncryptAsync(document.UserId, fileName, fileData, documentTypeId);
+            var flagReason = await _context.EnquiryFlags
+                .AsNoTracking()
+                .Where(flag => flag.DocumentId == document.DocumentId && !flag.IsResolved)
+                .OrderByDescending(flag => flag.FlaggedAt)
+                .Select(flag => flag.FlagReason)
+                .FirstOrDefaultAsync();
 
             if (await _context.DocumentTypes.FindAsync(documentTypeId) == null)
                 throw new ArgumentException($"Invalid DocumentTypeId. The document type '{documentTypeId}' does not exist.");
@@ -148,6 +178,18 @@ namespace FourierIT_API.Service
             document.FileName = fileName;
             document.FileSizeBytes = fileData.Length;
             document.UploadedDate = DateTime.UtcNow;
+
+            _context.DocumentVersions.Add(new DocumentVersion
+            {
+                DocumentId = document.DocumentId,
+                VersionNumber = document.DocumentBlob.VersionNumber,
+                FileName = document.FileName,
+                EncryptedFile = encryptedData,
+                FileHash = Convert.ToBase64String(SHA256.HashData(fileData)),
+                UploadedByUserId = document.UserId,
+                UploadedAt = DateTimeOffset.UtcNow,
+                FlagReason = flagReason
+            });
         }
 
         private async Task<byte[]> ScanAndEncryptAsync(string userId, string fileName, byte[] fileData, int documentTypeId)

@@ -40,6 +40,7 @@ namespace FourierIT_API.Data
         public DbSet<DocumentFicaRule> DocumentFicaRules { get; set; }
         public DbSet<CertificationDetails> CertificationDetails { get; set; }
         public DbSet<DocumentStatusHistory> DocumentStatusHistories { get; set; }
+        public DbSet<DocumentVersion> DocumentVersions { get; set; }
         public DbSet<AccessToken> AccessTokens { get; set; }
         public DbSet<AccessList> AccessLists { get; set; }
         public DbSet<InstitutionEnquiryRequest> InstitutionEnquiryRequests { get; set; }
@@ -507,6 +508,28 @@ namespace FourierIT_API.Data
                 .WithOne(dsh => dsh.Document)
                 .HasForeignKey(dsh => dsh.DocumentId)
                 .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<DocumentVersion>()
+                .HasOne(version => version.Document)
+                .WithMany(document => document.Versions)
+                .HasForeignKey(version => version.DocumentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<DocumentVersion>()
+                .HasOne(version => version.UploadedByUser)
+                .WithMany()
+                .HasForeignKey(version => version.UploadedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<DocumentVersion>()
+                .HasOne(version => version.ComplianceReviewerUser)
+                .WithMany()
+                .HasForeignKey(version => version.ComplianceReviewerUserId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            modelBuilder.Entity<DocumentVersion>()
+                .HasIndex(version => new { version.DocumentId, version.VersionNumber })
+                .IsUnique();
 
             // Configure InstitutionType one-to-many with Institution
             modelBuilder.Entity<InstitutionType>()

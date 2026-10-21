@@ -607,7 +607,7 @@ namespace FourierIT_API.Controllers
                 .Distinct()
                 .ToList();
 
-            var documentGroups = new List<(int DocumentTypeId, string DocumentTypeName, bool IsMandatory, List<(string CurrentStatus, int DocumentId)> Documents)>();
+            var documentGroups = new List<(int DocumentTypeId, string DocumentTypeName, bool IsMandatory, List<(string CurrentStatus, int DocumentId, bool IsFlagged)> Documents)>();
 
             if (request.RequestType == "Individual" && !string.IsNullOrWhiteSpace(request.TargetUserId))
             {
@@ -616,12 +616,17 @@ namespace FourierIT_API.Controllers
                     .Where(d => d.UserId == request.TargetUserId && d.CurrentStatus != "Deleted" && requestedDocumentTypeIds.Contains(d.DocumentTypeId))
                     .Select(d => new { d.DocumentTypeId, d.CurrentStatus, d.DocumentId })
                     .ToListAsync();
+                var flaggedDocumentIds = (await _context.EnquiryFlags
+                    .AsNoTracking()
+                    .Where(flag => flag.EnquiryId == request.EnquiryRequestId && !flag.IsResolved)
+                    .Select(flag => flag.DocumentId)
+                    .ToListAsync()).ToHashSet();
 
                 foreach (var requested in request.RequestedDocumentTypes)
                 {
                     var docs = userDocuments
                         .Where(d => d.DocumentTypeId == requested.DocumentTypeId)
-                        .Select(d => (d.CurrentStatus, d.DocumentId))
+                        .Select(d => (d.CurrentStatus, d.DocumentId, flaggedDocumentIds.Contains(d.DocumentId)))
                         .ToList();
 
                     documentGroups.Add((requested.DocumentTypeId, requested.DocumentType.TypeName, requested.isMandatory, docs));
@@ -640,12 +645,17 @@ namespace FourierIT_API.Controllers
                     .Where(d => departmentUsers.Contains(d.UserId) && d.CurrentStatus != "Deleted" && requestedDocumentTypeIds.Contains(d.DocumentTypeId))
                     .Select(d => new { d.DocumentTypeId, d.CurrentStatus, d.DocumentId })
                     .ToListAsync();
+                var flaggedDocumentIds = (await _context.EnquiryFlags
+                    .AsNoTracking()
+                    .Where(flag => flag.EnquiryId == request.EnquiryRequestId && !flag.IsResolved)
+                    .Select(flag => flag.DocumentId)
+                    .ToListAsync()).ToHashSet();
 
                 foreach (var requested in request.RequestedDocumentTypes)
                 {
                     var docs = departmentDocuments
                         .Where(d => d.DocumentTypeId == requested.DocumentTypeId)
-                        .Select(d => (d.CurrentStatus, d.DocumentId))
+                        .Select(d => (d.CurrentStatus, d.DocumentId, flaggedDocumentIds.Contains(d.DocumentId)))
                         .ToList();
 
                     documentGroups.Add((requested.DocumentTypeId, requested.DocumentType.TypeName, requested.isMandatory, docs));
@@ -655,15 +665,22 @@ namespace FourierIT_API.Controllers
             {
                 foreach (var requested in request.RequestedDocumentTypes)
                 {
-                    documentGroups.Add((requested.DocumentTypeId, requested.DocumentType.TypeName, requested.isMandatory, new List<(string, int)>()));
+                    documentGroups.Add((requested.DocumentTypeId, requested.DocumentType.TypeName, requested.isMandatory, new List<(string, int, bool)>()));
                 }
             }
 
             var requestedDocumentStatuses = documentGroups.Select(group =>
             {
-                var hasNonRejected = group.Documents.Any(d => !string.Equals(d.CurrentStatus, "Rejected", StringComparison.OrdinalIgnoreCase));
+                var hasReplacementUnderReview = group.Documents.Any(d =>
+                    string.Equals(d.CurrentStatus, "Under Review", StringComparison.OrdinalIgnoreCase)
+                    || (d.IsFlagged && string.Equals(d.CurrentStatus, "Rejected", StringComparison.OrdinalIgnoreCase)));
+                var hasNonRejected = group.Documents.Any(d =>
+                    !string.Equals(d.CurrentStatus, "Rejected", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(d.CurrentStatus, "Under Review", StringComparison.OrdinalIgnoreCase));
                 var hasRejectedOnly = group.Documents.Any() && !hasNonRejected;
-                var state = hasNonRejected ? "Uploaded" : hasRejectedOnly ? "Rejected" : "Missing";
+                var state = hasReplacementUnderReview
+                    ? "Replacement Under Review"
+                    : hasNonRejected ? "Uploaded" : hasRejectedOnly ? "Rejected" : "Missing";
                 return new
                 {
                     group.DocumentTypeId,
@@ -992,6 +1009,93 @@ namespace FourierIT_API.Controllers
                 .ToListAsync();
 
             return Ok(requests);
+        }
+
+        [HttpGet("document-access-requests/{requestId:int}/documents")]
+        public async Task<IActionResult> GetRequestDocuments(int requestId)
+        {
+            var currentUser = await _userManager.GetUserAsync(User);
+            if (currentUser == null) return Unauthorized();
+
+            var request = await _context.InstitutionEnquiryRequests
+                .AsNoTracking()
+                .Include(r => r.Institution)
+                .Include(r => r.TargetDepartment)
+                .Include(r => r.RequestedDocumentTypes)
+                    .ThenInclude(item => item.DocumentType)
+                .FirstOrDefaultAsync(r => r.EnquiryRequestId == requestId);
+            if (request == null) return NotFound(new { error = "Document request not found." });
+
+            var isSuperAdmin = await _userManager.IsInRoleAsync(currentUser, "Super Admin");
+            var isOwner = request.TargetUserId == currentUser.Id;
+            var isDepartmentAdmin = request.TargetDepartmentId.HasValue
+                && currentUser.DepartmentId == request.TargetDepartmentId
+                && await _userManager.IsInRoleAsync(currentUser, "Department Admin");
+            if (!isSuperAdmin && !isOwner && !isDepartmentAdmin) return Forbid();
+
+            var ownerIds = request.TargetUserId != null
+                ? new[] { request.TargetUserId }
+                : await _context.Users
+                    .Where(user => user.DepartmentId == request.TargetDepartmentId)
+                    .Select(user => user.Id)
+                    .ToArrayAsync();
+            var documentTypeIds = request.RequestedDocumentTypes.Select(item => item.DocumentTypeId).Distinct().ToArray();
+            var documents = await _context.Documents
+                .AsNoTracking()
+                .Include(document => document.DocumentType)
+                .Where(document => ownerIds.Contains(document.UserId)
+                    && documentTypeIds.Contains(document.DocumentTypeId)
+                    && document.CurrentStatus != "Deleted")
+                .OrderByDescending(document => document.UploadedDate)
+                .Select(document => new
+                {
+                    document.DocumentId,
+                    document.DocumentTypeId,
+                    DocumentTypeName = document.DocumentType.TypeName,
+                    document.FileName,
+                    document.CurrentStatus,
+                    document.UploadedDate,
+                    document.ManualOverrideReason
+                })
+                .ToListAsync();
+            var documentIds = documents.Select(document => document.DocumentId).ToArray();
+            var flags = await _context.EnquiryFlags
+                .AsNoTracking()
+                .Where(flag => flag.EnquiryId == requestId && documentIds.Contains(flag.DocumentId))
+                .OrderByDescending(flag => flag.FlaggedAt)
+                .ToListAsync();
+
+            var requested = request.RequestedDocumentTypes.Select(item =>
+            {
+                var document = documents.FirstOrDefault(candidate => candidate.DocumentTypeId == item.DocumentTypeId);
+                var flag = document == null ? null : flags.FirstOrDefault(candidate => candidate.DocumentId == document.DocumentId && !candidate.IsResolved);
+                var status = document == null ? "Missing"
+                    : string.Equals(document.CurrentStatus, "Under Review", StringComparison.OrdinalIgnoreCase) ? "Replacement Under Review"
+                    : string.Equals(document.CurrentStatus, "Rejected", StringComparison.OrdinalIgnoreCase) ? "Rejected"
+                    : flag != null ? "Flagged"
+                    : string.Equals(document.CurrentStatus, "Approved", StringComparison.OrdinalIgnoreCase) ? "Approved / Available"
+                    : "Uploaded";
+                return new
+                {
+                    item.DocumentTypeId,
+                    DocumentTypeName = item.DocumentType.TypeName,
+                    item.isMandatory,
+                    Status = status,
+                    documentId = document?.DocumentId,
+                    documentName = document?.FileName,
+                    uploadedAt = document?.UploadedDate,
+                    flagReason = flag?.FlagReason,
+                    rejectionReason = document?.ManualOverrideReason
+                };
+            }).ToList();
+
+            return Ok(new
+            {
+                request.EnquiryRequestId,
+                request.InstitutionId,
+                InstitutionName = request.Institution.InstitutionName,
+                Documents = requested
+            });
         }
 
         /// <summary>
@@ -1387,6 +1491,9 @@ namespace FourierIT_API.Controllers
                 if (document == null)
                     return NotFound();
 
+                if (document.CurrentStatus is "Under Review" or "Rejected")
+                    return Problem(detail: "This document is not available while its replacement is under compliance review.", statusCode: StatusCodes.Status403Forbidden);
+
                 if (document.UserId != approval.InstitutionEnquiryRequest.TargetUserId)
                     return Problem(detail: "Document ownership does not match the approved request.", statusCode: StatusCodes.Status403Forbidden);
 
@@ -1423,6 +1530,9 @@ namespace FourierIT_API.Controllers
 
             if (documentByToken == null)
                 return NotFound();
+
+            if (documentByToken.CurrentStatus is "Under Review" or "Rejected")
+                return Problem(detail: "This document is not available while its replacement is under compliance review.", statusCode: StatusCodes.Status403Forbidden);
 
             var documentApproved = await _context.DocumentAccessApprovals
                 .AnyAsync(daa => daa.EnquiryRequestId == request.EnquiryRequestId
@@ -1677,7 +1787,8 @@ namespace FourierIT_API.Controllers
                     && daa.InstitutionEnquiryRequest.InstitutionId == sessionToken.InstitutionId
                     && daa.InstitutionEnquiryRequest.Status == "Approved"
                     && !daa.IsRevoked
-                    && (!daa.ExpiresAt.HasValue || daa.ExpiresAt.Value > DateTime.UtcNow));
+                    && (!daa.ExpiresAt.HasValue || daa.ExpiresAt.Value > DateTime.UtcNow)
+                    && daa.Document.CurrentStatus != "Under Review");
 
             if (approval == null)
                 return Problem(detail: "Document is not approved for this institution or is no longer available.", statusCode: StatusCodes.Status403Forbidden);
@@ -1784,6 +1895,10 @@ namespace FourierIT_API.Controllers
                         daa.DocumentId,
                         DocumentName = daa.Document.FileName,
                         DocumentTypeName = daa.Document.DocumentType.TypeName,
+                        Status = _context.EnquiryFlags.Any(flag => flag.DocumentId == daa.DocumentId && !flag.IsResolved
+                            && (daa.Document.CurrentStatus == "Under Review" || daa.Document.CurrentStatus == "Rejected"))
+                            ? "Replacement Under Review"
+                            : "Available",
                         ApprovedAt = daa.ApprovedAt,
                         ExpiresAt = daa.ExpiresAt,
                         daa.InstitutionEnquiryRequest.ExtensionStatus,
@@ -1844,6 +1959,10 @@ namespace FourierIT_API.Controllers
                     daa.DocumentId,
                     DocumentName = daa.Document.FileName,
                     DocumentTypeName = daa.Document.DocumentType.TypeName,
+                    Status = _context.EnquiryFlags.Any(flag => flag.DocumentId == daa.DocumentId && !flag.IsResolved
+                        && (daa.Document.CurrentStatus == "Under Review" || daa.Document.CurrentStatus == "Rejected"))
+                        ? "Replacement Under Review"
+                        : "Available",
                     ApprovedAt = daa.ApprovedAt,
                     ExpiresAt = daa.ExpiresAt
                 })
@@ -1915,12 +2034,36 @@ namespace FourierIT_API.Controllers
                 .AsNoTracking()
                 .Where(d => resolvedFlags.Select(f => f.DocumentId).Contains(d.DocumentId))
                 .ToDictionaryAsync(d => d.DocumentId, d => d.FileName);
+            var resolvedFileStatuses = await _context.Documents
+                .AsNoTracking()
+                .Where(d => resolvedFlags.Select(f => f.DocumentId).Contains(d.DocumentId))
+                .ToDictionaryAsync(d => d.DocumentId, d => d.CurrentStatus);
             foreach (var flag in resolvedFlags)
             {
                 var file = flaggedFileNames.GetValueOrDefault(flag.DocumentId, "a document");
-                var message = $"The owner dealt with your flag on \"{file}\"." + (string.IsNullOrWhiteSpace(flag.ResolutionNote) ? string.Empty : " " + flag.ResolutionNote);
+                var message = resolvedFileStatuses.GetValueOrDefault(flag.DocumentId) == "Approved"
+                    ? $"An updated version of \"{file}\" is now available." + (string.IsNullOrWhiteSpace(flag.ResolutionNote) ? string.Empty : " " + flag.ResolutionNote)
+                    : $"The owner dealt with your flag on \"{file}\"." + (string.IsNullOrWhiteSpace(flag.ResolutionNote) ? string.Empty : " " + flag.ResolutionNote);
                 var at = flag.ResolvedAt!.Value.UtcDateTime;
                 feed.Add((at, Item(requestById[flag.EnquiryId], "Flag resolved", message, at)));
+            }
+
+            var underReviewFlags = await _context.EnquiryFlags
+                .AsNoTracking()
+                .Where(f => !f.IsResolved && requestIds.Contains(f.EnquiryId)
+                    && _context.Documents.Any(document => document.DocumentId == f.DocumentId && document.CurrentStatus == "Under Review"))
+                .Select(f => new { f.EnquiryId, f.DocumentId, f.FlaggedAt })
+                .ToListAsync();
+            var underReviewFileNames = await _context.Documents
+                .AsNoTracking()
+                .Where(d => underReviewFlags.Select(f => f.DocumentId).Contains(d.DocumentId))
+                .ToDictionaryAsync(d => d.DocumentId, d => d.FileName);
+            foreach (var flag in underReviewFlags)
+            {
+                var file = underReviewFileNames.GetValueOrDefault(flag.DocumentId, "a document");
+                var at = flag.FlaggedAt.UtcDateTime;
+                feed.Add((at, Item(requestById[flag.EnquiryId], "Replacement Under Review",
+                    $"The replacement for \"{file}\" is under compliance review.", at)));
             }
 
             var notifications = feed.OrderByDescending(entry => entry.At).Take(15).Select(entry => entry.Item).ToList();

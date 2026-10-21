@@ -78,48 +78,6 @@ namespace FourierIT_API.Controllers
             bool isDepartmentAdmin = await _userManager.IsInRoleAsync(user, "Department Admin");
             var documentQuery = _context.Documents.Where(d => d.UserId == user.Id && d.CurrentStatus != "Deleted");
 
-            var activeRequestedDocuments = await GetActiveRequestedDocumentTypesAsync(user);
-            if (activeRequestedDocuments.Any())
-            {
-                var requestedDocumentTypeIds = activeRequestedDocuments.Select(rd => rd.DocumentTypeId).Distinct().ToList();
-                var requestedUserDocs = await documentQuery
-                    .Where(d => requestedDocumentTypeIds.Contains(d.DocumentTypeId))
-                    .ToListAsync();
-
-                var requestedResult = activeRequestedDocuments
-                    .OrderBy(rd => rd.DocumentTypeName)
-                    .ThenBy(rd => rd.IsMandatory ? 0 : 1)
-                    .Select(rd =>
-                    {
-                        var docs = requestedUserDocs.Where(d => d.DocumentTypeId == rd.DocumentTypeId).ToList();
-                        var hasNonRejected = docs.Any(d => !string.Equals(d.CurrentStatus, "Rejected", StringComparison.OrdinalIgnoreCase));
-                        var hasRejectedOnly = docs.Any() && !hasNonRejected;
-                        var isUploaded = hasNonRejected;
-
-                        return new
-                        {
-                            rd.DocumentTypeId,
-                            DocumentTypeName = rd.DocumentTypeName,
-                            rd.IsMandatory,
-                            Description = rd.DocumentTypeDescription,
-                            IsUploaded = isUploaded,
-                            UploadCount = docs.Count
-                        };
-                    })
-                    .ToList();
-
-                var missingCount = requestedResult.Count(r => !r.IsUploaded);
-                var isComplete = requestedResult.All(r => r.IsUploaded);
-
-                return Ok(new
-                {
-                    EntityType = "Requested Documents",
-                    IsComplete = isComplete,
-                    MissingCount = missingCount,
-                    Documents = requestedResult
-                });
-            }
-
             if (isDepartmentAdmin && user.DepartmentId.HasValue)
             {
                 var department = await _context.Departments
@@ -136,6 +94,7 @@ namespace FourierIT_API.Controllers
                     .ToList();
 
                 var departmentUserDocs = await documentQuery
+                    .Where(d => d.CurrentStatus != "Rejected")
                     .GroupBy(d => d.DocumentTypeId)
                     .Select(g => new
                     {
@@ -198,6 +157,7 @@ namespace FourierIT_API.Controllers
             var requiredDocs = entityType.RequiredDocuments;
 
             var userDocs = await documentQuery
+                .Where(d => d.CurrentStatus != "Rejected")
                 .GroupBy(d => d.DocumentTypeId)
                 .Select(g => new
                 {
@@ -610,6 +570,76 @@ namespace FourierIT_API.Controllers
             }
         }
 
+        [HttpGet("{id}/versions")]
+        [Authorize(Policy = "Documents.View")]
+        public async Task<IActionResult> GetVersions(int id)
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+
+            var document = await _context.Documents
+                .AsNoTracking()
+                .Include(d => d.User)
+                .FirstOrDefaultAsync(d => d.DocumentId == id);
+            if (document == null) return NotFound();
+            if (!await CanViewVersionHistoryAsync(user, document)) return Forbid();
+
+            var versions = await _context.DocumentVersions
+                .AsNoTracking()
+                .Where(version => version.DocumentId == id)
+                .OrderByDescending(version => version.VersionNumber)
+                .Select(version => new
+                {
+                    version.DocumentVersionId,
+                    version.VersionNumber,
+                    version.FileName,
+                    version.UploadedByUserId,
+                    version.UploadedAt,
+                    version.FlagReason,
+                    version.ComplianceDecision,
+                    version.ComplianceReviewerUserId,
+                    version.ComplianceReason,
+                    version.ComplianceDecisionAt
+                })
+                .ToListAsync();
+
+            return Ok(versions);
+        }
+
+        [HttpGet("{id}/versions/{versionId:int}/preview")]
+        [Authorize(Policy = "Documents.View")]
+        public async Task<IActionResult> PreviewVersion(int id, int versionId)
+        {
+            var version = await _context.DocumentVersions
+                .Include(item => item.Document)
+                .FirstOrDefaultAsync(item => item.DocumentVersionId == versionId && item.DocumentId == id);
+            if (version == null) return NotFound();
+
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+            if (!await CanViewVersionHistoryAsync(user, version.Document)) return Forbid();
+
+            var bytes = await _documentService.DownloadDocumentVersionAsync(versionId);
+            return File(bytes, GetMimeType(version.FileName));
+        }
+
+        [HttpGet("{id}/versions/{versionId:int}/download")]
+        [Authorize(Policy = "Documents.View")]
+        public async Task<IActionResult> DownloadVersion(int id, int versionId)
+        {
+            var version = await _context.DocumentVersions
+                .Include(item => item.Document)
+                .FirstOrDefaultAsync(item => item.DocumentVersionId == versionId && item.DocumentId == id);
+            if (version == null) return NotFound();
+
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+            if (!await CanViewVersionHistoryAsync(user, version.Document)) return Forbid();
+
+            var bytes = await _documentService.DownloadDocumentVersionAsync(versionId);
+            return File(bytes, "application/octet-stream", version.FileName);
+        }
+
         [HttpDelete("{id}/access/{approvalId}")]
         [Authorize]
         public async Task<IActionResult> RevokeDocumentAccess(int id, int approvalId)
@@ -767,6 +797,8 @@ namespace FourierIT_API.Controllers
             if (dto.CertificationDate.HasValue && dto.CertificationDate.Value.Date > DateTime.UtcNow.AddHours(2).Date) // "today" in South African time
                 return BadRequest(new { error = "The certification date can't be in the future." });
 
+            var replacementUploaded = false;
+
             if (dto.File != null && dto.File.Length > 0)
             {
                 using var ms = new MemoryStream();
@@ -803,6 +835,7 @@ namespace FourierIT_API.Controllers
                 doc.ManualOverrideBy = null;
                 doc.ManualOverrideAt = null;
                 doc.ManualOverrideReason = null;
+                replacementUploaded = true;
             }
 
             doc.DocumentTypeId = dto.DocumentTypeId;
@@ -851,6 +884,33 @@ namespace FourierIT_API.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to recalculate compliance after document update for user {UserId}", doc.UserId);
+            }
+
+            if (replacementUploaded && _notifications != null)
+            {
+                await _notifications.NotifyUsersAsync(
+                    new[] { doc.UserId },
+                    "Replacement awaiting compliance review",
+                    $"Your replacement document \"{doc.FileName}\" is awaiting compliance review.",
+                    "DocumentReplacementSubmitted",
+                    doc.DocumentId,
+                    link: "/my-documents",
+                    sendEmail: false);
+
+                var institutionEmails = await _context.DocumentAccessApprovals
+                    .AsNoTracking()
+                    .Where(approval => approval.DocumentId == doc.DocumentId && !approval.IsRevoked)
+                    .Select(approval => approval.InstitutionEnquiryRequest.RequesterEmail)
+                    .Where(email => email != null && email != string.Empty)
+                    .Distinct()
+                    .ToListAsync();
+                foreach (var email in institutionEmails)
+                {
+                    _notifications.EmailExternal(
+                        email,
+                        "A document replacement is under review",
+                        $"The replacement for \"{doc.FileName}\" is under compliance review and is not available yet.");
+                }
             }
 
             await TryCreateAuditLogAsync(new AuditLog
@@ -1284,6 +1344,15 @@ namespace FourierIT_API.Controllers
         #endregion
 
         #region Helper Methods
+
+        private async Task<bool> CanViewVersionHistoryAsync(User user, Document document)
+        {
+            if (document.UserId == user.Id || User.HasClaim("superadmin", "true")) return true;
+            if (await _userManager.IsInRoleAsync(user, "Compliance Officer")) return true;
+            return await _userManager.IsInRoleAsync(user, "Department Admin")
+                && user.DepartmentId.HasValue
+                && user.DepartmentId == document.User.DepartmentId;
+        }
 
         /// <summary>
         /// Stakeholders and Compliance Officers (who aren't also Department Admins) oversee every document
