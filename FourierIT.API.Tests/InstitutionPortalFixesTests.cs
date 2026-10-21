@@ -53,7 +53,8 @@ public class InstitutionPortalFixesTests
 
         var result = await controller.RequestNewToken(new RequestNewTokenRequestDto { InstitutionId = "7" });
 
-        Assert.IsType<OkObjectResult>(result);
+        // The caller is anonymous, so the new token must not come back in the response.
+        Assert.IsType<OkResult>(result);
         Assert.StartsWith("https://portal.docuvault.test/institution/auth/access?token=", emailedLink);
     }
 
