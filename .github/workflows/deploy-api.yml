@@ -81,13 +81,16 @@ jobs:
             fi
           done
           echo "<html><body>Deploying, back in a minute.</body></html>" > app_offline.htm
+          # cmd:fail-exit stops at the first failed command, so a wrong FTP_REMOTE_DIR can never upload the
+          # site somewhere else. --no-perms skips chmod, which SmarterASP's FTP server does not support.
           lftp -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_HOST" <<EOF
+          set cmd:fail-exit yes
           set ftp:ssl-allow yes
           set ssl:verify-certificate no
           cd "$FTP_REMOTE_DIR"
           put app_offline.htm
-          mirror --reverse --overwrite --parallel=4 --verbose --exclude-glob logs/ --exclude-glob wwwroot/ ./out/ ./
-          mirror --reverse --overwrite --delete --parallel=4 --verbose ./out/wwwroot/ ./wwwroot/
+          mirror --reverse --overwrite --no-perms --parallel=4 --verbose --exclude-glob logs/ --exclude-glob wwwroot/ ./out/ ./
+          mirror --reverse --overwrite --delete --no-perms --parallel=4 --verbose ./out/wwwroot/ ./wwwroot/
           rm app_offline.htm
           bye
           EOF
