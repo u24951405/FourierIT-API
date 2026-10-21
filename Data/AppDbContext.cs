@@ -391,6 +391,12 @@ namespace FourierIT_API.Data
                 .HasForeignKey(a => a.InstitutionId)
                 .OnDelete(DeleteBehavior.Restrict);
 
+            // The audit log page lists newest first (ties broken by id); reading this index in order means SQL Server
+            // never has to sort the table, which needs a memory grant and can stall ~25 seconds when memory is short.
+            modelBuilder.Entity<AuditLog>()
+                .HasIndex(a => new { a.TimeStamp, a.AuditLogId })
+                .IsDescending();
+
             // Configure DocumentType one-to-many relationship with document
             modelBuilder.Entity<DocumentType>()
                 .Property(dt => dt.ValidityMonths)

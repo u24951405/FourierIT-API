@@ -164,6 +164,13 @@ builder.Services.AddIdentity<User, Role>(options =>
 .AddEntityFrameworkStores<AppDbContext>()
 .AddDefaultTokenProviders();
 
+// The committed settings leave this blank, so check it here: the JWT options below are only built on the
+// first request, which would otherwise make every request fail with a 500 instead of the API refusing to start.
+var jwtSigningKey = builder.Configuration["JWT:SigningKey"];
+if (string.IsNullOrWhiteSpace(jwtSigningKey))
+    throw new InvalidOperationException(
+        "JWT:SigningKey is not set. Use dotnet user-secrets in development, or the JWT__SigningKey environment variable when hosted.");
+
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme =
@@ -182,8 +189,7 @@ builder.Services.AddAuthentication(options =>
         ValidAudience = builder.Configuration["JWT:Audience"],
         ValidateIssuerSigningKey = true,
         IssuerSigningKey = new SymmetricSecurityKey(
-            System.Text.Encoding.UTF8.GetBytes(builder.Configuration["JWT:SigningKey"] ?? throw new System.InvalidOperationException("JWT:SigningKey is required."))
-            )
+            System.Text.Encoding.UTF8.GetBytes(jwtSigningKey))
     };
 });
 

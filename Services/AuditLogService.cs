@@ -124,18 +124,26 @@ namespace FourierIT_API.Services
             page = Math.Max(1, page);
             pageSize = Math.Clamp(pageSize, 1, 1000);
 
-            var items = await q
+            // Pick the page using only the ids, read in order from IX_AuditLogs_TimeStamp_AuditLogId. Sorting or
+            // hash-joining the full rows (descriptions are up to 1000 characters) needs a large memory grant, and
+            // SQL Server makes such queries wait ~25 seconds when it is short on memory.
+            var pageIds = await q
                 .OrderByDescending(a => a.TimeStamp)
+                .ThenByDescending(a => a.AuditLogId)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
+                .Select(a => a.AuditLogId)
+                .ToListAsync();
+
+            var rows = await _context.AuditLogs
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(a => pageIds.Contains(a.AuditLogId))
                 .Select(a => new AuditLogDto
                 {
                     AuditLogId = a.AuditLogId,
                     UserId = a.UserId,
-                    UserName = a.User != null ? a.User.UserName : null,
-                    UserEmail = a.User != null ? a.User.Email : null,
                     InstitutionId = a.InstitutionId,
-                    InstitutionName = a.Institution != null ? a.Institution.InstitutionName : null,
                     ActionCode = a.ActionCode,
                     TimeStamp = a.TimeStamp,
                     Description = a.Description,
@@ -144,7 +152,34 @@ namespace FourierIT_API.Services
                     PreviousBlockHash = a.PreviousBlockHash,
                     BlockHash = a.BlockHash
                 })
-                .ToListAsync();
+                .ToDictionaryAsync(a => a.AuditLogId);
+
+            var userIds = rows.Values.Where(a => a.UserId != null).Select(a => a.UserId!).Distinct().ToList();
+            var users = await _context.Users
+                .AsNoTracking()
+                .Where(u => userIds.Contains(u.Id))
+                .Select(u => new { u.Id, u.UserName, u.Email })
+                .ToDictionaryAsync(u => u.Id);
+
+            var institutionIds = rows.Values.Where(a => a.InstitutionId != null).Select(a => a.InstitutionId!.Value).Distinct().ToList();
+            var institutionNames = await _context.Institutions
+                .AsNoTracking()
+                .Where(i => institutionIds.Contains(i.InstitutionId))
+                .ToDictionaryAsync(i => i.InstitutionId, i => i.InstitutionName);
+
+            var items = new List<AuditLogDto>(pageIds.Count);
+            foreach (var id in pageIds)
+            {
+                if (!rows.TryGetValue(id, out var item)) continue;
+                if (item.UserId != null && users.TryGetValue(item.UserId, out var user))
+                {
+                    item.UserName = user.UserName;
+                    item.UserEmail = user.Email;
+                }
+                if (item.InstitutionId != null && institutionNames.TryGetValue(item.InstitutionId.Value, out var institutionName))
+                    item.InstitutionName = institutionName;
+                items.Add(item);
+            }
 
             return new FourierIT_API.DTOs.PagedResult<AuditLogDto>
             {
