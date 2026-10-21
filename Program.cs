@@ -241,11 +241,31 @@ if (!app.Environment.IsDevelopment())
 {
     app.UseHttpsRedirection();
 }
+
+// The deploy puts the built Angular app in wwwroot, so one site serves both the frontend and /api.
+// index.html is never cached so a new deploy shows up at once; the hashed script and style files can be.
+var spaFiles = new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+    {
+        if (ctx.File.Name.Equals("index.html", StringComparison.OrdinalIgnoreCase))
+            ctx.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+    }
+};
+app.UseDefaultFiles();
+app.UseStaticFiles(spaFiles);
+
 app.UseCors("AngularClient");
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+if (app.Environment.WebRootFileProvider.GetFileInfo("index.html").Exists)
+{
+    // Unknown API paths stay 404s; any other path is an Angular route, so hand it to index.html.
+    app.Map("/api/{**rest}", () => Results.NotFound());
+    app.MapFallbackToFile("index.html", spaFiles);
+}
 // Startup database initialization is intentionally configurable to avoid
 // expensive startup delays on every API run.
 var runDbInit = builder.Configuration.GetValue("StartupTasks:RunDatabaseInitialization", builder.Environment.IsDevelopment());
