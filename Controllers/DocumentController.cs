@@ -247,16 +247,32 @@ namespace FourierIT_API.Controllers
             return document.UserId == user.Id || await HasDocumentManagePermissionAsync(user.Id);
         }
 
+        /// <summary>The department's document types for a department admin (what their upload page lists), otherwise null.</summary>
+        private async Task<List<int>?> GetDepartmentAdminDocumentTypeIdsAsync(User user)
+        {
+            if (!user.DepartmentId.HasValue || !await _userManager.IsInRoleAsync(user, "Department Admin"))
+                return null;
+
+            return await _context.DepartmentDocumentTypes
+                .Where(ddt => ddt.DepartmentId == user.DepartmentId.Value)
+                .Select(ddt => ddt.DocumentTypeId)
+                .ToListAsync();
+        }
+
         private async Task<(bool IsValid, string? ErrorMessage)> ValidateDocumentTypeForUserContextAsync(User user, int documentTypeId, int? entityTypeId)
         {
+            // Anything an institution is asking for can be uploaded, but a request isn't needed: the user's own
+            // required documents (the department's, for a department admin) can always be uploaded too.
             var activeRequestDocumentTypeIds = await GetActiveRequestedDocumentTypeIdsAsync(user);
-            if (activeRequestDocumentTypeIds.Any())
-            {
-                if (!activeRequestDocumentTypeIds.Contains(documentTypeId))
-                {
-                    return (false, "The specified document type is not requested by an active institution request.");
-                }
+            if (activeRequestDocumentTypeIds.Contains(documentTypeId))
                 return (true, null);
+
+            var departmentTypeIds = await GetDepartmentAdminDocumentTypeIdsAsync(user);
+            if (departmentTypeIds != null)
+            {
+                return departmentTypeIds.Contains(documentTypeId)
+                    ? (true, null)
+                    : (false, "The specified document type is not one of your department's documents.");
             }
 
             if (!entityTypeId.HasValue)
@@ -288,27 +304,8 @@ namespace FourierIT_API.Controllers
             var user = await _userManager.GetUserAsync(User);
             if (user == null) return Unauthorized();
 
-            var activeRequestDocumentTypeIds = await GetActiveRequestedDocumentTypeIdsAsync(user);
-            var hasActiveRequestContext = activeRequestDocumentTypeIds.Any();
-
-            EntityType? entityType = null;
+            // Whether the type may be uploaded (requested, the department's, or the entity type's) is checked below.
             int? effectiveEntityTypeId = dto.EntityTypeId ?? user.EntityTypeId;
-
-            if (effectiveEntityTypeId.HasValue)
-            {
-                entityType = await _context.EntityTypes
-                    .Include(et => et.RequiredDocuments)
-                    .FirstOrDefaultAsync(et => et.EntityTypeId == effectiveEntityTypeId.Value);
-
-                if (entityType == null)
-                {
-                    return BadRequest(new { error = "Invalid entity type selected." });
-                }
-            }
-            else if (!hasActiveRequestContext)
-            {
-                return BadRequest(new { error = "Please select an entity type first." });
-            }
 
             // Prevent duplicate uploads of the same document type for the same user
             var existingUpload = await _context.Documents

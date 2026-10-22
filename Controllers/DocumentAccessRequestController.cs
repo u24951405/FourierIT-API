@@ -1340,10 +1340,14 @@ namespace FourierIT_API.Controllers
             var latestCheckByDocument = latestChecks
                 .GroupBy(check => check.DocumentId!.Value)
                 .ToDictionary(group => group.Key, group => group.First());
+            // A Compliance Officer's approval is kept on the document (checks are rebuilt on every recalculation, and a
+            // document outside the owner's required list gets no check at all), and is cleared when the file is replaced.
             var documentsAwaitingReview = approvedDocuments
-                .Where(document => !latestCheckByDocument.TryGetValue(document.DocumentId, out var check)
-                    || !check.IsManuallyApproved
-                    || !string.Equals(check.CheckStatus, "Compliant", StringComparison.OrdinalIgnoreCase))
+                .Where(document => !(document.IsManualOverrideActive
+                        && string.Equals(document.CurrentStatus, "Approved", StringComparison.OrdinalIgnoreCase))
+                    && (!latestCheckByDocument.TryGetValue(document.DocumentId, out var check)
+                        || !check.IsManuallyApproved
+                        || !string.Equals(check.CheckStatus, "Compliant", StringComparison.OrdinalIgnoreCase)))
                 .Select(document => new { document.DocumentId, document.FileName })
                 .ToList();
 

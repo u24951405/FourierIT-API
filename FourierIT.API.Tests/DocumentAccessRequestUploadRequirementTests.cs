@@ -293,6 +293,55 @@ public class DocumentAccessRequestUploadRequirementTests
     }
 
     [Fact]
+    public async Task Approve_WhenComplianceOfficerApprovedTheDocument_SucceedsEvenWithoutACheckRecord()
+    {
+        await using var context = CreateContext();
+        var owner = CreateUser("owner-co-approved", "Owner", "Approved");
+        var institution = new Institution { InstitutionId = 80, InstitutionName = "CO Institution" };
+        var idType = new DocumentType { DocumentTypeId = 980, TypeName = "Proof of Address", Description = "Address" };
+        var document = new Document
+        {
+            DocumentId = 80,
+            UserId = owner.Id,
+            DocumentTypeId = idType.DocumentTypeId,
+            FileName = "address.pdf",
+            // What a Compliance Officer's approval leaves on the document.
+            CurrentStatus = "Approved",
+            IsManualOverrideActive = true,
+            ManualOverrideBy = "compliance-officer",
+            ManualOverrideAt = DateTime.UtcNow,
+            ExpiryDate = DateTimeOffset.UtcNow.AddYears(1),
+            FileSizeBytes = 10,
+            EncryptionAlgorithm = "AES-256",
+            IsEncrypted = true
+        };
+        var request = new InstitutionEnquiryRequest
+        {
+            EnquiryRequestId = 80,
+            InstitutionId = institution.InstitutionId,
+            RequestType = "Individual",
+            TargetUserId = owner.Id,
+            Status = "Pending",
+            PurposeNote = "Proof of address please",
+            RequestDate = DateTimeOffset.UtcNow
+        };
+
+        context.Users.Add(owner);
+        context.Institutions.Add(institution);
+        context.DocumentTypes.Add(idType);
+        context.Documents.Add(document);
+        context.InstitutionEnquiryRequests.Add(request);
+        context.InstitutionRequestedDocumentTypes.Add(
+            new InstitutionRequestedDocumentType { EnquiryRequestId = request.EnquiryRequestId, DocumentTypeId = idType.DocumentTypeId, FICARuleId = 0, isMandatory = true });
+        await context.SaveChangesAsync();
+
+        var result = await CreateController(context, owner).Approve(request.EnquiryRequestId);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal("Approved", (await context.InstitutionEnquiryRequests.SingleAsync()).Status);
+    }
+
+    [Fact]
     public async Task Approve_DepartmentRequest_ByItsDepartmentAdmin_SharesTheAdminsDocuments()
     {
         await using var context = CreateContext();
