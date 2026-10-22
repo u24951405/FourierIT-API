@@ -648,6 +648,23 @@ namespace FourierIT_API.Controllers
                     .ToListAsync();
 
                 var now = DateTime.UtcNow;
+                var documentIds = documents
+                    .Where(check => check.DocumentId.HasValue)
+                    .Select(check => check.DocumentId!.Value)
+                    .Distinct()
+                    .ToList();
+                var institutionByDocument = await _context.DocumentAccessApprovals
+                    .AsNoTracking()
+                    .Where(approval => documentIds.Contains(approval.DocumentId) && !approval.IsRevoked)
+                    .Select(approval => new { approval.DocumentId, InstitutionName = approval.InstitutionEnquiryRequest.Institution.InstitutionName })
+                    .GroupBy(item => item.DocumentId)
+                    .ToDictionaryAsync(group => group.Key, group => (string?)string.Join(", ", group.Select(item => item.InstitutionName).Distinct()));
+                var flagReasonByDocument = await _context.EnquiryFlags
+                    .AsNoTracking()
+                    .Where(flag => documentIds.Contains(flag.DocumentId))
+                    .OrderByDescending(flag => flag.FlaggedAt)
+                    .GroupBy(flag => flag.DocumentId)
+                    .ToDictionaryAsync(group => group.Key, group => group.Select(flag => flag.FlagReason).FirstOrDefault());
                 var data = documents.Select(check =>
                 {
                     var neededFor = waitingRequests
@@ -699,6 +716,9 @@ namespace FourierIT_API.Controllers
                         waitingDays = (int)Math.Floor((now - check.CheckedAt).TotalDays),
                         neededBy = neededFor?.SubmissionDeadline,
                         neededByInstitution = neededFor?.InstitutionName,
+                        institutionName = check.DocumentId.HasValue ? institutionByDocument.GetValueOrDefault(check.DocumentId.Value, neededFor?.InstitutionName) : neededFor?.InstitutionName,
+                        isReplacement = check.Document?.CurrentStatus == "Under Review" || flagReasonByDocument.ContainsKey(check.DocumentId ?? 0),
+                        originalFlagReason = check.DocumentId.HasValue ? flagReasonByDocument.GetValueOrDefault(check.DocumentId.Value) : null,
                         isClearlyValid = concerns.Count == 0,
                         concerns
                     };

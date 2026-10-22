@@ -78,48 +78,6 @@ namespace FourierIT_API.Controllers
             bool isDepartmentAdmin = await _userManager.IsInRoleAsync(user, "Department Admin");
             var documentQuery = _context.Documents.Where(d => d.UserId == user.Id && d.CurrentStatus != "Deleted");
 
-            var activeRequestedDocuments = await GetActiveRequestedDocumentTypesAsync(user);
-            if (activeRequestedDocuments.Any())
-            {
-                var requestedDocumentTypeIds = activeRequestedDocuments.Select(rd => rd.DocumentTypeId).Distinct().ToList();
-                var requestedUserDocs = await documentQuery
-                    .Where(d => requestedDocumentTypeIds.Contains(d.DocumentTypeId))
-                    .ToListAsync();
-
-                var requestedResult = activeRequestedDocuments
-                    .OrderBy(rd => rd.DocumentTypeName)
-                    .ThenBy(rd => rd.IsMandatory ? 0 : 1)
-                    .Select(rd =>
-                    {
-                        var docs = requestedUserDocs.Where(d => d.DocumentTypeId == rd.DocumentTypeId).ToList();
-                        var hasNonRejected = docs.Any(d => !string.Equals(d.CurrentStatus, "Rejected", StringComparison.OrdinalIgnoreCase));
-                        var hasRejectedOnly = docs.Any() && !hasNonRejected;
-                        var isUploaded = hasNonRejected;
-
-                        return new
-                        {
-                            rd.DocumentTypeId,
-                            DocumentTypeName = rd.DocumentTypeName,
-                            rd.IsMandatory,
-                            Description = rd.DocumentTypeDescription,
-                            IsUploaded = isUploaded,
-                            UploadCount = docs.Count
-                        };
-                    })
-                    .ToList();
-
-                var missingCount = requestedResult.Count(r => !r.IsUploaded);
-                var isComplete = requestedResult.All(r => r.IsUploaded);
-
-                return Ok(new
-                {
-                    EntityType = "Requested Documents",
-                    IsComplete = isComplete,
-                    MissingCount = missingCount,
-                    Documents = requestedResult
-                });
-            }
-
             if (isDepartmentAdmin && user.DepartmentId.HasValue)
             {
                 var department = await _context.Departments
@@ -136,6 +94,7 @@ namespace FourierIT_API.Controllers
                     .ToList();
 
                 var departmentUserDocs = await documentQuery
+                    .Where(d => d.CurrentStatus != "Rejected")
                     .GroupBy(d => d.DocumentTypeId)
                     .Select(g => new
                     {
@@ -198,6 +157,7 @@ namespace FourierIT_API.Controllers
             var requiredDocs = entityType.RequiredDocuments;
 
             var userDocs = await documentQuery
+                .Where(d => d.CurrentStatus != "Rejected")
                 .GroupBy(d => d.DocumentTypeId)
                 .Select(g => new
                 {
@@ -287,16 +247,32 @@ namespace FourierIT_API.Controllers
             return document.UserId == user.Id || await HasDocumentManagePermissionAsync(user.Id);
         }
 
+        /// <summary>The department's document types for a department admin (what their upload page lists), otherwise null.</summary>
+        private async Task<List<int>?> GetDepartmentAdminDocumentTypeIdsAsync(User user)
+        {
+            if (!user.DepartmentId.HasValue || !await _userManager.IsInRoleAsync(user, "Department Admin"))
+                return null;
+
+            return await _context.DepartmentDocumentTypes
+                .Where(ddt => ddt.DepartmentId == user.DepartmentId.Value)
+                .Select(ddt => ddt.DocumentTypeId)
+                .ToListAsync();
+        }
+
         private async Task<(bool IsValid, string? ErrorMessage)> ValidateDocumentTypeForUserContextAsync(User user, int documentTypeId, int? entityTypeId)
         {
+            // Anything an institution is asking for can be uploaded, but a request isn't needed: the user's own
+            // required documents (the department's, for a department admin) can always be uploaded too.
             var activeRequestDocumentTypeIds = await GetActiveRequestedDocumentTypeIdsAsync(user);
-            if (activeRequestDocumentTypeIds.Any())
-            {
-                if (!activeRequestDocumentTypeIds.Contains(documentTypeId))
-                {
-                    return (false, "The specified document type is not requested by an active institution request.");
-                }
+            if (activeRequestDocumentTypeIds.Contains(documentTypeId))
                 return (true, null);
+
+            var departmentTypeIds = await GetDepartmentAdminDocumentTypeIdsAsync(user);
+            if (departmentTypeIds != null)
+            {
+                return departmentTypeIds.Contains(documentTypeId)
+                    ? (true, null)
+                    : (false, "The specified document type is not one of your department's documents.");
             }
 
             if (!entityTypeId.HasValue)
@@ -328,27 +304,8 @@ namespace FourierIT_API.Controllers
             var user = await _userManager.GetUserAsync(User);
             if (user == null) return Unauthorized();
 
-            var activeRequestDocumentTypeIds = await GetActiveRequestedDocumentTypeIdsAsync(user);
-            var hasActiveRequestContext = activeRequestDocumentTypeIds.Any();
-
-            EntityType? entityType = null;
+            // Whether the type may be uploaded (requested, the department's, or the entity type's) is checked below.
             int? effectiveEntityTypeId = dto.EntityTypeId ?? user.EntityTypeId;
-
-            if (effectiveEntityTypeId.HasValue)
-            {
-                entityType = await _context.EntityTypes
-                    .Include(et => et.RequiredDocuments)
-                    .FirstOrDefaultAsync(et => et.EntityTypeId == effectiveEntityTypeId.Value);
-
-                if (entityType == null)
-                {
-                    return BadRequest(new { error = "Invalid entity type selected." });
-                }
-            }
-            else if (!hasActiveRequestContext)
-            {
-                return BadRequest(new { error = "Please select an entity type first." });
-            }
 
             // Prevent duplicate uploads of the same document type for the same user
             var existingUpload = await _context.Documents
@@ -610,6 +567,76 @@ namespace FourierIT_API.Controllers
             }
         }
 
+        [HttpGet("{id}/versions")]
+        [Authorize(Policy = "Documents.View")]
+        public async Task<IActionResult> GetVersions(int id)
+        {
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+
+            var document = await _context.Documents
+                .AsNoTracking()
+                .Include(d => d.User)
+                .FirstOrDefaultAsync(d => d.DocumentId == id);
+            if (document == null) return NotFound();
+            if (!await CanViewVersionHistoryAsync(user, document)) return Forbid();
+
+            var versions = await _context.DocumentVersions
+                .AsNoTracking()
+                .Where(version => version.DocumentId == id)
+                .OrderByDescending(version => version.VersionNumber)
+                .Select(version => new
+                {
+                    version.DocumentVersionId,
+                    version.VersionNumber,
+                    version.FileName,
+                    version.UploadedByUserId,
+                    version.UploadedAt,
+                    version.FlagReason,
+                    version.ComplianceDecision,
+                    version.ComplianceReviewerUserId,
+                    version.ComplianceReason,
+                    version.ComplianceDecisionAt
+                })
+                .ToListAsync();
+
+            return Ok(versions);
+        }
+
+        [HttpGet("{id}/versions/{versionId:int}/preview")]
+        [Authorize(Policy = "Documents.View")]
+        public async Task<IActionResult> PreviewVersion(int id, int versionId)
+        {
+            var version = await _context.DocumentVersions
+                .Include(item => item.Document)
+                .FirstOrDefaultAsync(item => item.DocumentVersionId == versionId && item.DocumentId == id);
+            if (version == null) return NotFound();
+
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+            if (!await CanViewVersionHistoryAsync(user, version.Document)) return Forbid();
+
+            var bytes = await _documentService.DownloadDocumentVersionAsync(versionId);
+            return File(bytes, GetMimeType(version.FileName));
+        }
+
+        [HttpGet("{id}/versions/{versionId:int}/download")]
+        [Authorize(Policy = "Documents.View")]
+        public async Task<IActionResult> DownloadVersion(int id, int versionId)
+        {
+            var version = await _context.DocumentVersions
+                .Include(item => item.Document)
+                .FirstOrDefaultAsync(item => item.DocumentVersionId == versionId && item.DocumentId == id);
+            if (version == null) return NotFound();
+
+            var user = await _userManager.GetUserAsync(User);
+            if (user == null) return Unauthorized();
+            if (!await CanViewVersionHistoryAsync(user, version.Document)) return Forbid();
+
+            var bytes = await _documentService.DownloadDocumentVersionAsync(versionId);
+            return File(bytes, "application/octet-stream", version.FileName);
+        }
+
         [HttpDelete("{id}/access/{approvalId}")]
         [Authorize]
         public async Task<IActionResult> RevokeDocumentAccess(int id, int approvalId)
@@ -767,6 +794,8 @@ namespace FourierIT_API.Controllers
             if (dto.CertificationDate.HasValue && dto.CertificationDate.Value.Date > DateTime.UtcNow.AddHours(2).Date) // "today" in South African time
                 return BadRequest(new { error = "The certification date can't be in the future." });
 
+            var replacementUploaded = false;
+
             if (dto.File != null && dto.File.Length > 0)
             {
                 using var ms = new MemoryStream();
@@ -803,6 +832,7 @@ namespace FourierIT_API.Controllers
                 doc.ManualOverrideBy = null;
                 doc.ManualOverrideAt = null;
                 doc.ManualOverrideReason = null;
+                replacementUploaded = true;
             }
 
             doc.DocumentTypeId = dto.DocumentTypeId;
@@ -851,6 +881,33 @@ namespace FourierIT_API.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to recalculate compliance after document update for user {UserId}", doc.UserId);
+            }
+
+            if (replacementUploaded && _notifications != null)
+            {
+                await _notifications.NotifyUsersAsync(
+                    new[] { doc.UserId },
+                    "Replacement awaiting compliance review",
+                    $"Your replacement document \"{doc.FileName}\" is awaiting compliance review.",
+                    "DocumentReplacementSubmitted",
+                    doc.DocumentId,
+                    link: "/my-documents",
+                    sendEmail: false);
+
+                var institutionEmails = await _context.DocumentAccessApprovals
+                    .AsNoTracking()
+                    .Where(approval => approval.DocumentId == doc.DocumentId && !approval.IsRevoked)
+                    .Select(approval => approval.InstitutionEnquiryRequest.RequesterEmail)
+                    .Where(email => email != null && email != string.Empty)
+                    .Distinct()
+                    .ToListAsync();
+                foreach (var email in institutionEmails)
+                {
+                    _notifications.EmailExternal(
+                        email,
+                        "A document replacement is under review",
+                        $"The replacement for \"{doc.FileName}\" is under compliance review and is not available yet.");
+                }
             }
 
             await TryCreateAuditLogAsync(new AuditLog
@@ -1163,7 +1220,8 @@ namespace FourierIT_API.Controllers
                 userIdForMapping = user.Id; // Regular users see only their documents
             }
 
-            var result = entityTypes.Select(et => MapToEntityTypeHierarchyDto(et, userIdForMapping, readOnly)).ToList();
+            var documentsByType = await LoadHierarchyDocumentsAsync(userIdForMapping);
+            var result = entityTypes.Select(et => MapToEntityTypeHierarchyDto(et, documentsByType, userIdForMapping, readOnly)).ToList();
             return Ok(result);
         }
 
@@ -1177,7 +1235,8 @@ namespace FourierIT_API.Controllers
             var hierarchyRepository = new DocumentHierarchyRepository(_context);
             var entityTypes = await hierarchyRepository.GetFullHierarchyAsync();
 
-            var result = entityTypes.Select(et => MapToEntityTypeHierarchyDto(et, null)).ToList();
+            var documentsByType = await LoadHierarchyDocumentsAsync(null);
+            var result = entityTypes.Select(et => MapToEntityTypeHierarchyDto(et, documentsByType, null)).ToList();
             return Ok(result);
         }
 
@@ -1285,6 +1344,15 @@ namespace FourierIT_API.Controllers
 
         #region Helper Methods
 
+        private async Task<bool> CanViewVersionHistoryAsync(User user, Document document)
+        {
+            if (document.UserId == user.Id || User.HasClaim("superadmin", "true")) return true;
+            if (await _userManager.IsInRoleAsync(user, "Compliance Officer")) return true;
+            return await _userManager.IsInRoleAsync(user, "Department Admin")
+                && user.DepartmentId.HasValue
+                && user.DepartmentId == document.User.DepartmentId;
+        }
+
         /// <summary>
         /// Stakeholders and Compliance Officers (who aren't also Department Admins) oversee every document
         /// but change none: they don't upload, so a view limited to their own documents would always be empty.
@@ -1293,27 +1361,34 @@ namespace FourierIT_API.Controllers
             (User.IsInRole("Stakeholder") || User.IsInRole("Compliance Officer"))
             && !User.IsInRole("Department Admin") && !User.HasClaim("superadmin", "true");
 
-        private EntityTypeHierarchyDto MapToEntityTypeHierarchyDto(EntityType entityType, string? userId, bool readOnly = false)
+        /// <summary>
+        /// The tree's documents, loaded in one query and grouped by type (only the user's own and those shared
+        /// with them, unless userId is null). Querying per document type made one round trip for every type.
+        /// </summary>
+        private async Task<ILookup<int, Document>> LoadHierarchyDocumentsAsync(string? userId)
+        {
+            var query = _context.Documents.AsNoTracking().Include(d => d.SharedWith).AsQueryable();
+            if (userId != null)
+                query = query.Where(d => d.UserId == userId || d.SharedWith.Any(da => da.GrantedToUserId == userId));
+
+            return (await query.ToListAsync()).ToLookup(d => d.DocumentTypeId);
+        }
+
+        private EntityTypeHierarchyDto MapToEntityTypeHierarchyDto(EntityType entityType, ILookup<int, Document> documentsByType, string? userId, bool readOnly = false)
         {
             return new EntityTypeHierarchyDto
             {
                 EntityTypeId = entityType.EntityTypeId,
                 Name = entityType.Name,
                 DocumentTypes = entityType.RequiredDocuments
-                    .Select(rd => MapToDocumentTypeHierarchyDto(rd.DocumentType, rd.IsMandatory, userId, readOnly))
+                    .Select(rd => MapToDocumentTypeHierarchyDto(rd.DocumentType, rd.IsMandatory, documentsByType[rd.DocumentTypeId], userId, readOnly))
                     .ToList(),
                 UserHasAccess = true
             };
         }
 
-        private DocumentTypeHierarchyDto MapToDocumentTypeHierarchyDto(DocumentType documentType, bool isMandatory, string? userId, bool readOnly = false)
+        private DocumentTypeHierarchyDto MapToDocumentTypeHierarchyDto(DocumentType documentType, bool isMandatory, IEnumerable<Document> documents, string? userId, bool readOnly = false)
         {
-            // Get documents for this document type directly from database
-            var documents = _context.Documents
-                .Where(d => d.DocumentTypeId == documentType.DocumentTypeId)
-                .Include(d => d.SharedWith)
-                .ToList();
-
             return new DocumentTypeHierarchyDto
             {
                 DocumentTypeId = documentType.DocumentTypeId,

@@ -64,14 +64,11 @@ namespace FourierIT_API.Repositories
                 return new List<EntityType>();
             }
 
-            // Build the filtered hierarchy
+            // Build the filtered hierarchy. The documents themselves are loaded separately, in one query, by the caller.
             return await _context.EntityTypes
                 .Where(et => requiredDocs.Contains(et.EntityTypeId))
                 .Include(et => et.RequiredDocuments)
                     .ThenInclude(rd => rd.DocumentType)
-                        .ThenInclude(dt => dt.Documents.Where(d =>
-                            d.UserId == userId ||
-                            d.SharedWith.Any(da => da.GrantedToUserId == userId)))
                 .OrderBy(et => et.Name)
                 .ToListAsync();
         }

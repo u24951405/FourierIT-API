@@ -148,6 +148,40 @@ public class AuditLogInstitutionAttributionTests : IDisposable
         Assert.Single(searched.Items);
     }
 
+    [Fact]
+    public async Task GetAuditLogsPagedAsync_PagesNewestFirst_WithTiesBrokenByNewestId()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase($"AuditLogPagingTests_{Guid.NewGuid():N}")
+            .Options;
+        await using var context = new AppDbContext(options);
+        context.Database.EnsureCreated();
+
+        var start = new DateTimeOffset(2026, 10, 1, 8, 0, 0, TimeSpan.Zero);
+        // Ids 1-5; ids 3 and 4 share a timestamp, and id 5 was recorded with an earlier time than id 4.
+        var stamps = new[] { start, start.AddMinutes(1), start.AddMinutes(2), start.AddMinutes(2), start.AddSeconds(30) };
+        for (var i = 0; i < stamps.Length; i++)
+        {
+            context.AuditLogs.Add(new AuditLog
+            {
+                AuditLogId = i + 1,
+                ActionCode = "TEST",
+                TimeStamp = stamps[i],
+                Description = $"Entry {i + 1}",
+                TableAffected = "Tests"
+            });
+        }
+        await context.SaveChangesAsync();
+
+        var service = new AuditLogService(context);
+        var firstPage = await service.GetAuditLogsPagedAsync(null, null, null, null, page: 1, pageSize: 3, query: null);
+        var secondPage = await service.GetAuditLogsPagedAsync(null, null, null, null, page: 2, pageSize: 3, query: null);
+
+        Assert.Equal(5, firstPage.TotalCount);
+        Assert.Equal(new[] { 4, 3, 2 }, firstPage.Items.Select(item => item.AuditLogId));
+        Assert.Equal(new[] { 5, 1 }, secondPage.Items.Select(item => item.AuditLogId));
+    }
+
     private Institution SeedInstitution(int institutionId, string name)
     {
         var institutionType = _context.InstitutionTypes.FirstOrDefault(t => t.InstitutionTypeId == 1);

@@ -24,6 +24,23 @@ public class ConfigurationFilesTests
         Assert.True(string.IsNullOrEmpty(emailSettings.GetProperty("Password").GetString()));
     }
 
+    [Theory]
+    [InlineData("appsettings.json", "JWT", "SigningKey")]
+    [InlineData("appsettings.json", "Vault", "EncryptionKey")]
+    [InlineData("appsettings.json", "AzureBlobStorage", "ConnectionString")]
+    [InlineData("appsettings.json", "EntityVerification", "ApiKey")]
+    [InlineData("appsettings.json", "SuperAdmin", "Password")]
+    [InlineData("appsettings.Development.json", "SuperAdmin", "Password")]
+    public void SettingsFiles_DoNotContainSecrets(string fileName, string section, string key)
+    {
+        var settingsPath = Path.GetFullPath(Path.Combine(ThisFileDirectory(), "..", fileName));
+
+        using var document = JsonDocument.Parse(File.ReadAllText(settingsPath));
+        // These files are committed, so secrets must come from User Secrets or environment variables instead.
+        if (document.RootElement.TryGetProperty(section, out var settings) && settings.TryGetProperty(key, out var value))
+            Assert.True(string.IsNullOrEmpty(value.GetString()), $"{section}:{key} must not be set in {fileName}.");
+    }
+
     [Fact]
     public void DevelopmentSettings_DoNotAttemptDatabaseInitializationByDefault()
     {

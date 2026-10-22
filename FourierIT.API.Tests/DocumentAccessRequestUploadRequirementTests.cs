@@ -293,6 +293,129 @@ public class DocumentAccessRequestUploadRequirementTests
     }
 
     [Fact]
+    public async Task Approve_WhenComplianceOfficerApprovedTheDocument_SucceedsEvenWithoutACheckRecord()
+    {
+        await using var context = CreateContext();
+        var owner = CreateUser("owner-co-approved", "Owner", "Approved");
+        var institution = new Institution { InstitutionId = 80, InstitutionName = "CO Institution" };
+        var idType = new DocumentType { DocumentTypeId = 980, TypeName = "Proof of Address", Description = "Address" };
+        var document = new Document
+        {
+            DocumentId = 80,
+            UserId = owner.Id,
+            DocumentTypeId = idType.DocumentTypeId,
+            FileName = "address.pdf",
+            // What a Compliance Officer's approval leaves on the document.
+            CurrentStatus = "Approved",
+            IsManualOverrideActive = true,
+            ManualOverrideBy = "compliance-officer",
+            ManualOverrideAt = DateTime.UtcNow,
+            ExpiryDate = DateTimeOffset.UtcNow.AddYears(1),
+            FileSizeBytes = 10,
+            EncryptionAlgorithm = "AES-256",
+            IsEncrypted = true
+        };
+        var request = new InstitutionEnquiryRequest
+        {
+            EnquiryRequestId = 80,
+            InstitutionId = institution.InstitutionId,
+            RequestType = "Individual",
+            TargetUserId = owner.Id,
+            Status = "Pending",
+            PurposeNote = "Proof of address please",
+            RequestDate = DateTimeOffset.UtcNow
+        };
+
+        context.Users.Add(owner);
+        context.Institutions.Add(institution);
+        context.DocumentTypes.Add(idType);
+        context.Documents.Add(document);
+        context.InstitutionEnquiryRequests.Add(request);
+        context.InstitutionRequestedDocumentTypes.Add(
+            new InstitutionRequestedDocumentType { EnquiryRequestId = request.EnquiryRequestId, DocumentTypeId = idType.DocumentTypeId, FICARuleId = 0, isMandatory = true });
+        await context.SaveChangesAsync();
+
+        var result = await CreateController(context, owner).Approve(request.EnquiryRequestId);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal("Approved", (await context.InstitutionEnquiryRequests.SingleAsync()).Status);
+    }
+
+    [Fact]
+    public async Task Approve_DepartmentRequest_ByItsDepartmentAdmin_SharesTheAdminsDocuments()
+    {
+        await using var context = CreateContext();
+        var institution = new Institution { InstitutionId = 70, InstitutionName = "Dept Institution" };
+        var branch = new Branch { BranchId = 70, InstitutionId = institution.InstitutionId, Institution = institution, BranchName = "HQ" };
+        var department = new Department { DepartmentId = 70, DepartmentName = "Finance", BranchId = branch.BranchId, Branch = branch };
+        var otherDepartment = new Department { DepartmentId = 71, DepartmentName = "Legal", BranchId = branch.BranchId, Branch = branch };
+        var departmentAdmin = CreateUser("dept-approver", "Dept", "Admin");
+        departmentAdmin.DepartmentId = department.DepartmentId;
+        var otherAdmin = CreateUser("other-dept-admin", "Other", "Admin");
+        otherAdmin.DepartmentId = otherDepartment.DepartmentId;
+        var documentType = new DocumentType { DocumentTypeId = 970, TypeName = "Tax Clearance", Description = "Tax document" };
+        var document = new Document
+        {
+            DocumentId = 70,
+            UserId = departmentAdmin.Id,
+            DocumentTypeId = documentType.DocumentTypeId,
+            FileName = "tax.pdf",
+            CurrentStatus = "Uploaded",
+            ExpiryDate = DateTimeOffset.UtcNow.AddYears(1),
+            FileSizeBytes = 10,
+            EncryptionAlgorithm = "AES-256",
+            IsEncrypted = true
+        };
+        var request = new InstitutionEnquiryRequest
+        {
+            EnquiryRequestId = 70,
+            InstitutionId = institution.InstitutionId,
+            RequestType = "Department",
+            TargetDepartmentId = department.DepartmentId,
+            Status = "Department_Pending",
+            PurposeNote = "Tax clearance please",
+            RequestDate = DateTimeOffset.UtcNow
+        };
+
+        context.Institutions.Add(institution);
+        context.Branches.Add(branch);
+        context.Departments.AddRange(department, otherDepartment);
+        context.Users.AddRange(departmentAdmin, otherAdmin);
+        context.DocumentTypes.Add(documentType);
+        context.Documents.Add(document);
+        context.InstitutionEnquiryRequests.Add(request);
+        var complianceStatus = new ComplianceStatus { UserId = departmentAdmin.Id, User = departmentAdmin };
+        context.ComplianceStatuses.Add(complianceStatus);
+        context.InstitutionRequestedDocumentTypes.Add(
+            new InstitutionRequestedDocumentType { EnquiryRequestId = request.EnquiryRequestId, DocumentTypeId = documentType.DocumentTypeId, FICARuleId = 0, isMandatory = true });
+        await context.SaveChangesAsync();
+        context.DocumentComplianceChecks.Add(new DocumentComplianceCheck
+        {
+            CheckId = 70,
+            DocumentId = document.DocumentId,
+            ComplianceStatusId = complianceStatus.ComplianceStatusId,
+            CheckStatus = "Compliant",
+            RequiresManualReview = true,
+            IsManuallyApproved = true,
+            ManualReviewDate = DateTime.UtcNow
+        });
+        await context.SaveChangesAsync();
+
+        // An admin of another department, or someone in the department without the role, is refused.
+        Assert.IsType<ForbidResult>(await CreateController(context, otherAdmin, "Department Admin").Approve(request.EnquiryRequestId));
+        Assert.IsType<ForbidResult>(await CreateController(context, departmentAdmin).Approve(request.EnquiryRequestId));
+
+        var result = await CreateController(context, departmentAdmin, "Department Admin").Approve(request.EnquiryRequestId);
+
+        Assert.IsType<OkObjectResult>(result);
+        var updated = await context.InstitutionEnquiryRequests.SingleAsync(r => r.EnquiryRequestId == request.EnquiryRequestId);
+        Assert.Equal("Approved", updated.Status);
+        Assert.Equal(departmentAdmin.Id, updated.TargetUserId);
+        var approval = await context.DocumentAccessApprovals.SingleAsync();
+        Assert.Equal(document.DocumentId, approval.DocumentId);
+    }
+
+    [Fact]
     public async Task Approve_WhenRequestedDocumentHasNotBeenApprovedByCompliance_ReturnsConflict()
     {
         await using var context = CreateContext();
@@ -360,6 +483,168 @@ public class DocumentAccessRequestUploadRequirementTests
         Assert.Empty(await context.DocumentAccessApprovals.ToListAsync());
     }
 
+    [Fact]
+    public void ReferenceNumber_IsBuiltFromTheRequestYearAndId()
+    {
+        var requested = new DateTimeOffset(2026, 10, 22, 9, 0, 0, TimeSpan.Zero);
+
+        Assert.Equal("REQ-2026-000123", InstitutionEnquiryRequest.BuildReferenceNumber(123, requested));
+        Assert.Equal("REQ-2026-1234567", InstitutionEnquiryRequest.BuildReferenceNumber(1234567, requested));
+    }
+
+    [Fact]
+    public async Task CreateInstitutionRequest_GeneratesAUniqueReferenceNumberForEachRequest()
+    {
+        await using var context = CreateContext();
+        var (controller, token, documentTypeId, targetUserId) = await SeedIndividualRequestAsync(context);
+
+        var first = Assert.IsType<OkObjectResult>(await controller.CreateInstitutionRequest(token, IndividualRequest(targetUserId, documentTypeId)));
+        var second = Assert.IsType<OkObjectResult>(await controller.CreateInstitutionRequest(token, IndividualRequest(targetUserId, documentTypeId)));
+
+        var saved = await context.InstitutionEnquiryRequests.OrderBy(r => r.EnquiryRequestId).ToListAsync();
+        Assert.Equal(2, saved.Count);
+        foreach (var request in saved)
+            Assert.Equal(InstitutionEnquiryRequest.BuildReferenceNumber(request.EnquiryRequestId, request.RequestDate), request.ReferenceNumber);
+        Assert.NotEqual(saved[0].ReferenceNumber, saved[1].ReferenceNumber);
+
+        // The institution is shown the generated reference straight away.
+        Assert.Equal(saved[0].ReferenceNumber, Property(first.Value, "referenceNumber"));
+        Assert.Equal(saved[1].ReferenceNumber, Property(second.Value, "referenceNumber"));
+    }
+
+    [Fact]
+    public async Task UpdateInstitutionRequest_KeepsTheGeneratedReferenceNumber()
+    {
+        await using var context = CreateContext();
+        var (controller, token, documentTypeId, targetUserId) = await SeedIndividualRequestAsync(context);
+        Assert.IsType<OkObjectResult>(await controller.CreateInstitutionRequest(token, IndividualRequest(targetUserId, documentTypeId)));
+        var created = await context.InstitutionEnquiryRequests.SingleAsync();
+        var generated = created.ReferenceNumber;
+
+        var result = await controller.UpdateInstitutionRequest(created.EnquiryRequestId, token, new UpdateInstitutionDocumentRequestDto
+        {
+            PurposeNote = "Updated justification",
+            RequestedDocuments = new List<RequestedDocumentTypeDto> { new() { DocumentTypeId = documentTypeId, IsMandatory = true } }
+        });
+
+        Assert.IsType<OkObjectResult>(result);
+        var updated = await context.InstitutionEnquiryRequests.AsNoTracking().SingleAsync();
+        Assert.Equal("Updated justification", updated.PurposeNote);
+        Assert.Equal(generated, updated.ReferenceNumber);
+    }
+
+    private static async Task<(DocumentAccessRequestsController Controller, string Token, int DocumentTypeId, string TargetUserId)>
+        SeedIndividualRequestAsync(AppDbContext context)
+    {
+        var institution = new Institution { InstitutionId = 40, InstitutionName = "Reference Test Institution" };
+        var actor = CreateUser("ref-actor", "Actor", "Person");
+        var targetUser = CreateUser("ref-target", "Target", "Owner");
+        var documentType = new DocumentType { DocumentTypeId = 940, TypeName = "Utility Bill", Description = "Proof of address" };
+        var sessionToken = new InstitutionSessionToken
+        {
+            InstitutionId = institution.InstitutionId,
+            Institution = institution,
+            TokenString = "reference-session-token",
+            IssuedAt = DateTime.UtcNow,
+            ExpiresAt = DateTime.UtcNow.AddHours(1)
+        };
+        context.Institutions.Add(institution);
+        context.InstitutionSessionTokens.Add(sessionToken);
+        context.Users.AddRange(actor, targetUser);
+        context.DocumentTypes.Add(documentType);
+        await context.SaveChangesAsync();
+        return (CreateController(context, actor), sessionToken.TokenString, documentType.DocumentTypeId, targetUser.Id);
+    }
+
+    private static InstitutionDocumentRequestDto IndividualRequest(string targetUserId, int documentTypeId) => new()
+    {
+        RequestType = "Individual",
+        TargetUserId = targetUserId,
+        PurposeNote = "Please provide proof of address",
+        RequestedDocuments = new List<RequestedDocumentTypeDto> { new() { DocumentTypeId = documentTypeId, IsMandatory = true } }
+    };
+
+    private static object? Property(object? value, string name) => value?.GetType().GetProperty(name)?.GetValue(value);
+
+    // The Super Admin has no "Super Admin" role; the token carries a superadmin claim instead (see TokenService).
+    private static void SignInAsSuperAdmin(DocumentAccessRequestsController controller) =>
+        controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("superadmin", "true") }, "Test"));
+
+    private static async Task<(InstitutionEnquiryRequest Individual, InstitutionEnquiryRequest Department, User SuperAdmin)> SeedPendingRequestsAsync(AppDbContext context)
+    {
+        var institution = new Institution { InstitutionId = 50, InstitutionName = "Super Admin Test Institution" };
+        var branch = new Branch { BranchId = 50, InstitutionId = institution.InstitutionId, Institution = institution, BranchName = "HQ" };
+        var department = new Department { DepartmentId = 50, DepartmentName = "Finance", BranchId = branch.BranchId, Branch = branch };
+        var owner = CreateUser("sa-owner", "Owner", "Person");
+        var superAdmin = CreateUser("sa-super", "Super", "Admin");
+        var documentType = new DocumentType { DocumentTypeId = 950, TypeName = "Bank Statement", Description = "Statement" };
+        var individual = new InstitutionEnquiryRequest
+        {
+            EnquiryRequestId = 51, InstitutionId = institution.InstitutionId, RequestType = "Individual", TargetUserId = owner.Id,
+            Status = "Pending", PurposeNote = "For the owner", RequestDate = DateTimeOffset.UtcNow.AddDays(-1)
+        };
+        var forDepartment = new InstitutionEnquiryRequest
+        {
+            EnquiryRequestId = 52, InstitutionId = institution.InstitutionId, RequestType = "Department", TargetDepartmentId = department.DepartmentId,
+            Status = "Department_Pending", PurposeNote = "For the department", RequestDate = DateTimeOffset.UtcNow
+        };
+        context.Institutions.Add(institution);
+        context.Branches.Add(branch);
+        context.Departments.Add(department);
+        context.Users.AddRange(owner, superAdmin);
+        context.DocumentTypes.Add(documentType);
+        context.InstitutionEnquiryRequests.AddRange(individual, forDepartment);
+        context.InstitutionRequestedDocumentTypes.AddRange(
+            new InstitutionRequestedDocumentType { EnquiryRequestId = individual.EnquiryRequestId, DocumentTypeId = documentType.DocumentTypeId, isMandatory = true },
+            new InstitutionRequestedDocumentType { EnquiryRequestId = forDepartment.EnquiryRequestId, DocumentTypeId = documentType.DocumentTypeId, isMandatory = true });
+        await context.SaveChangesAsync();
+        return (individual, forDepartment, superAdmin);
+    }
+
+    [Fact]
+    public async Task SuperAdmin_SeesEveryPendingRequestInBothLists()
+    {
+        await using var context = CreateContext();
+        var (individual, forDepartment, superAdmin) = await SeedPendingRequestsAsync(context);
+        var controller = CreateController(context, superAdmin);
+        SignInAsSuperAdmin(controller);
+
+        var ownerList = Assert.IsType<OkObjectResult>(await controller.GetPendingRequests());
+        var departmentList = Assert.IsType<OkObjectResult>(await controller.GetPendingDepartmentRequests());
+
+        // Before, the department list was refused (403) and the owner list only showed requests addressed to the Super Admin.
+        Assert.Equal(new[] { individual.EnquiryRequestId }, Ids(ownerList.Value));
+        Assert.Equal(new[] { forDepartment.EnquiryRequestId }, Ids(departmentList.Value));
+    }
+
+    [Fact]
+    public async Task SuperAdmin_CanOpenARequestsDocuments()
+    {
+        await using var context = CreateContext();
+        var (individual, _, superAdmin) = await SeedPendingRequestsAsync(context);
+        var controller = CreateController(context, superAdmin);
+        SignInAsSuperAdmin(controller);
+
+        Assert.IsType<OkObjectResult>(await controller.GetRequestDocuments(individual.EnquiryRequestId));
+    }
+
+    [Fact]
+    public async Task OtherUsers_StillCannotListDepartmentRequestsOrOthersRequests()
+    {
+        await using var context = CreateContext();
+        await SeedPendingRequestsAsync(context);
+        var someoneElse = CreateUser("sa-other", "Some", "One");
+        context.Users.Add(someoneElse);
+        await context.SaveChangesAsync();
+        var controller = CreateController(context, someoneElse);
+
+        Assert.IsType<ForbidResult>(await controller.GetPendingDepartmentRequests());
+        Assert.Empty(Ids(Assert.IsType<OkObjectResult>(await controller.GetPendingRequests()).Value));
+    }
+
+    private static int[] Ids(object? list) =>
+        ((System.Collections.IEnumerable)list!).Cast<object>().Select(item => (int)Property(item, "EnquiryRequestId")!).ToArray();
+
     private static AppDbContext CreateContext()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
@@ -385,7 +670,7 @@ public class DocumentAccessRequestUploadRequirementTests
         return user;
     }
 
-    private static DocumentAccessRequestsController CreateController(AppDbContext context, User actor)
+    private static DocumentAccessRequestsController CreateController(AppDbContext context, User actor, params string[] roles)
     {
         var userStore = new Mock<IUserStore<User>>();
         var userManager = new Mock<UserManager<User>>(
@@ -399,6 +684,8 @@ public class DocumentAccessRequestUploadRequirementTests
             null!,
             NullLogger<UserManager<User>>.Instance);
         userManager.Setup(m => m.GetUserAsync(It.IsAny<ClaimsPrincipal>())).ReturnsAsync(actor);
+        userManager.Setup(m => m.IsInRoleAsync(It.IsAny<User>(), It.IsAny<string>()))
+            .ReturnsAsync((User _, string role) => roles.Contains(role));
         userManager.Setup(m => m.FindByIdAsync(It.IsAny<string>()))
             .Returns<string>(async id => await context.Users.FirstOrDefaultAsync(u => u.Id == id));
 

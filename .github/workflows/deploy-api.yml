@@ -1,0 +1,96 @@
+name: Deploy DocuVault (API + Angular) to SmarterASP.NET
+
+# The site serves the Angular app from wwwroot alongside the API, so this deploys both. A push to the Angular
+# repo does not start it: run it from the Actions tab (Run workflow) after pushing frontend changes.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish API
+        run: dotnet publish FourierIT-API.csproj -c Release -o ./out -p:UseAppHost=false
+
+      - name: Checkout Angular app
+        uses: actions/checkout@v4
+        with:
+          repository: u24951405/FourierIT-Angular
+          ref: main
+          path: frontend
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build Angular app
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build -- --configuration production
+
+      # The API serves these files itself, so the Angular web.config (an IIS rewrite for a standalone site) is left out.
+      - name: Add Angular app to wwwroot
+        run: |
+          mkdir -p ./out/wwwroot
+          cp -R frontend/dist/DocuVault/browser/. ./out/wwwroot/
+          rm -f ./out/wwwroot/web.config
+          test -f ./out/wwwroot/index.html
+
+      # Real production settings live in the APPSETTINGS_PRODUCTION secret, not in git.
+      - name: Write production settings
+        env:
+          APPSETTINGS: ${{ secrets.APPSETTINGS_PRODUCTION }}
+        run: |
+          if [ -z "$APPSETTINGS" ]; then
+            echo "APPSETTINGS_PRODUCTION secret is not set" >&2
+            exit 1
+          fi
+          printf '%s' "$APPSETTINGS" > ./out/appsettings.Production.json
+
+      - name: Install lftp
+        run: sudo apt-get update && sudo apt-get install -y lftp
+
+      # IIS locks FourierIT-API.dll while the app runs, so take the site offline
+      # with app_offline.htm, upload, then remove it to bring the site back up.
+      - name: Upload to SmarterASP via FTP
+        env:
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
+        run: |
+          for name in FTP_HOST FTP_USERNAME FTP_PASSWORD FTP_REMOTE_DIR; do
+            if [ -z "${!name}" ]; then
+              echo "The $name secret is not set (Settings > Secrets and variables > Actions)" >&2
+              exit 1
+            fi
+          done
+          echo "<html><body>Deploying, back in a minute.</body></html>" > app_offline.htm
+          # cmd:fail-exit stops at the first failed command, so a wrong FTP_REMOTE_DIR can never upload the
+          # site somewhere else. --no-perms skips chmod, which SmarterASP's FTP server does not support.
+          lftp -u "$FTP_USERNAME","$FTP_PASSWORD" "$FTP_HOST" <<EOF
+          set cmd:fail-exit yes
+          set ftp:ssl-allow yes
+          set ssl:verify-certificate no
+          cd "$FTP_REMOTE_DIR"
+          put app_offline.htm
+          mirror --reverse --overwrite --no-perms --parallel=4 --verbose --exclude-glob logs/ --exclude-glob wwwroot/ ./out/ ./
+          mirror --reverse --overwrite --delete --no-perms --parallel=4 --verbose ./out/wwwroot/ ./wwwroot/
+          rm app_offline.htm
+          bye
+          EOF

@@ -38,7 +38,14 @@ namespace FourierIT_API.Services
                 }
 
                 // Run again in one hour to catch recently expired documents.
-                await Task.Delay(TimeSpan.FromHours(1), stoppingToken);
+                try
+                {
+                    await Task.Delay(TimeSpan.FromHours(1), stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
             }
 
             _logger.LogInformation("Expired document compliance service is stopping.");

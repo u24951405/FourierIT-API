@@ -366,7 +366,8 @@ namespace FourierIT_API.Controllers
                 return StatusCode(500, new { error = "New invitation created but email delivery failed. Please verify SMTP configuration and recipient email." });
             }
 
-            return Ok(new { AccessToken = tokenString });
+            // Anyone can call this, so the token only goes to the institution's inbox, never back to the caller.
+            return Ok();
         }
 
         /// <summary>Refuses revoked or expired invitation links; returns null when the link can be used.</summary>

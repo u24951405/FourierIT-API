@@ -56,15 +56,21 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
         });
     };
 });
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? new[] { "http://localhost:4200" };
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AngularClient", policy =>
     {
-        policy.WithOrigins(
-                "https://docuvault-001-site1.ktempuri.com",
-                "http://docuvault-001-site1.ktempuri.com",
-                "http://localhost:4200",
-                "http://127.0.0.1:4200")
+        // Cors:AllowedOrigins (e.g. from the production settings) adds to these defaults.
+        policy.WithOrigins(allowedOrigins.Concat(new[]
+                {
+                    "https://docuvault-001-site1.ktempurl.com",
+                    "http://docuvault-001-site1.ktempurl.com",
+                    "http://localhost:4200",
+                    "http://127.0.0.1:4200"
+                }).Distinct().ToArray())
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
@@ -170,6 +176,13 @@ builder.Services.AddIdentity<User, Role>(options =>
 .AddEntityFrameworkStores<AppDbContext>()
 .AddDefaultTokenProviders();
 
+// The committed settings leave this blank, so check it here: the JWT options below are only built on the
+// first request, which would otherwise make every request fail with a 500 instead of the API refusing to start.
+var jwtSigningKey = builder.Configuration["JWT:SigningKey"];
+if (string.IsNullOrWhiteSpace(jwtSigningKey))
+    throw new InvalidOperationException(
+        "JWT:SigningKey is not set. Use dotnet user-secrets in development, or the JWT__SigningKey environment variable when hosted.");
+
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme =
@@ -188,8 +201,7 @@ builder.Services.AddAuthentication(options =>
         ValidAudience = builder.Configuration["JWT:Audience"],
         ValidateIssuerSigningKey = true,
         IssuerSigningKey = new SymmetricSecurityKey(
-            System.Text.Encoding.UTF8.GetBytes(builder.Configuration["JWT:SigningKey"] ?? throw new System.InvalidOperationException("JWT:SigningKey is required."))
-            )
+            System.Text.Encoding.UTF8.GetBytes(jwtSigningKey))
     };
 });
 
@@ -229,16 +241,38 @@ if (!app.Environment.IsDevelopment())
 {
     app.UseHttpsRedirection();
 }
+
+// The deploy puts the built Angular app in wwwroot, so one site serves both the frontend and /api.
+// index.html is never cached so a new deploy shows up at once; the hashed script and style files can be.
+var spaFiles = new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+    {
+        if (ctx.File.Name.Equals("index.html", StringComparison.OrdinalIgnoreCase))
+            ctx.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+    }
+};
+app.UseDefaultFiles();
+app.UseStaticFiles(spaFiles);
+
 app.UseCors("AngularClient");
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+if (app.Environment.WebRootFileProvider.GetFileInfo("index.html").Exists)
+{
+    // Unknown API paths stay 404s; any other path is an Angular route, so hand it to index.html.
+    app.Map("/api/{**rest}", () => Results.NotFound());
+    app.MapFallbackToFile("index.html", spaFiles);
+}
 // Startup database initialization is intentionally configurable to avoid
 // expensive startup delays on every API run.
 var runDbInit = builder.Configuration.GetValue("StartupTasks:RunDatabaseInitialization", builder.Environment.IsDevelopment());
-var runDevSeed = builder.Environment.IsDevelopment()
-    && builder.Configuration.GetValue("StartupTasks:RunDevSeed", false);
+// The lookup seed (branches, departments, their required documents, institution types, institutions) only adds
+// rows that are missing, so it can also fill a new production database: set RunDatabaseInitialization and
+// RunDevSeed to true for one start, then back to false.
+var runDevSeed = builder.Configuration.GetValue("StartupTasks:RunDevSeed", false);
 
 if (runDbInit)
 {

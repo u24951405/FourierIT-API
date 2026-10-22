@@ -229,7 +229,8 @@ namespace FourierIT_API.Controllers
         [Authorize]
         [HttpPost("profile-image")]
         [RequestSizeLimit(5 * 1024 * 1024)]
-        public async Task<IActionResult> UploadProfileImage([FromForm] IFormFile file)
+        // IFormFile binds from the form on its own; marking it [FromForm] breaks Swagger generation (Swashbuckle 6).
+        public async Task<IActionResult> UploadProfileImage(IFormFile file)
         {
             var user = await ResolveCurrentUserAsync();
             if (user == null) return Unauthorized(new { error = "Invalid token." });
