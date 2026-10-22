@@ -26,6 +26,12 @@ namespace FourierIT_API.Controllers
         private readonly ISystemSettingsService _settings;
         private readonly IInAppNotificationService? _notifications;
 
+        /// <summary>
+        /// The Super Admin is marked by a "superadmin" claim on their token (see TokenService), not by a role:
+        /// no "Super Admin" role is ever assigned, so checking for one never matched.
+        /// </summary>
+        private bool IsSuperAdmin => User.HasClaim("superadmin", "true");
+
         public DocumentAccessRequestsController(
             AppDbContext context,
             UserManager<User> userManager,
@@ -960,7 +966,7 @@ namespace FourierIT_API.Controllers
             if (currentUser == null)
                 return Unauthorized();
 
-            var isSuperAdmin = await _userManager.IsInRoleAsync(currentUser, "Super Admin");
+            var isSuperAdmin = IsSuperAdmin;
 
             var requestsQuery = _context.InstitutionEnquiryRequests
                 .AsNoTracking()
@@ -1026,7 +1032,7 @@ namespace FourierIT_API.Controllers
                 .FirstOrDefaultAsync(r => r.EnquiryRequestId == requestId);
             if (request == null) return NotFound(new { error = "Document request not found." });
 
-            var isSuperAdmin = await _userManager.IsInRoleAsync(currentUser, "Super Admin");
+            var isSuperAdmin = IsSuperAdmin;
             var isOwner = request.TargetUserId == currentUser.Id;
             var isDepartmentAdmin = request.TargetDepartmentId.HasValue
                 && currentUser.DepartmentId == request.TargetDepartmentId
@@ -1109,16 +1115,16 @@ namespace FourierIT_API.Controllers
             if (currentUser == null)
                 return Unauthorized();
 
-            var isSuperAdmin = await _userManager.IsInRoleAsync(currentUser, "Super Admin");
+            var isSuperAdmin = IsSuperAdmin;
             var isDepartmentAdmin = await _userManager.IsInRoleAsync(currentUser, "Department Admin");
 
             if (!isSuperAdmin && !isDepartmentAdmin)
                 return Forbid();
 
+            // A user without a department (the Super Admin, for one) has none here, rather than a null that can't be read.
             var userDepartments = await _context.Users
-                .Where(u => u.Id == currentUser.Id)
-                .Include(u => u.Department)
-                .Select(u => u.Department!.DepartmentId)
+                .Where(u => u.Id == currentUser.Id && u.DepartmentId != null)
+                .Select(u => u.DepartmentId!.Value)
                 .ToListAsync();
 
             var requestsQuery = _context.InstitutionEnquiryRequests

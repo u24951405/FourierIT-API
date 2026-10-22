@@ -443,6 +443,85 @@ public class DocumentAccessRequestUploadRequirementTests
 
     private static object? Property(object? value, string name) => value?.GetType().GetProperty(name)?.GetValue(value);
 
+    // The Super Admin has no "Super Admin" role; the token carries a superadmin claim instead (see TokenService).
+    private static void SignInAsSuperAdmin(DocumentAccessRequestsController controller) =>
+        controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("superadmin", "true") }, "Test"));
+
+    private static async Task<(InstitutionEnquiryRequest Individual, InstitutionEnquiryRequest Department, User SuperAdmin)> SeedPendingRequestsAsync(AppDbContext context)
+    {
+        var institution = new Institution { InstitutionId = 50, InstitutionName = "Super Admin Test Institution" };
+        var branch = new Branch { BranchId = 50, InstitutionId = institution.InstitutionId, Institution = institution, BranchName = "HQ" };
+        var department = new Department { DepartmentId = 50, DepartmentName = "Finance", BranchId = branch.BranchId, Branch = branch };
+        var owner = CreateUser("sa-owner", "Owner", "Person");
+        var superAdmin = CreateUser("sa-super", "Super", "Admin");
+        var documentType = new DocumentType { DocumentTypeId = 950, TypeName = "Bank Statement", Description = "Statement" };
+        var individual = new InstitutionEnquiryRequest
+        {
+            EnquiryRequestId = 51, InstitutionId = institution.InstitutionId, RequestType = "Individual", TargetUserId = owner.Id,
+            Status = "Pending", PurposeNote = "For the owner", RequestDate = DateTimeOffset.UtcNow.AddDays(-1)
+        };
+        var forDepartment = new InstitutionEnquiryRequest
+        {
+            EnquiryRequestId = 52, InstitutionId = institution.InstitutionId, RequestType = "Department", TargetDepartmentId = department.DepartmentId,
+            Status = "Department_Pending", PurposeNote = "For the department", RequestDate = DateTimeOffset.UtcNow
+        };
+        context.Institutions.Add(institution);
+        context.Branches.Add(branch);
+        context.Departments.Add(department);
+        context.Users.AddRange(owner, superAdmin);
+        context.DocumentTypes.Add(documentType);
+        context.InstitutionEnquiryRequests.AddRange(individual, forDepartment);
+        context.InstitutionRequestedDocumentTypes.AddRange(
+            new InstitutionRequestedDocumentType { EnquiryRequestId = individual.EnquiryRequestId, DocumentTypeId = documentType.DocumentTypeId, isMandatory = true },
+            new InstitutionRequestedDocumentType { EnquiryRequestId = forDepartment.EnquiryRequestId, DocumentTypeId = documentType.DocumentTypeId, isMandatory = true });
+        await context.SaveChangesAsync();
+        return (individual, forDepartment, superAdmin);
+    }
+
+    [Fact]
+    public async Task SuperAdmin_SeesEveryPendingRequestInBothLists()
+    {
+        await using var context = CreateContext();
+        var (individual, forDepartment, superAdmin) = await SeedPendingRequestsAsync(context);
+        var controller = CreateController(context, superAdmin);
+        SignInAsSuperAdmin(controller);
+
+        var ownerList = Assert.IsType<OkObjectResult>(await controller.GetPendingRequests());
+        var departmentList = Assert.IsType<OkObjectResult>(await controller.GetPendingDepartmentRequests());
+
+        // Before, the department list was refused (403) and the owner list only showed requests addressed to the Super Admin.
+        Assert.Equal(new[] { individual.EnquiryRequestId }, Ids(ownerList.Value));
+        Assert.Equal(new[] { forDepartment.EnquiryRequestId }, Ids(departmentList.Value));
+    }
+
+    [Fact]
+    public async Task SuperAdmin_CanOpenARequestsDocuments()
+    {
+        await using var context = CreateContext();
+        var (individual, _, superAdmin) = await SeedPendingRequestsAsync(context);
+        var controller = CreateController(context, superAdmin);
+        SignInAsSuperAdmin(controller);
+
+        Assert.IsType<OkObjectResult>(await controller.GetRequestDocuments(individual.EnquiryRequestId));
+    }
+
+    [Fact]
+    public async Task OtherUsers_StillCannotListDepartmentRequestsOrOthersRequests()
+    {
+        await using var context = CreateContext();
+        await SeedPendingRequestsAsync(context);
+        var someoneElse = CreateUser("sa-other", "Some", "One");
+        context.Users.Add(someoneElse);
+        await context.SaveChangesAsync();
+        var controller = CreateController(context, someoneElse);
+
+        Assert.IsType<ForbidResult>(await controller.GetPendingDepartmentRequests());
+        Assert.Empty(Ids(Assert.IsType<OkObjectResult>(await controller.GetPendingRequests()).Value));
+    }
+
+    private static int[] Ids(object? list) =>
+        ((System.Collections.IEnumerable)list!).Cast<object>().Select(item => (int)Property(item, "EnquiryRequestId")!).ToArray();
+
     private static AppDbContext CreateContext()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
