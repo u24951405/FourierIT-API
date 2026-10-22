@@ -1039,8 +1039,11 @@ namespace FourierIT_API.Controllers
                 && await _userManager.IsInRoleAsync(currentUser, "Department Admin");
             if (!isSuperAdmin && !isOwner && !isDepartmentAdmin) return Forbid();
 
+            // A department request not yet decided shares its department admin's documents when approved, so that's what they see.
             var ownerIds = request.TargetUserId != null
                 ? new[] { request.TargetUserId }
+                : isDepartmentAdmin
+                    ? new[] { currentUser.Id }
                 : await _context.Users
                     .Where(user => user.DepartmentId == request.TargetDepartmentId)
                     .Select(user => user.Id)
@@ -1252,55 +1255,6 @@ namespace FourierIT_API.Controllers
             });
         }
 
-        /// <summary>
-        /// The people a department admin can assign a department request to: the members of that department,
-        /// with how many of the requested document types each has already uploaded.
-        /// </summary>
-        [HttpGet("department-access-requests/{requestId:int}/owners")]
-        [Authorize(Policy = "Documents.Manage")]
-        public async Task<IActionResult> GetAssignableOwners([FromRoute] int requestId)
-        {
-            var currentUser = await _userManager.GetUserAsync(User);
-            if (currentUser == null)
-                return Unauthorized();
-
-            var request = await _context.InstitutionEnquiryRequests
-                .AsNoTracking()
-                .Include(r => r.RequestedDocumentTypes)
-                .FirstOrDefaultAsync(r => r.EnquiryRequestId == requestId);
-
-            if (request == null)
-                return NotFound(new { error = "Request not found." });
-
-            // Same rule as routing: only an admin of the request's department.
-            if (!currentUser.DepartmentId.HasValue || currentUser.DepartmentId != request.TargetDepartmentId)
-                return Forbid();
-
-            var requestedTypeIds = request.RequestedDocumentTypes.Select(t => t.DocumentTypeId).Distinct().ToList();
-
-            var members = await _context.Users
-                .AsNoTracking()
-                .Where(u => u.DepartmentId == request.TargetDepartmentId)
-                .Select(u => new
-                {
-                    UserId = u.Id,
-                    DisplayName = u.Profile != null && (!string.IsNullOrWhiteSpace(u.Profile.FirstName) || !string.IsNullOrWhiteSpace(u.Profile.LastName))
-                        ? (u.Profile.FirstName + " " + u.Profile.LastName).Trim()
-                        : u.UserName,
-                    UploadedTypes = _context.Documents
-                        .Where(d => d.UserId == u.Id && d.CurrentStatus != "Deleted" && requestedTypeIds.Contains(d.DocumentTypeId))
-                        .Select(d => d.DocumentTypeId)
-                        .Distinct()
-                        .Count()
-                })
-                .ToListAsync();
-
-            return Ok(members
-                .OrderByDescending(m => m.UploadedTypes)
-                .ThenBy(m => m.DisplayName)
-                .Select(m => new { m.UserId, m.DisplayName, m.UploadedTypes, RequestedTypes = requestedTypeIds.Count }));
-        }
-
         [HttpPost("document-access-requests/{requestId:int}/approve")]
         public async Task<IActionResult> Approve([FromRoute] int requestId)
         {
@@ -1320,9 +1274,18 @@ namespace FourierIT_API.Controllers
             if (request == null)
                 return NotFound(new { error = "Request not found." });
 
-            // Only document owners can approve (not department admins)
-            if (request.TargetUserId != currentUser.Id || request.Status != "Pending")
+            // An individual request is approved by the owner it was sent to. A department request is approved by
+            // the department's admin (the owner the Super Admin assigned to it), and shares that admin's documents.
+            var isOwner = request.TargetUserId == currentUser.Id && request.Status == "Pending";
+            var isDepartmentAdmin = request.RequestType == "Department"
+                && request.Status == "Department_Pending"
+                && currentUser.DepartmentId.HasValue
+                && currentUser.DepartmentId == request.TargetDepartmentId
+                && await _userManager.IsInRoleAsync(currentUser, "Department Admin");
+            if (!isOwner && !isDepartmentAdmin)
                 return Forbid();
+
+            var ownerId = isDepartmentAdmin ? currentUser.Id : request.TargetUserId!;
 
             if (request.Status == "Denied")
                 return Conflict(new { error = "This request has already been denied." });
@@ -1347,7 +1310,7 @@ namespace FourierIT_API.Controllers
                 .ToList();
 
             var approvedDocuments = await _context.Documents
-                .Where(d => d.UserId == request.TargetUserId
+                .Where(d => d.UserId == ownerId
                     && d.CurrentStatus != "Deleted"
                     && requestedDocumentTypeIds.Contains(d.DocumentTypeId))
                 .ToListAsync();
@@ -1364,7 +1327,7 @@ namespace FourierIT_API.Controllers
                 });
             }
 
-            await _complianceService.CheckUserComplianceAsync(request.TargetUserId!);
+            await _complianceService.CheckUserComplianceAsync(ownerId);
 
             var uploadedDocumentIds = approvedDocuments.Select(document => document.DocumentId).ToList();
             var latestChecks = await _context.DocumentComplianceChecks
@@ -1402,11 +1365,12 @@ namespace FourierIT_API.Controllers
                 TokenString = tokenString,
                 ExpiryTimeStamp = expiry,
                 IsRevoked = false,
-                UserId = request.TargetUserId,
+                UserId = ownerId,
                 institutionEnquiryRequest = request
             };
 
-
+            // The approver's documents are what's shared, so they become the request's owner: downloads check this.
+            request.TargetUserId = ownerId;
             request.Status = "Approved";
             request.RespondedAt = DateTime.UtcNow;
             request.ApprovedByUserId = currentUser.Id;
