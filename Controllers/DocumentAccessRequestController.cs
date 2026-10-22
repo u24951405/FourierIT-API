@@ -996,6 +996,8 @@ namespace FourierIT_API.Controllers
                     r.Status,
                     r.PurposeNote,
                     r.RequestDate,
+                    r.ReferenceNumber,
+                    r.SubmissionDeadline,
                     Documents = r.RequestedDocumentTypes.Select(d => new
                     {
                         d.DocumentTypeId,
@@ -1151,6 +1153,8 @@ namespace FourierIT_API.Controllers
                     r.Status,
                     r.PurposeNote,
                     r.RequestDate,
+                    r.ReferenceNumber,
+                    r.SubmissionDeadline,
                     Documents = r.RequestedDocumentTypes.Select(d => new
                     {
                         d.DocumentTypeId,
