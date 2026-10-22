@@ -1220,7 +1220,8 @@ namespace FourierIT_API.Controllers
                 userIdForMapping = user.Id; // Regular users see only their documents
             }
 
-            var result = entityTypes.Select(et => MapToEntityTypeHierarchyDto(et, userIdForMapping, readOnly)).ToList();
+            var documentsByType = await LoadHierarchyDocumentsAsync(userIdForMapping);
+            var result = entityTypes.Select(et => MapToEntityTypeHierarchyDto(et, documentsByType, userIdForMapping, readOnly)).ToList();
             return Ok(result);
         }
 
@@ -1234,7 +1235,8 @@ namespace FourierIT_API.Controllers
             var hierarchyRepository = new DocumentHierarchyRepository(_context);
             var entityTypes = await hierarchyRepository.GetFullHierarchyAsync();
 
-            var result = entityTypes.Select(et => MapToEntityTypeHierarchyDto(et, null)).ToList();
+            var documentsByType = await LoadHierarchyDocumentsAsync(null);
+            var result = entityTypes.Select(et => MapToEntityTypeHierarchyDto(et, documentsByType, null)).ToList();
             return Ok(result);
         }
 
@@ -1359,27 +1361,34 @@ namespace FourierIT_API.Controllers
             (User.IsInRole("Stakeholder") || User.IsInRole("Compliance Officer"))
             && !User.IsInRole("Department Admin") && !User.HasClaim("superadmin", "true");
 
-        private EntityTypeHierarchyDto MapToEntityTypeHierarchyDto(EntityType entityType, string? userId, bool readOnly = false)
+        /// <summary>
+        /// The tree's documents, loaded in one query and grouped by type (only the user's own and those shared
+        /// with them, unless userId is null). Querying per document type made one round trip for every type.
+        /// </summary>
+        private async Task<ILookup<int, Document>> LoadHierarchyDocumentsAsync(string? userId)
+        {
+            var query = _context.Documents.AsNoTracking().Include(d => d.SharedWith).AsQueryable();
+            if (userId != null)
+                query = query.Where(d => d.UserId == userId || d.SharedWith.Any(da => da.GrantedToUserId == userId));
+
+            return (await query.ToListAsync()).ToLookup(d => d.DocumentTypeId);
+        }
+
+        private EntityTypeHierarchyDto MapToEntityTypeHierarchyDto(EntityType entityType, ILookup<int, Document> documentsByType, string? userId, bool readOnly = false)
         {
             return new EntityTypeHierarchyDto
             {
                 EntityTypeId = entityType.EntityTypeId,
                 Name = entityType.Name,
                 DocumentTypes = entityType.RequiredDocuments
-                    .Select(rd => MapToDocumentTypeHierarchyDto(rd.DocumentType, rd.IsMandatory, userId, readOnly))
+                    .Select(rd => MapToDocumentTypeHierarchyDto(rd.DocumentType, rd.IsMandatory, documentsByType[rd.DocumentTypeId], userId, readOnly))
                     .ToList(),
                 UserHasAccess = true
             };
         }
 
-        private DocumentTypeHierarchyDto MapToDocumentTypeHierarchyDto(DocumentType documentType, bool isMandatory, string? userId, bool readOnly = false)
+        private DocumentTypeHierarchyDto MapToDocumentTypeHierarchyDto(DocumentType documentType, bool isMandatory, IEnumerable<Document> documents, string? userId, bool readOnly = false)
         {
-            // Get documents for this document type directly from database
-            var documents = _context.Documents
-                .Where(d => d.DocumentTypeId == documentType.DocumentTypeId)
-                .Include(d => d.SharedWith)
-                .ToList();
-
             return new DocumentTypeHierarchyDto
             {
                 DocumentTypeId = documentType.DocumentTypeId,

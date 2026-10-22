@@ -132,10 +132,10 @@ namespace FourierIT_API.Repositories
 
         public async Task<List<Document>> GetUserDocumentAsync(string UserId)
         {
+            // A list only: the file itself (DocumentBlob) is loaded when a document is opened, not for every row here.
             return await _context.Documents
+                .AsNoTracking()
                 .Where(d => d.UserId == UserId)
-                .Include(d => d.SharedWith)
-                .Include(d => d.DocumentBlob)
                 .Include(d => d.DocumentType)
                 .Include(d => d.CertificationDetails)
                 .ToListAsync();
