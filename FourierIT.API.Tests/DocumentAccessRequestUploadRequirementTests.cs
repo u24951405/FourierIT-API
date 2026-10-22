@@ -173,6 +173,70 @@ public class DocumentAccessRequestUploadRequirementTests
     }
 
     [Fact]
+    public async Task GetAssignableOwners_ListsOnlyTheDepartmentsMembers_WithWhatTheyHaveUploaded()
+    {
+        await using var context = CreateContext();
+        var institution = new Institution { InstitutionId = 60, InstitutionName = "Owners Institution" };
+        var branch = new Branch { BranchId = 60, InstitutionId = institution.InstitutionId, Institution = institution, BranchName = "HQ" };
+        var department = new Department { DepartmentId = 60, DepartmentName = "Finance", BranchId = branch.BranchId, Branch = branch };
+        var otherDepartment = new Department { DepartmentId = 61, DepartmentName = "Legal", BranchId = branch.BranchId, Branch = branch };
+        var departmentAdmin = CreateUser("owners-admin", "Admin", "Person");
+        departmentAdmin.DepartmentId = department.DepartmentId;
+        var owner = CreateUser("owners-owner", "Owner", "Person");
+        owner.DepartmentId = department.DepartmentId;
+        var outsider = CreateUser("owners-outsider", "Out", "Sider");
+        outsider.DepartmentId = otherDepartment.DepartmentId;
+        var documentType = new DocumentType { DocumentTypeId = 960, TypeName = "Passport", Description = "Travel document" };
+        var request = new InstitutionEnquiryRequest
+        {
+            EnquiryRequestId = 60,
+            InstitutionId = institution.InstitutionId,
+            RequestType = "Department",
+            TargetDepartmentId = department.DepartmentId,
+            Status = "Department_Pending",
+            PurposeNote = "Passport please",
+            RequestDate = DateTimeOffset.UtcNow
+        };
+
+        context.Institutions.Add(institution);
+        context.Branches.Add(branch);
+        context.Departments.AddRange(department, otherDepartment);
+        context.Users.AddRange(departmentAdmin, owner, outsider);
+        context.DocumentTypes.Add(documentType);
+        context.Documents.Add(new Document
+        {
+            DocumentId = 60,
+            UserId = owner.Id,
+            DocumentTypeId = documentType.DocumentTypeId,
+            FileName = "passport.pdf",
+            CurrentStatus = "Uploaded",
+            ExpiryDate = DateTimeOffset.UtcNow.AddYears(1),
+            FileSizeBytes = 10,
+            EncryptionAlgorithm = "AES-256",
+            IsEncrypted = true
+        });
+        context.InstitutionEnquiryRequests.Add(request);
+        context.InstitutionRequestedDocumentTypes.Add(new InstitutionRequestedDocumentType
+        {
+            EnquiryRequestId = request.EnquiryRequestId,
+            DocumentTypeId = documentType.DocumentTypeId,
+            FICARuleId = 0,
+            isMandatory = true
+        });
+        await context.SaveChangesAsync();
+
+        var result = await CreateController(context, departmentAdmin).GetAssignableOwners(request.EnquiryRequestId);
+
+        var members = Assert.IsAssignableFrom<IEnumerable<object>>(Assert.IsType<OkObjectResult>(result).Value).ToList();
+        Assert.Equal(new[] { owner.Id, departmentAdmin.Id }, members.Select(m => (string)Property(m, "UserId")!));
+        Assert.Equal(1, Property(members[0], "UploadedTypes"));
+        Assert.Equal(0, Property(members[1], "UploadedTypes"));
+
+        var refused = await CreateController(context, outsider).GetAssignableOwners(request.EnquiryRequestId);
+        Assert.IsType<ForbidResult>(refused);
+    }
+
+    [Fact]
     public async Task Approve_WhenNotAllRequestedDocumentTypesAreUploaded_ReturnsBadRequestWithMissingTypes()
     {
         await using var context = CreateContext();

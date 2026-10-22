@@ -1252,6 +1252,55 @@ namespace FourierIT_API.Controllers
             });
         }
 
+        /// <summary>
+        /// The people a department admin can assign a department request to: the members of that department,
+        /// with how many of the requested document types each has already uploaded.
+        /// </summary>
+        [HttpGet("department-access-requests/{requestId:int}/owners")]
+        [Authorize(Policy = "Documents.Manage")]
+        public async Task<IActionResult> GetAssignableOwners([FromRoute] int requestId)
+        {
+            var currentUser = await _userManager.GetUserAsync(User);
+            if (currentUser == null)
+                return Unauthorized();
+
+            var request = await _context.InstitutionEnquiryRequests
+                .AsNoTracking()
+                .Include(r => r.RequestedDocumentTypes)
+                .FirstOrDefaultAsync(r => r.EnquiryRequestId == requestId);
+
+            if (request == null)
+                return NotFound(new { error = "Request not found." });
+
+            // Same rule as routing: only an admin of the request's department.
+            if (!currentUser.DepartmentId.HasValue || currentUser.DepartmentId != request.TargetDepartmentId)
+                return Forbid();
+
+            var requestedTypeIds = request.RequestedDocumentTypes.Select(t => t.DocumentTypeId).Distinct().ToList();
+
+            var members = await _context.Users
+                .AsNoTracking()
+                .Where(u => u.DepartmentId == request.TargetDepartmentId)
+                .Select(u => new
+                {
+                    UserId = u.Id,
+                    DisplayName = u.Profile != null && (!string.IsNullOrWhiteSpace(u.Profile.FirstName) || !string.IsNullOrWhiteSpace(u.Profile.LastName))
+                        ? (u.Profile.FirstName + " " + u.Profile.LastName).Trim()
+                        : u.UserName,
+                    UploadedTypes = _context.Documents
+                        .Where(d => d.UserId == u.Id && d.CurrentStatus != "Deleted" && requestedTypeIds.Contains(d.DocumentTypeId))
+                        .Select(d => d.DocumentTypeId)
+                        .Distinct()
+                        .Count()
+                })
+                .ToListAsync();
+
+            return Ok(members
+                .OrderByDescending(m => m.UploadedTypes)
+                .ThenBy(m => m.DisplayName)
+                .Select(m => new { m.UserId, m.DisplayName, m.UploadedTypes, RequestedTypes = requestedTypeIds.Count }));
+        }
+
         [HttpPost("document-access-requests/{requestId:int}/approve")]
         public async Task<IActionResult> Approve([FromRoute] int requestId)
         {
