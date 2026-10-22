@@ -32,10 +32,7 @@
         /// </summary>
         public DateTimeOffset? SubmissionDeadline { get; set; }
 
-        /// <summary>
-        /// Reference number supplied by the requesting institution.
-        /// </summary>
-        public string ReferenceNumber { get; set; } = string.Empty;
+        // There is no ReferenceNumber here: the system generates it when the request is created.
     }
 
     public class UpdateInstitutionDocumentRequestDto
@@ -43,6 +40,5 @@
         public string PurposeNote { get; set; } = string.Empty;
         public List<RequestedDocumentTypeDto> RequestedDocuments { get; set; } = new();
         public DateTimeOffset? SubmissionDeadline { get; set; }
-        public string ReferenceNumber { get; set; } = string.Empty;
     }
 }

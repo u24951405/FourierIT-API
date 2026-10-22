@@ -206,7 +206,6 @@ namespace FourierIT_API.Controllers
                 TargetUserId = targetUser?.Id,
                 PurposeNote = dto.PurposeNote?.Trim() ?? string.Empty,
                 SubmissionDeadline = dto.SubmissionDeadline,
-                ReferenceNumber = string.IsNullOrWhiteSpace(dto.ReferenceNumber) ? null : dto.ReferenceNumber.Trim(),
                 Status = dto.RequestType == "Department" ? "Department_Pending" : "Pending",
                 RequestDate = DateTimeOffset.UtcNow,
                 // Sessions started before the email was stored fall back to the institution's latest invitation.
@@ -218,6 +217,10 @@ namespace FourierIT_API.Controllers
             };
 
             _context.InstitutionEnquiryRequests.Add(request);
+            await _context.SaveChangesAsync();
+
+            // The reference is built from the new request's id, so it can only be set once the request is saved.
+            request.ReferenceNumber = InstitutionEnquiryRequest.BuildReferenceNumber(request.EnquiryRequestId, request.RequestDate);
             await _context.SaveChangesAsync();
 
             try
@@ -470,7 +473,7 @@ namespace FourierIT_API.Controllers
 
             request.PurposeNote = dto.PurposeNote.Trim();
             request.SubmissionDeadline = dto.SubmissionDeadline;
-            request.ReferenceNumber = dto.ReferenceNumber?.Trim();
+            // The reference stays the one generated when the request was created.
             _context.InstitutionRequestedDocumentTypes.RemoveRange(request.RequestedDocumentTypes);
 
             var defaultRule = await EnsureDefaultFicaRuleAsync();

@@ -360,6 +360,89 @@ public class DocumentAccessRequestUploadRequirementTests
         Assert.Empty(await context.DocumentAccessApprovals.ToListAsync());
     }
 
+    [Fact]
+    public void ReferenceNumber_IsBuiltFromTheRequestYearAndId()
+    {
+        var requested = new DateTimeOffset(2026, 10, 22, 9, 0, 0, TimeSpan.Zero);
+
+        Assert.Equal("REQ-2026-000123", InstitutionEnquiryRequest.BuildReferenceNumber(123, requested));
+        Assert.Equal("REQ-2026-1234567", InstitutionEnquiryRequest.BuildReferenceNumber(1234567, requested));
+    }
+
+    [Fact]
+    public async Task CreateInstitutionRequest_GeneratesAUniqueReferenceNumberForEachRequest()
+    {
+        await using var context = CreateContext();
+        var (controller, token, documentTypeId, targetUserId) = await SeedIndividualRequestAsync(context);
+
+        var first = Assert.IsType<OkObjectResult>(await controller.CreateInstitutionRequest(token, IndividualRequest(targetUserId, documentTypeId)));
+        var second = Assert.IsType<OkObjectResult>(await controller.CreateInstitutionRequest(token, IndividualRequest(targetUserId, documentTypeId)));
+
+        var saved = await context.InstitutionEnquiryRequests.OrderBy(r => r.EnquiryRequestId).ToListAsync();
+        Assert.Equal(2, saved.Count);
+        foreach (var request in saved)
+            Assert.Equal(InstitutionEnquiryRequest.BuildReferenceNumber(request.EnquiryRequestId, request.RequestDate), request.ReferenceNumber);
+        Assert.NotEqual(saved[0].ReferenceNumber, saved[1].ReferenceNumber);
+
+        // The institution is shown the generated reference straight away.
+        Assert.Equal(saved[0].ReferenceNumber, Property(first.Value, "referenceNumber"));
+        Assert.Equal(saved[1].ReferenceNumber, Property(second.Value, "referenceNumber"));
+    }
+
+    [Fact]
+    public async Task UpdateInstitutionRequest_KeepsTheGeneratedReferenceNumber()
+    {
+        await using var context = CreateContext();
+        var (controller, token, documentTypeId, targetUserId) = await SeedIndividualRequestAsync(context);
+        Assert.IsType<OkObjectResult>(await controller.CreateInstitutionRequest(token, IndividualRequest(targetUserId, documentTypeId)));
+        var created = await context.InstitutionEnquiryRequests.SingleAsync();
+        var generated = created.ReferenceNumber;
+
+        var result = await controller.UpdateInstitutionRequest(created.EnquiryRequestId, token, new UpdateInstitutionDocumentRequestDto
+        {
+            PurposeNote = "Updated justification",
+            RequestedDocuments = new List<RequestedDocumentTypeDto> { new() { DocumentTypeId = documentTypeId, IsMandatory = true } }
+        });
+
+        Assert.IsType<OkObjectResult>(result);
+        var updated = await context.InstitutionEnquiryRequests.AsNoTracking().SingleAsync();
+        Assert.Equal("Updated justification", updated.PurposeNote);
+        Assert.Equal(generated, updated.ReferenceNumber);
+    }
+
+    private static async Task<(DocumentAccessRequestsController Controller, string Token, int DocumentTypeId, string TargetUserId)>
+        SeedIndividualRequestAsync(AppDbContext context)
+    {
+        var institution = new Institution { InstitutionId = 40, InstitutionName = "Reference Test Institution" };
+        var actor = CreateUser("ref-actor", "Actor", "Person");
+        var targetUser = CreateUser("ref-target", "Target", "Owner");
+        var documentType = new DocumentType { DocumentTypeId = 940, TypeName = "Utility Bill", Description = "Proof of address" };
+        var sessionToken = new InstitutionSessionToken
+        {
+            InstitutionId = institution.InstitutionId,
+            Institution = institution,
+            TokenString = "reference-session-token",
+            IssuedAt = DateTime.UtcNow,
+            ExpiresAt = DateTime.UtcNow.AddHours(1)
+        };
+        context.Institutions.Add(institution);
+        context.InstitutionSessionTokens.Add(sessionToken);
+        context.Users.AddRange(actor, targetUser);
+        context.DocumentTypes.Add(documentType);
+        await context.SaveChangesAsync();
+        return (CreateController(context, actor), sessionToken.TokenString, documentType.DocumentTypeId, targetUser.Id);
+    }
+
+    private static InstitutionDocumentRequestDto IndividualRequest(string targetUserId, int documentTypeId) => new()
+    {
+        RequestType = "Individual",
+        TargetUserId = targetUserId,
+        PurposeNote = "Please provide proof of address",
+        RequestedDocuments = new List<RequestedDocumentTypeDto> { new() { DocumentTypeId = documentTypeId, IsMandatory = true } }
+    };
+
+    private static object? Property(object? value, string name) => value?.GetType().GetProperty(name)?.GetValue(value);
+
     private static AppDbContext CreateContext()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
